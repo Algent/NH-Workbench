@@ -44,7 +44,7 @@ Only fast-forwards, never merges, rebases or forces.
 
 `Enter` or a click on the highlighted row: actions for that one repo (fetch, pull, switch to main, delete merged branches, open) ·
 `Tab` next view · `/` filter · `s` or a click on a column header: sort · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
-`r` rescan · `o` open in IntelliJ · `g` open PR or GitHub page ·
+`r` rescan · `o` open in IntelliJ · `w` open PR or web page ·
 `m` switch repos on a merged branch back to main · `d` delete merged branches ·
 `c` clone (Pack view) · `x` extras (refresh pack data, open the config or logs folder) · `q` quit
 

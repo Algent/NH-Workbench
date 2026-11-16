@@ -109,7 +109,7 @@ async def test_reviews_tab_opens_pr_in_browser(sandbox, offline, monkeypatch):
         await pilot.press("t")  # now also the requests that come through a team
         await settle(app, pilot)
         assert table.row_count == 2 and str(tabs.query_one("#view-reviews").label) == "Reviews 1"
-        await pilot.press("down", "g")
+        await pilot.press("down", "w")
         await pilot.pause()
         assert opened == ["https://example.invalid/pull/1", "https://example.invalid/pull/2"]
 

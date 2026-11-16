@@ -104,7 +104,7 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
 def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
-    hint = Text(f"{item.pr.url}   Enter or g: open in the browser   t: show or hide team requests", "dim")
+    hint = Text(f"{item.pr.url}   Enter or w: open in the browser   t: show or hide team requests", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
@@ -201,7 +201,7 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
         ("m", "main", f"Switch to {main} and pull", no_switch),
         ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
         ("o", "ide", "Open in IntelliJ", None),
-        ("g", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
+        ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
         ("u", "group", f"Set group (now {st.group})", None),
         ("h", "hide", "Hide this repo from the tool", None),
@@ -277,7 +277,7 @@ class RepoApp(App[None]):
         Binding("r", "rescan", "Rescan"),
         Binding("slash", "filter", "Filter"),
         Binding("o", "open_ide", "IDE"),
-        Binding("g", "open_web", "Web"),
+        Binding("w", "open_web", "Web"),
         Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
