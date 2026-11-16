@@ -234,16 +234,25 @@ async def test_release_branch_progress(sandbox):
     st = await ops.fetch_repo(sandbox.cfg, sandbox.work)
     assert st.release_branches == [branch] and st.head == "master"
 
-    await ops.release_progress([st], branch)
-    assert st.release_ahead is None  # not known to be part of the release
+    await ops.pack_progress([st], branch)
+    assert st.release_ahead is None and st.daily_ahead is None  # not known to be in the pack
 
     st.release = "1.2.0"
-    await ops.release_progress([st], branch)
-    assert st.release_ahead == 2
+    await ops.pack_progress([st], branch)
+    assert st.release_ahead == 2 and st.release_commits == ["backport-2", "backport-1"]
 
     st.release = "9.9.9"  # version whose tag does not exist here
-    await ops.release_progress([st], branch)
-    assert st.release_ahead is None
+    await ops.pack_progress([st], branch)
+    assert st.release_ahead is None and st.release_commits == []
+
+    # main moved on after the version the daily ships
+    sandbox.git(sandbox.seed, "checkout", "master")
+    sandbox.push_upstream("unreleased-1")
+    sandbox.push_upstream("unreleased-2")
+    st = await ops.fetch_repo(sandbox.cfg, sandbox.work)
+    st.daily = "1.2.0"
+    await ops.pack_progress([st])
+    assert st.daily_ahead == 2 and st.behind == 2  # counted on origin/master, the checkout itself is behind
 
 
 async def test_delete_branch_checks_tip(sandbox):

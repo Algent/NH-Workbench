@@ -23,6 +23,7 @@ uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 | `gtnh-dev pull [--dry-run]` | Fetch, then fast-forward main where safe |
 | `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
 | `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
+| `gtnh-dev reviews [--team]` | Open PRs waiting on your review |
 | `gtnh-dev pack [--missing] [--refresh]` | Mods of the current daily and the latest release, and whether they are cloned |
 | `gtnh-dev clone NAME...` | Clone pack mods into the root |
 
@@ -53,8 +54,13 @@ Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --
 forces it): the daily manifest, the manifest of the latest stable release, and the number of the last
 successful daily build. The Pack view lists every mod of either, with its version in each.
 
-Repos get a Daily and a Release column (`status --pack` on the command line). A `+N` after the released
-version means the repo's `release/<major>.<minor>.x` branch has N commits since that version's tag.
+Repos get a Daily and a Release column (`status --pack` on the command line), both as of your last fetch:
+
+- `+N` after the daily version: main has N commits the daily's version lacks (merged, not in a daily yet).
+- `+N` after the released version: the repo's `release/<major>.<minor>.x` branch has N commits since that
+  version's tag. The UI's detail pane lists them.
+
+The Reviews view lists open PRs waiting on your review, the ones asked of you personally first.
 
 ## Groups
 

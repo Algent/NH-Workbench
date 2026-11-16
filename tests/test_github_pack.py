@@ -77,6 +77,26 @@ def test_query_and_response_roundtrip():
     assert st.branch("algent/pr-7").pr is None
 
 
+def test_parse_reviews_marks_direct_and_sorts():
+    def pr(number: int, updated: str, login: str = "someone") -> dict:
+        extra = {"updatedAt": updated, "repository": {"nameWithOwner": "GTNewHorizons/Mod"}, "author": {"login": login}}
+        return node(number, **extra)
+
+    data = {
+        "direct": {"nodes": [pr(2, "2026-11-01T10:00:00Z")]},
+        "team": {
+            "nodes": [pr(1, "2026-11-10T10:00:00Z"), pr(2, "2026-11-01T10:00:00Z"), None, pr(3, "2026-11-15T10:00:00Z")]
+        },
+    }
+    items = github.parse_reviews(data)
+    assert [(i.pr.number, i.direct) for i in items] == [(2, True), (3, False), (1, False)]
+    assert items[0].repo == "GTNewHorizons/Mod" and items[0].author == "someone" and items[0].updated.year == 2026
+    assert github.parse_reviews({}) == []
+    query = github._review_query("review-requested:@me", after="abc")
+    assert "review-requested:@me" in query and 'first: 50, after: "abc"' in query
+    assert "after" not in github._review_query("user-review-requested:@me")
+
+
 async def test_cleanup_candidates(sandbox):
     def merged(sha: str) -> PrInfo:
         return PrInfo(1, "MERGED", False, None, None, sha, "", "")

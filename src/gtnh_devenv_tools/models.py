@@ -28,6 +28,15 @@ class PrInfo:
 
 
 @dataclass(frozen=True)
+class ReviewItem:
+    repo: str  # owner/name
+    pr: PrInfo
+    author: str
+    updated: datetime | None
+    direct: bool  # asked of you personally, not only through a team
+
+
+@dataclass(frozen=True)
 class Outcome:
     kind: str  # updated | current | skipped | failed | planned | info
     text: str
@@ -73,6 +82,8 @@ class RepoState:
     release: str = ""  # version the latest stable release shipped
     release_branches: list[str] = field(default_factory=list)  # e.g. release/2.9.x, as found on origin
     release_ahead: int | None = None  # commits on the release branch since the released version
+    release_commits: list[str] = field(default_factory=list)  # their subjects, newest first
+    daily_ahead: int | None = None  # commits on main that the daily's version does not have yet
 
     @property
     def in_pack(self) -> bool:

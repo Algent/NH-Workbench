@@ -2,7 +2,7 @@ import pytest
 from textual.widgets import DataTable, Tabs
 
 from gtnh_devenv_tools import github, pack
-from gtnh_devenv_tools.models import PackEntry, PackInfo
+from gtnh_devenv_tools.models import PackEntry, PackInfo, PrInfo, ReviewItem
 from gtnh_devenv_tools.tui import RepoApp
 
 
@@ -19,6 +19,15 @@ def offline(monkeypatch):
         entries = [closed, PackEntry("Missing", "github", "1", repo="o/m")]
         return PackInfo(entries=entries, release="2.9.0", daily_build=836)
 
+    async def fake_reviews():
+        def item(number: int, direct: bool) -> ReviewItem:
+            url = f"https://example.invalid/pull/{number}"
+            pr = PrInfo(number, "OPEN", False, None, None, "", url, f"PR {number}")
+            return ReviewItem("o/m", pr, "ann", None, direct)
+
+        return [item(1, True), item(2, False)], None
+
+    monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(github, "fetch_prs", no_prs)
     monkeypatch.setattr(pack, "load", fake_pack)
     return loads
@@ -77,6 +86,32 @@ async def test_repo_menu_acts_on_one_repo(sandbox, offline):
         await pilot.press("down", "enter")  # second option: pull
         await settle(app, pilot)
         assert sandbox.sha(other) == tip
+
+
+async def test_reviews_tab_opens_pr_in_browser(sandbox, offline, monkeypatch):
+    from gtnh_devenv_tools import tui
+
+    opened = []
+    monkeypatch.setattr(tui.webbrowser, "open", opened.append)
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        tabs = app.query_one(Tabs)
+        assert str(tabs.query_one("#view-reviews").label) == "Reviews 1"  # only the direct request is counted
+        tabs.active = "view-reviews"
+        await settle(app, pilot)
+        table = app.query_one("#reviews", DataTable)
+        assert table.row_count == 2 and table.display and not app.query_one("#repos").display
+
+        await pilot.press("enter")
+        await pilot.press("down", "g")
+        await pilot.pause()
+        assert opened == ["https://example.invalid/pull/1", "https://example.invalid/pull/2"]
+
+        tabs.active = "view-all"
+        await settle(app, pilot)
+        assert app.query_one("#repos").display and not table.display
 
 
 async def test_extras_menu_forces_pack_refresh(sandbox, offline):

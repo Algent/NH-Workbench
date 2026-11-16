@@ -2,8 +2,9 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 
-from .models import Branch, PrInfo, RepoState
+from .models import Branch, PrInfo, RepoState, ReviewItem
 from .proc import run
 
 _PR_NUMBER = re.compile(r"(?:^|[/_-])pr[-_]?(\d+)$", re.IGNORECASE)
@@ -123,23 +124,85 @@ async def fetch_prs(states: Iterable[RepoState]) -> PrData:
     """Resolve PRs for every non-main local branch and each repo's canonical name, through the gh CLI."""
     result = PrData()
     for chunk in _chunks(states):
-        body = json.dumps({"query": build_query(chunk)})
-        res = await run("gh", "api", "graphql", "--input", "-", stdin=body, timeout=60)
-        if res.code == 127:
-            result.error = "gh CLI not found"
+        data, result.error = await _graphql(build_query(chunk))
+        if data is None:
             break
-        try:
-            payload = json.loads(res.out)
-        except ValueError:
-            result.error = res.message
-            break
-        # gh exits non-zero on partial errors (a deleted repo, an unknown PR number) but still returns data.
-        if not payload.get("data"):
-            errors = payload.get("errors") or [{}]
-            result.error = errors[0].get("message") or payload.get("message") or res.message
-            break
-        parse_response(payload["data"], chunk, result)
+        parse_response(data, chunk, result)
     return result
+
+
+async def _graphql(query: str) -> tuple[dict | None, str | None]:
+    """Run a query through the gh CLI. Returns (data, None) or (None, why it failed)."""
+    res = await run("gh", "api", "graphql", "--input", "-", stdin=json.dumps({"query": query}), timeout=60)
+    if res.code == 127:
+        return None, "gh CLI not found"
+    try:
+        payload = json.loads(res.out)
+    except ValueError:
+        return None, res.message
+    # gh exits non-zero on partial errors (a deleted repo, an unknown PR number) but still returns data.
+    if not payload.get("data"):
+        errors = payload.get("errors") or [{}]
+        return None, errors[0].get("message") or payload.get("message") or res.message
+    return payload["data"], None
+
+
+def _review_query(qualifier: str, after: str | None = None) -> str:
+    # No CI rollup and small pages: the team search times out on GitHub's side otherwise.
+    fields = "number state isDraft reviewDecision title url headRefOid updatedAt"
+    fields += " repository { nameWithOwner } author { login }"
+    cursor = f", after: {json.dumps(after)}" if after else ""
+    search = f'search(query: "is:pr is:open archived:false {qualifier}", type: ISSUE, first: 50{cursor})'
+    nodes = f"nodes {{ ... on PullRequest {{ {fields} }} }}"
+    return f"query {{ {search} {{ pageInfo {{ hasNextPage endCursor }} {nodes} }} }}"
+
+
+async def _search_all(qualifier: str, pages: int = 4) -> tuple[list[dict], str | None]:
+    nodes: list[dict] = []
+    after = None
+    for _ in range(pages):
+        data, error = await _graphql(_review_query(qualifier, after))
+        if data is None:
+            return nodes, error
+        nodes += data["search"].get("nodes") or []
+        page = data["search"].get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+    return nodes, None
+
+
+def parse_reviews(data: dict) -> list[ReviewItem]:
+    """Open PRs waiting on your review: the ones asked of you personally first, then by last update."""
+
+    def nodes(alias: str) -> list[dict]:
+        return [n for n in (data.get(alias) or {}).get("nodes") or [] if n and n.get("url")]
+
+    direct = {n["url"] for n in nodes("direct")}
+    items: dict[str, ReviewItem] = {}
+    for node in nodes("direct") + nodes("team"):
+        updated = node.get("updatedAt")
+        items.setdefault(
+            node["url"],
+            ReviewItem(
+                repo=(node.get("repository") or {}).get("nameWithOwner", ""),
+                pr=to_pr(node),
+                author=(node.get("author") or {}).get("login", ""),
+                updated=datetime.fromisoformat(updated.replace("Z", "+00:00")) if updated else None,
+                direct=node["url"] in direct,
+            ),
+        )
+    newest_first = sorted(items.values(), key=lambda i: i.updated.timestamp() if i.updated else 0, reverse=True)
+    return sorted(newest_first, key=lambda i: not i.direct)
+
+
+async def fetch_reviews() -> tuple[list[ReviewItem], str | None]:
+    """Open PRs waiting on your review. A failed team search still returns the direct requests."""
+    direct, error = await _search_all("user-review-requested:@me")
+    if error:
+        return [], error
+    team, error = await _search_all("review-requested:@me")
+    return parse_reviews({"direct": {"nodes": direct}, "team": {"nodes": team}}), error
 
 
 def attach(states: Iterable[RepoState], data: PrData) -> None:

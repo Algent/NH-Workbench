@@ -2,18 +2,18 @@
     height: 3;
 }
 
-#repos, #pack {
+#repos, #pack, #reviews {
     height: 1fr;
 }
 
 #detail {
     height: auto;
-    max-height: 14;
+    max-height: 18;
     padding: 0 1;
     border-top: solid $primary;
 }
 
-ConfirmScreen, RepoMenu {
+ConfirmScreen, MenuScreen {
     align: center middle;
 }
 

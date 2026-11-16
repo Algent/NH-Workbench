@@ -229,6 +229,12 @@ async def commits_not_in(path: Path, base: str, tip: str) -> int | None:
     return int(res.out) if res.ok else None
 
 
+async def subjects_between(path: Path, base: str, tip: str) -> list[str] | None:
+    """Subjects of the commits on tip that base lacks, newest first; None when either is unknown locally."""
+    res = await git(path, "log", "--format=%s", f"{base}..{tip}")
+    return res.out.splitlines() if res.ok else None
+
+
 async def delete_branch(path: Path, name: str, expected_sha: str) -> Result:
     current = await git(path, "rev-parse", "-q", "--verify", f"refs/heads/{name}")
     if current.out.strip() != expected_sha:

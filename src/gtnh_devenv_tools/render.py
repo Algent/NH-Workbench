@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from rich.table import Table
 from rich.text import Text
 
-from .models import Branch, Outcome, PackEntry, PackInfo, PrInfo, RepoState
+from .models import Branch, Outcome, PackEntry, PackInfo, PrInfo, RepoState, ReviewItem
 
 NOTE_STYLE = {
     "updated": "bold green",
@@ -116,7 +116,11 @@ def pr_text(pr: PrInfo | None) -> Text:
 
 
 def daily_text(st: RepoState) -> Text:
-    return version_text(st.daily) if st.in_pack else Text("")
+    """Version in the daily, plus how many commits main has that it lacks."""
+    text = version_text(st.daily) if st.in_pack else Text("")
+    if st.daily_ahead:
+        text.append(f" +{st.daily_ahead}", "bold cyan")
+    return text
 
 
 def release_text(st: RepoState) -> Text:
@@ -191,6 +195,29 @@ def branches_table(states: Iterable[RepoState], width: int = 60) -> Table:
     for st in states:
         for i, br in enumerate(st.extra_branches):
             table.add_row(Text(st.name if i == 0 else "", "bold"), *branch_row(st, br, width))
+    return table
+
+
+def review_row(item: ReviewItem, width: int = 70) -> list[Text]:
+    return [
+        Text("you", "bold green") if item.direct else Text("team", "dim"),
+        Text(item.repo.partition("/")[2] or item.repo, "bold"),
+        pr_text(item.pr),
+        Text(item.author),
+        Text(ago(item.updated), "dim"),
+        Text(clip(item.pr.title, width)),
+    ]
+
+
+REVIEW_COLUMNS = ("For", "Repo", "PR", "Author", "Updated", "Title")
+
+
+def reviews_table(items: Iterable[ReviewItem], width: int = 70) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for column in REVIEW_COLUMNS:
+        table.add_column(column, no_wrap=True)
+    for item in items:
+        table.add_row(*review_row(item, width))
     return table
 
 

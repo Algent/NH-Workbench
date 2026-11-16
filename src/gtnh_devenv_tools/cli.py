@@ -69,9 +69,27 @@ async def _attach_pack(cfg: Config, states: list[RepoState], refresh: bool = Fal
     with err.status("Loading pack data..."):
         info = await pack.load(cfg, force=refresh)
     pack.link_local(info.entries, states)
-    if info.release:
-        await ops.release_progress(states, pack.release_branch(info.release), cfg.concurrency)
+    branch = pack.release_branch(info.release) if info.release else ""
+    await ops.pack_progress(states, branch, cfg.concurrency)
     return info
+
+
+@app.command()
+def reviews(
+    team: Annotated[bool, typer.Option("--team", help="Also list requests that reach you through a team.")] = False,
+) -> None:
+    """Open pull requests waiting on your review."""
+    with err.status("Asking GitHub for review requests..."):
+        items, error = asyncio.run(github.fetch_reviews())
+    if error and not items:
+        err.print(f"[bold red]Review requests unavailable: {error}")
+        raise typer.Exit(1)
+    if error:
+        err.print(f"[yellow]Team review requests are incomplete: {error}")
+    direct = sum(1 for item in items if item.direct)
+    out.print(render.reviews_table([i for i in items if team or i.direct], width=max(30, out.width - 90)))
+    hint = "" if team else " (--team lists them)"
+    out.print(f"\n[dim]{direct} asked of you · {len(items) - direct} more through teams{hint}")
 
 
 async def _with_prs(states: list[RepoState]) -> None:

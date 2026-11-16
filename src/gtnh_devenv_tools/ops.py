@@ -76,15 +76,25 @@ async def pull_repo(cfg: Config, path: Path, dry_run: bool = False) -> RepoState
     return st
 
 
-async def release_progress(states: Iterable[RepoState], branch: str, limit: int = 8) -> None:
-    """Count the commits each repo's release branch gained since the version that was released."""
+async def pack_progress(states: Iterable[RepoState], release_branch: str = "", limit: int = 8) -> None:
+    """Measure each repo against the pack, as of the last fetch.
+
+    daily_ahead: commits on main that the version in the daily lacks (merged, not in a daily yet).
+    release_ahead / release_commits: what the release branch gained since the released version.
+    """
 
     async def one(st: RepoState) -> None:
-        st.release_ahead = None
-        if st.release and branch in st.release_branches:
-            st.release_ahead = await git.commits_not_in(
-                st.path, f"refs/tags/{st.release}", f"refs/remotes/origin/{branch}"
-            )
+        st.daily_ahead = st.release_ahead = None
+        st.release_commits = []
+        if st.daily and st.tracked:
+            main = st.branch(st.tracked)
+            upstream = main.upstream if main and main.upstream and not main.gone else f"origin/{st.tracked}"
+            st.daily_ahead = await git.commits_not_in(st.path, f"refs/tags/{st.daily}", f"refs/remotes/{upstream}")
+        if st.release and release_branch in st.release_branches:
+            tip = f"refs/remotes/origin/{release_branch}"
+            subjects = await git.subjects_between(st.path, f"refs/tags/{st.release}", tip)
+            if subjects is not None:
+                st.release_ahead, st.release_commits = len(subjects), subjects
 
     await run_all(states, one, limit)
 

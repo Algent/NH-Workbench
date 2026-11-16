@@ -17,7 +17,7 @@ from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
 from .config import Config
-from .models import PackEntry, PackInfo, RepoState
+from .models import PackEntry, PackInfo, RepoState, ReviewItem
 
 VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "all": ("All", lambda st: True),
@@ -26,10 +26,13 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "dirty": ("Dirty", lambda st: st.dirty),
     "branches": ("Branches", lambda st: bool(st.extra_branches)),
     "other": ("Other", lambda st: st.group != "gtnh"),
+    "reviews": ("Reviews", None),
     "pack": ("Pack", None),
 }
+TABLES = {"pack": "#pack", "reviews": "#reviews"}  # views with their own table; the rest share #repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
+BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
 
 
 def repo_cells(st: RepoState) -> list[Text]:
@@ -49,6 +52,8 @@ def repo_cells(st: RepoState) -> list[Text]:
 def pack_line(st: RepoState, info: PackInfo) -> Text:
     """Where a checkout stands in the pack: daily version, released version, release branch activity."""
     text = Text.assemble(("pack  ", "dim"), "daily ", (st.daily or "—", "bold"))
+    if st.daily_ahead:
+        text.append(f" (+{st.daily_ahead} on {st.tracked} since)", "cyan")
     text.append(f"   {info.release or 'release'} ").append(st.release or "—", "bold")
     branch = pack.release_branch(info.release) if info.release else ""
     if branch in st.release_branches and st.release:
@@ -68,6 +73,10 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     lines: list[RenderableType] = [head]
     if info and st.in_pack:
         lines.append(pack_line(st, info))
+        for subject in st.release_commits[:BACKPORTS_SHOWN]:
+            lines.append(Text(f"        {render.clip(subject, 100)}", "dim cyan"))
+        if len(st.release_commits) > BACKPORTS_SHOWN:
+            lines.append(Text(f"        ... {len(st.release_commits) - BACKPORTS_SHOWN} more", "dim"))
     if not st.extra_branches:
         return Group(*lines, Text("no other local branches", "dim"))
     table = Table(box=None, pad_edge=False, show_header=False)
@@ -77,6 +86,13 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     for br in st.extra_branches:
         table.add_row(*render.branch_row(st, br))
     return Group(*lines, table)
+
+
+def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
+    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
+    where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
+    hint = Text(f"{item.pr.url}   Enter or g: open in the browser", "dim")
+    return Group(head, Text(item.pr.title), where, hint)
 
 
 def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
@@ -228,6 +244,7 @@ class RepoApp(App[None]):
         self.prs = github.PrData()
         self.entries: list[PackEntry] = []
         self.pack_info: PackInfo | None = None
+        self.reviews: list[ReviewItem] = []
         self.view = "all"
         self.needle = ""
         self.busy = ""
@@ -238,17 +255,20 @@ class RepoApp(App[None]):
         yield Input(placeholder="Filter by name: Enter keeps it, Enter on empty (or Esc) removes it", id="filter")
         yield DataTable(id="repos", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="pack", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(Tabs).can_focus = False
-        for table_id, columns in (("#repos", REPO_COLUMNS), ("#pack", PACK_COLUMNS)):
+        layout = (("#repos", REPO_COLUMNS), ("#pack", PACK_COLUMNS), ("#reviews", render.REVIEW_COLUMNS))
+        for table_id, columns in layout:
             table = self.query_one(table_id, DataTable)
             for column in columns:
                 table.add_column(column, key=column)
         self.query_one("#filter").display = False
-        self.query_one("#pack").display = False
+        for table_id in TABLES.values():
+            self.query_one(table_id).display = False
         self.query_one("#repos").focus()
         self.sub_title = str(self.cfg.root)
         self.load_everything()
@@ -265,6 +285,7 @@ class RepoApp(App[None]):
         else:
             self.prs = data
             github.attach(self.states.values(), data)
+            self.reviews, _ = await github.fetch_reviews()
         await self._load_pack()
 
     async def _load_pack(self, force: bool = False) -> None:
@@ -287,11 +308,10 @@ class RepoApp(App[None]):
         if not self.pack_info:
             return
         pack.link_local(self.entries, self.states.values())
-        if self.pack_info.release:
-            keys = self.states if paths is None else [str(p) for p in paths]
-            states = [self.states[k] for k in keys if k in self.states]
-            branch = pack.release_branch(self.pack_info.release)
-            await ops.release_progress(states, branch, self.cfg.concurrency)
+        keys = self.states if paths is None else [str(p) for p in paths]
+        states = [self.states[k] for k in keys if k in self.states]
+        branch = pack.release_branch(self.pack_info.release) if self.pack_info.release else ""
+        await ops.pack_progress(states, branch, self.cfg.concurrency)
 
     async def _batch(
         self,
@@ -319,6 +339,7 @@ class RepoApp(App[None]):
                 old = self.states.get(str(st.path))
                 if old:  # keep the pack columns steady until they are recomputed after the batch
                     st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
+                    st.daily_ahead, st.release_commits = old.daily_ahead, old.release_commits
                 self.states[str(st.path)] = st
                 self._update_row(st)
                 self.sub_title = f"{label} {done}/{len(paths)}"
@@ -333,7 +354,7 @@ class RepoApp(App[None]):
     # --- rendering ------------------------------------------------------------
 
     def _table(self) -> DataTable:
-        return self.query_one("#pack" if self.view == "pack" else "#repos", DataTable)
+        return self.query_one(TABLES.get(self.view, "#repos"), DataTable)
 
     def _cursor_key(self) -> str | None:
         table = self._table()
@@ -346,7 +367,15 @@ class RepoApp(App[None]):
         if self.view == "pack":
             entry = self._selected_entry()
             return entry.local if entry else None
+        if self.view == "reviews":
+            item = self._selected_review()
+            slug = item.repo.lower() if item else None
+            return next((st for st in self.states.values() if (st.slug or "").lower() == slug), None)
         return self.states.get(key) if key else None
+
+    def _selected_review(self) -> ReviewItem | None:
+        key = self._cursor_key()
+        return next((i for i in self.reviews if i.pr.url == key), None) if self.view == "reviews" else None
 
     def _selected_entry(self) -> PackEntry | None:
         key = self._cursor_key()
@@ -370,11 +399,15 @@ class RepoApp(App[None]):
 
     def _refresh(self) -> None:
         states = sorted(self.states.values(), key=lambda st: st.name.lower())
+        special = {"pack": len(self.entries), "reviews": sum(1 for item in self.reviews if item.direct)}
         for key, (label, wanted) in VIEWS.items():
-            count = len(self.entries) if wanted is None else sum(1 for st in states if wanted(st))
+            count = special[key] if wanted is None else sum(1 for st in states if wanted(st))
             self.query_one(f"#view-{key}", Tab).label = f"{label} {count}"
 
-        if self.view == "pack":
+        if self.view == "reviews":
+            shown = [i for i in self.reviews if self.needle in f"{i.repo} {i.pr.title} {i.author}".lower()]
+            self._fill(self.query_one("#reviews", DataTable), [(i.pr.url, render.review_row(i)) for i in shown])
+        elif self.view == "pack":
             shown = [e for e in self.entries if self.needle in e.name.lower()]
             self._fill(self.query_one("#pack", DataTable), [(e.name, render.pack_row(e)) for e in shown])
         else:
@@ -387,8 +420,10 @@ class RepoApp(App[None]):
 
     def _update_detail(self) -> None:
         detail = self.query_one("#detail", Static)
-        entry, st = self._selected_entry(), self._selected_repo()
-        if entry and self.pack_info:
+        entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
+        if review:
+            detail.update(review_detail(review, st))
+        elif entry and self.pack_info:
             detail.update(pack_detail(entry, self.pack_info))
         elif st:
             detail.update(repo_detail(st, self.pack_info))
@@ -402,6 +437,9 @@ class RepoApp(App[None]):
             self._update_detail()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if self.view == "reviews":
+            self.action_open_web()
+            return
         st = self._selected_repo()
         if st and not st.error and not self._modal():
             self._repo_menu(st)
@@ -427,8 +465,9 @@ class RepoApp(App[None]):
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         self.view = (event.tab.id or "view-all").removeprefix("view-")
-        self.query_one("#repos").display = self.view != "pack"
-        self.query_one("#pack").display = self.view == "pack"
+        self.query_one("#repos").display = self.view not in TABLES
+        for view, table_id in TABLES.items():
+            self.query_one(table_id).display = self.view == view
         if not isinstance(self.focused, Input):
             self._table().focus()
         self._refresh()
@@ -514,7 +553,11 @@ class RepoApp(App[None]):
         proc.open_path(folder)
 
     def action_open_web(self) -> None:
-        self._open_web(self._selected_repo(), self._selected_entry())
+        review = self._selected_review()
+        if review:
+            webbrowser.open(review.pr.url)
+        else:
+            self._open_web(self._selected_repo(), self._selected_entry())
 
     def _open_web(self, st: RepoState | None, entry: PackEntry | None) -> None:
         url = None
