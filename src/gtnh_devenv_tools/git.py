@@ -215,6 +215,10 @@ async def delete_branch(path: Path, name: str, expected_sha: str) -> Result:
     return await git(path, "branch", "-D", name)
 
 
+async def remove_remote(path: Path, name: str) -> Result:
+    return await git(path, "remote", "remove", name)
+
+
 async def clone(url: str, dest: Path, branch: str | None = None) -> Result:
     args = ["--branch", branch] if branch else []
     return await run("git", "clone", *args, url, str(dest), timeout=3600)

@@ -32,12 +32,10 @@ class PrData:
 
 
 def lookup_for(st: RepoState, br: Branch) -> Lookup:
-    if br.upstream:
-        # Remote names may contain slashes; take the longest remote that prefixes the upstream.
-        for name in sorted(st.remotes, key=len, reverse=True):
-            if br.upstream.startswith(name + "/"):
-                head = br.upstream[len(name) + 1 :]
-                return Lookup(st.name, br.name, br.sha, head=head, head_owner=st.remotes[name].owner)
+    remote = st.remote_of(br)
+    if remote:
+        head = br.upstream[len(remote) + 1 :]
+        return Lookup(st.name, br.name, br.sha, head=head, head_owner=st.remotes[remote].owner)
     m = _PR_NUMBER.search(br.name)
     if m:
         return Lookup(st.name, br.name, br.sha, number=int(m[1]))

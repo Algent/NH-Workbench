@@ -13,7 +13,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Static, Tab, Tabs
 
-from . import config, git, github, ops, pack, proc, render
+from . import config, github, ops, pack, proc, render
 from .config import Config
 from .models import PackEntry, RepoState
 
@@ -352,22 +352,21 @@ class RepoApp(App[None]):
         body = Text("\n").join(
             Text.assemble((st.name, "bold"), f"  {br.name}", (f"  PR #{br.pr.number}", "dim")) for st, br in safe
         )
+        for st, remote in ops.orphaned_remotes(safe):
+            body.append("\n").append_text(
+                Text.assemble((st.name, "bold"), f"  remote {remote.name}", ("  no longer tracked", "dim"))
+            )
         if not await self.push_screen_wait(ConfirmScreen(f"Delete {len(safe)} merged local branches?", body)):
             return
-        restore, failed = [], 0
-        for st, br in safe:
-            res = await git.delete_branch(st.path, br.name, br.sha)
-            if res.ok:
-                restore.append(f'{datetime.now():%Y-%m-%d %H:%M} git -C "{st.path}" branch {br.name} {br.sha}')
-            else:
-                failed += 1
+        report = await ops.cleanup(safe)
         log_file = config.cache_dir() / "deleted-branches.log"
-        if restore:
+        if report.restore:
             log_file.parent.mkdir(parents=True, exist_ok=True)
             with log_file.open("a", encoding="utf-8") as f:
-                f.write("\n".join(restore) + "\n")
+                f.writelines(f"{datetime.now():%Y-%m-%d %H:%M} {line}\n" for line in report.restore)
         await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), list({st.path for st, _ in safe}))
-        note = f"Deleted {len(restore)} branches, restore commands in {log_file}"
+        note = f"Deleted {report.branches} branches and {report.remotes} remotes, undo commands in {log_file}"
+        failed = len(report.failed)
         self.notify(note + (f"; {failed} failed" if failed else ""), severity="warning" if failed else "information")
 
     @work(group="clone")

@@ -100,6 +100,31 @@ async def test_cleanup_candidates(sandbox):
     assert [br.name for _, br in unpushed] == ["extra-work"]
 
 
+async def test_cleanup_removes_fork_remote_once_unused(sandbox):
+    fork = sandbox.origin.with_name("fork.git")
+    sandbox.git(sandbox.origin.parent, "clone", "--bare", str(sandbox.origin), str(fork))
+    sandbox.git(sandbox.work, "remote", "add", "someone", str(fork))
+    sandbox.git(sandbox.work, "fetch", "someone")
+    for name in ("review-a", "review-b"):
+        sandbox.git(sandbox.work, "branch", "--track", name, "someone/master")
+    sandbox.git(sandbox.work, "branch", "mine")
+
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    a, mine = st.branch("review-a"), st.branch("mine")
+    assert st.remote_of(a) == "someone" and st.remote_of(mine) is None
+    assert ops.orphaned_remotes([(st, a)]) == []  # review-b still tracks it
+    assert ops.orphaned_remotes([(st, mine)]) == []
+
+    report = await ops.cleanup([(st, a)])
+    assert (report.branches, report.remotes) == (1, 0)
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    report = await ops.cleanup([(st, st.branch("review-b")), (st, st.branch("mine"))])
+
+    assert (report.branches, report.remotes, report.failed) == (2, 1, [])
+    assert sandbox.git(sandbox.work, "remote") == "origin"
+    assert any("remote add someone" in line for line in report.restore)
+
+
 def test_parse_github_url():
     assert pack.parse_github_url("https://github.com/Vexatos/TinkersGregworks/tree/GT-NH") == (
         "Vexatos/TinkersGregworks",

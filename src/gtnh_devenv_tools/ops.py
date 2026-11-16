@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import git
 from .config import Config
-from .models import Branch, Outcome, RepoState
+from .models import Branch, Outcome, Remote, RepoState
 
 
 def _subdirs(folder: Path) -> list[Path]:
@@ -85,3 +86,46 @@ async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[Re
             pushed = br.sha == br.pr.head_sha or await git.is_ancestor(st.path, br.sha, br.pr.head_sha)
             (safe if pushed else unpushed).append((st, br))
     return safe, unpushed
+
+
+def orphaned_remotes(doomed: Iterable[tuple[RepoState, Branch]]) -> list[tuple[RepoState, Remote]]:
+    """Fork remotes that no local branch tracks any more once the given branches are deleted."""
+    by_repo: dict[Path, tuple[RepoState, set[str]]] = {}
+    for st, br in doomed:
+        by_repo.setdefault(st.path, (st, set()))[1].add(br.name)
+    orphans = []
+    for st, names in by_repo.values():
+        primary = st.origin.name if st.origin else None
+        used = {st.remote_of(b) for b in st.branches if b.name in names} - {None, primary}
+        still_used = {st.remote_of(b) for b in st.branches if b.name not in names}
+        orphans += [(st, st.remotes[name]) for name in sorted(used - still_used)]
+    return orphans
+
+
+@dataclass
+class CleanupReport:
+    branches: int = 0
+    remotes: int = 0
+    restore: list[str] = field(default_factory=list)  # commands that undo each deletion
+    failed: list[str] = field(default_factory=list)
+
+
+async def cleanup(safe: Iterable[tuple[RepoState, Branch]]) -> CleanupReport:
+    report = CleanupReport()
+    deleted = []
+    for st, br in safe:
+        res = await git.delete_branch(st.path, br.name, br.sha)
+        if res.ok:
+            deleted.append((st, br))
+            report.restore.append(f'git -C "{st.path}" branch {br.name} {br.sha}')
+        else:
+            report.failed.append(f"{st.name} {br.name}: {res.message}")
+    report.branches = len(deleted)
+    for st, remote in orphaned_remotes(deleted):
+        res = await git.remove_remote(st.path, remote.name)
+        if res.ok:
+            report.remotes += 1
+            report.restore.append(f'git -C "{st.path}" remote add {remote.name} {remote.url}')
+        else:
+            report.failed.append(f"{st.name} remote {remote.name}: {res.message}")
+    return report

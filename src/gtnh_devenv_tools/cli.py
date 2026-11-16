@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 
-from . import config, git, github, ops, pack, render
+from . import config, github, ops, pack, render
 from .config import Config
 from .models import RepoState
 
@@ -153,18 +153,20 @@ def branches(
     out.print("Merged and fully contained in their PR:")
     for st, br in safe:
         out.print(f"  {st.name} [bold]{br.name}[/] [dim]{br.sha[:10]} PR #{br.pr.number}")
+    remotes = ops.orphaned_remotes(safe)
+    if remotes:
+        out.print("Fork remotes nothing else would track afterwards (removed too):")
+        for st, remote in remotes:
+            out.print(f"  {st.name} [bold]{remote.name}[/] [dim]{remote.url}")
     if not typer.confirm(f"Delete these {len(safe)} local branches?"):
         raise typer.Exit(0)
 
-    async def delete() -> list:
-        return [(st, br, await git.delete_branch(st.path, br.name, br.sha)) for st, br in safe]
-
-    for st, br, res in asyncio.run(delete()):
-        if res.ok:
-            restore = f"git -C {st.path} branch {br.name} {br.sha}"
-            out.print(f"[green]deleted[/] {st.name} {br.name} [dim](restore: {restore})")
-        else:
-            out.print(f"[red]failed[/] {st.name} {br.name}: {res.message}")
+    report = asyncio.run(ops.cleanup(safe))
+    out.print(f"[green]Deleted {report.branches} branches and {report.remotes} remotes.[/] To undo:")
+    for line in report.restore:
+        out.print(f"  [dim]{line}", soft_wrap=True)
+    for line in report.failed:
+        out.print(f"[red]failed[/] {line}")
 
 
 async def _load_pack(cfg: Config, refresh: bool) -> tuple[list, list[RepoState]]:

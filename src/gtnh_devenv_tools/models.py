@@ -82,6 +82,11 @@ class RepoState:
     def branch(self, name: str | None) -> Branch | None:
         return next((b for b in self.branches if b.name == name), None)
 
+    def remote_of(self, br: Branch) -> str | None:
+        """Name of the remote a branch tracks. Remote names may contain slashes, so the longest match wins."""
+        names = sorted(self.remotes, key=len, reverse=True)
+        return next((n for n in names if (br.upstream or "").startswith(n + "/")), None)
+
     @property
     def current(self) -> Branch | None:
         return self.branch(self.head)
