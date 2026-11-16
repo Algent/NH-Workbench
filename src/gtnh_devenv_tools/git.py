@@ -7,6 +7,7 @@ from .models import Branch, Outcome, Remote, RepoState
 from .proc import Result, run
 
 _GITHUB = re.compile(r"github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$", re.IGNORECASE)
+_REMOTE = re.compile(r"^(?:\w+://)?(?:[^@/]+@)?([^/:]+)[:/]+(.+?)(?:\.git)?/?$")
 _TRACK = re.compile(r"(ahead|behind) (\d+)")
 _REF_FORMAT = "%00".join(
     [
@@ -32,6 +33,12 @@ _IN_PROGRESS = {
 
 async def git(repo: Path, *args: str, timeout: float = 120) -> Result:
     return await run("git", "-C", str(repo), *args, timeout=timeout)
+
+
+def remote_key(url: str | None) -> str | None:
+    """host/owner/name in lower case for any https or ssh remote URL, whatever the forge."""
+    m = _REMOTE.search(url or "")
+    return f"{m[1]}/{m[2]}".lower() if m else None
 
 
 def parse_remote(name: str, url: str) -> Remote:
@@ -131,10 +138,12 @@ async def read_state(
     st.in_progress = _in_progress(path)
 
     names = {b.name for b in st.branches}
-    slug = st.origin.slug if st.origin else None
+    # A fork kept only to push branches still follows its upstream's branch, so look at every remote.
+    remotes = sorted(st.remotes.values(), key=lambda r: r.name != "origin")
+    known = slug_branches or {}
     st.tracked = (
         tracked_override
-        or (slug_branches or {}).get((slug or "").lower())
+        or next((known[k] for k in (remote_key(r.url) for r in remotes) if k in known), None)
         or origin_head
         or next((n for n in ("main", "master") if n in names), None)
     )

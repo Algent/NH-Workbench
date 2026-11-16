@@ -21,6 +21,13 @@ def test_save_setting_keeps_comments_and_nests(tmp_path):
     assert cfg.repo("forgeessentials") == config.RepoConfig(group="reference", ignore=True)
     assert cfg.repo("old") == config.RepoConfig()
 
+    # A name in another case edits the existing table instead of adding a second one.
+    config.save_setting(("repos", "forgeessentials", "ignore"), None, path)
+    text = path.read_text(encoding="utf-8")
+    assert "[repos.forgeessentials]" not in text and "[repos.ForgeEssentials]" in text
+    cfg = config.load(path=path)
+    assert cfg.repo("ForgeEssentials") == config.RepoConfig(group="reference") and cfg.hidden == []
+
 
 def test_save_setting_refuses_broken_file(tmp_path):
     path = tmp_path / "config.toml"

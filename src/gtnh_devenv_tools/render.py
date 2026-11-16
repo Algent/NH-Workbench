@@ -237,6 +237,8 @@ def version_text(version: str) -> Text:
 
 def pack_row(entry: PackEntry) -> list[Text]:
     source = entry.repo or ""
+    if source and entry.host != "github.com":
+        source = f"{entry.host}/{source}"
     if entry.branch:
         source += f" @ {entry.branch}"
     return [

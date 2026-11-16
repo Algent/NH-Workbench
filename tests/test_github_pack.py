@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gtnh_devenv_tools import git, github, ops, pack
+from gtnh_devenv_tools import git, github, ops, pack, render
 from gtnh_devenv_tools.models import Branch, PrInfo, RepoState
 
 
@@ -171,6 +171,69 @@ def test_parse_github_url():
     assert pack.parse_github_url("https://github.com/LegacyModdingMC/UniMixins") == ("LegacyModdingMC/UniMixins", None)
     assert pack.parse_github_url("https://www.curseforge.com/minecraft/mc-mods/thaumcraft") == (None, None)
     assert pack.parse_github_url(None) == (None, None)
+
+
+def test_remote_key_is_forge_agnostic():
+    github_url = "https://github.com/GTNewHorizons/GT5-Unofficial.git"
+    assert git.remote_key(github_url) == "github.com/gtnewhorizons/gt5-unofficial"
+    assert git.remote_key("git@gitlab.com:CDAGaming/UniLib.git") == "gitlab.com/cdagaming/unilib"
+    assert git.remote_key("ssh://git@gitlab.com/CDAGaming/UniLib") == "gitlab.com/cdagaming/unilib"
+    assert git.remote_key("https://gitlab.com/group/sub/project/") == "gitlab.com/group/sub/project"
+    assert git.remote_key(None) is None
+
+
+def test_gitlab_source_matches_local_checkout():
+    manifest = {"external_mods": {"UniLib": {"version": "1.2.1"}}}
+    sources = {"unilib": {"repo": "CDAGaming/UniLib", "host": "gitlab.com", "branch": "1.7.10", "status": "active"}}
+    (entry,) = pack.build_entries(manifest, {}, [], sources)
+    assert (entry.key, entry.web_url) == ("gitlab.com/cdagaming/unilib", "https://gitlab.com/CDAGaming/UniLib")
+    assert (entry.dev_status, entry.status) == ("active", "missing")
+
+    local = repo("UniLib", origin="https://gitlab.com/CDAGaming/UniLib.git")
+    same_name_on_github = repo("Other", origin="https://github.com/CDAGaming/UniLib.git")
+    pack.link_local([entry], [same_name_on_github, local])
+    assert entry.local is local and local.daily == "1.2.1" and not same_name_on_github.in_pack
+    assert "gitlab.com/CDAGaming/UniLib @ 1.7.10" in render.pack_row(entry)[-1].plain
+
+
+def test_fork_matches_through_its_upstream_remote():
+    manifest = {"external_mods": {"Tinkers-Gregworks": {"version": "1.0.34"}}}
+    sources = {"tinkers-gregworks": {"repo": "Vexatos/TinkersGregworks", "branch": "GT-NH"}}
+    (entry,) = pack.build_entries(manifest, {}, [], sources)
+
+    fork = repo(
+        "TinkersGregworks",
+        origin="https://github.com/GTNewHorizons/TinkersGregworks",
+        UPSTREAM="https://github.com/Vexatos/TinkersGregworks",
+    )
+    pack.link_local([entry], [fork])
+    assert entry.local is fork and fork.daily == "1.0.34"
+
+    upstream_clone = repo("Elsewhere", origin="https://github.com/Vexatos/TinkersGregworks.git")
+    pack.link_local([entry], [fork, upstream_clone])
+    assert entry.local is upstream_clone and not fork.in_pack  # a direct clone wins over a fork
+
+
+async def test_fork_tracks_its_upstream_source_branch(sandbox):
+    sandbox.git(sandbox.work, "remote", "add", "UPSTREAM", "https://github.com/Vexatos/TinkersGregworks")
+    branches = {"github.com/vexatos/tinkersgregworks": "GT-NH"}
+    st = await git.read_state(sandbox.work, slug_branches=branches)
+    assert st.tracked == "GT-NH" and st.off_main
+    assert (await git.read_state(sandbox.work, "master", branches)).tracked == "master"  # config override wins
+
+
+def test_shipped_sources_are_well_formed():
+    from gtnh_devenv_tools import config
+
+    cfg = config.load(path=Path("does-not-exist.toml"))
+    assert len(cfg.sources) >= 26
+    for name, source in cfg.sources.items():
+        assert name == name.lower()
+        assert source.get("closed") or source.get("repo"), name
+        assert set(source) <= {"repo", "host", "branch", "closed", "status", "note"}, name
+        assert source.get("status", "active") in {"active", "passive", "legacy"}, name
+    assert cfg.slug_branches["github.com/glitchfiend/biomesoplenty"] == "BOP-1.7.10-2.1.x"
+    assert cfg.slug_branches["gitlab.com/cdagaming/craftpresence"] == "1.7.10"
 
 
 def test_latest_release_skips_betas_and_dailies():

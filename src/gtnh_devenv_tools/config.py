@@ -40,7 +40,15 @@ class Config:
     @property
     def slug_branches(self) -> dict[str, str]:
         """Source repos whose relevant branch is not the default one."""
-        return {s["repo"].lower(): s["branch"] for s in self.sources.values() if s.get("repo") and s.get("branch")}
+        return {
+            f"{s.get('host', 'github.com')}/{s['repo']}".lower(): s["branch"]
+            for s in self.sources.values()
+            if s.get("repo") and s.get("branch")
+        }
+
+    @property
+    def hidden(self) -> list[str]:
+        return sorted(name for name, repo in self.repos.items() if repo.ignore)
 
 
 def config_path() -> Path:
@@ -89,7 +97,9 @@ def save_setting(keys: tuple[str, ...], value: str | bool | int | None, path: Pa
     except (tomlkit.exceptions.TOMLKitError, OSError) as e:
         raise ConfigError(f'Could not read config "{path}": {e}') from e
     table = doc
-    for key in keys[:-1]:
+    for wanted in keys[:-1]:
+        # Repo names are matched without regard to case, so reuse the spelling already in the file.
+        key = next((k for k in table if k.lower() == wanted.lower()), wanted)
         if key not in table:
             table[key] = tomlkit.table()
         table = table[key]

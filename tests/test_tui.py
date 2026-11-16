@@ -177,6 +177,13 @@ async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch,
         assert [st.name for st in app.states.values()] == ["second"]
         assert config.load(sandbox.root, cfg_file).repo("repo").ignore
 
+        await pilot.press("x", "u")  # Extras, then "show a hidden repo again"
+        await pilot.pause()
+        await pilot.press("1")
+        await settle(app, pilot)
+        assert sorted(st.name for st in app.states.values()) == ["repo", "second"]
+        assert app.cfg.hidden == [] and app.states[str(sandbox.work)].group == "reference"
+
 
 async def test_extras_menu_forces_pack_refresh(sandbox, offline):
     from gtnh_devenv_tools.tui import ExtrasMenu

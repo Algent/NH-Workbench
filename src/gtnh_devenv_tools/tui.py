@@ -108,6 +108,8 @@ def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
     versions = f"  {entry.kind}  daily {entry.version or '—'}  {release}"
     lines = [render.pack_header(info), Text.assemble((entry.name, "bold"), versions)]
     lines.append(Text(f"licence: {entry.license or 'unknown'}   {entry.url or ''}", "dim"))
+    if entry.dev_status or entry.note:
+        lines.append(Text(" · ".join(part for part in (entry.dev_status, entry.note) if part), "dim italic"))
     if entry.local:
         lines.append(Text(f"checked out at {entry.local.path}", "green"))
     elif entry.status == "missing":
@@ -247,6 +249,7 @@ class ExtrasMenu(MenuScreen):
         actions = [
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
+            ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
         ]
@@ -647,6 +650,13 @@ class RepoApp(App[None]):
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
+        elif choice == "unhide":
+            # Number keys pick a repo; beyond nine, use the arrows.
+            names = self.cfg.hidden
+            actions = [(str(i) if i < 10 else " ", name, name, None) for i, name in enumerate(names, 1)]
+            name = await self.push_screen_wait(MenuScreen(Text("Show which repo again?", "bold"), actions))
+            if name:
+                self._save_setting(("repos", name, "ignore"), None)
         elif choice == "root":
             hint = "Folder that holds your checkouts."
             folder = await self.push_screen_wait(PromptScreen("Repo folder", str(self.cfg.root), hint))
@@ -676,7 +686,7 @@ class RepoApp(App[None]):
             pr = st.current.pr if st.current else None
             url = pr.url if pr else (f"https://github.com/{st.slug}" if st.slug else None)
         elif entry:
-            url = f"https://github.com/{entry.repo}" if entry.repo else entry.url
+            url = entry.web_url
         if url:
             webbrowser.open(url)
 

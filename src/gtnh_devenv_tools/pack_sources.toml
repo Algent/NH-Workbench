@@ -1,12 +1,100 @@
 # Where the source of pack mods hosted outside the GTNewHorizons org lives.
-# Keys are the names used in DreamAssemblerXXL's manifest (case-insensitive).
+# Keys are the names used in DreamAssemblerXXL's manifests (case-insensitive).
 # Override or extend in your config.toml under [pack.sources."<mod name>"].
-#   repo   = "owner/name" on GitHub
-#   branch = branch to treat as main when it is not the repository default
+#   repo   = "owner/name"
+#   host   = forge the repo is on, when it is not github.com
+#   branch = the branch the 1.7.10 version is built from
 #   closed = true when there is no public source
+#   status = active | passive | legacy (how alive development is)
+#   note   = anything worth remembering
 
 ["EndlessIDs"]
 repo = "GTMEGA/EndlessIDs"
+
+["Biomes O' Plenty"]
+repo = "Glitchfiend/BiomesOPlenty"
+branch = "BOP-1.7.10-2.1.x"
+status = "legacy"
+
+["Chunk API"]
+repo = "FalsePattern/ChunkAPI"
+branch = "master"
+status = "active"
+
+["CoFH Core"]
+repo = "CoFH/CoFHCore-1.12-Legacy"
+branch = "1.7.10"
+status = "legacy"
+
+["Craft-Presence"]
+repo = "CDAGaming/CraftPresence"
+host = "gitlab.com"
+branch = "1.7.10"
+status = "active"
+
+["Extreme Sound Muffler"]
+repo = "Lyfts/ExtremeSoundMuffler-Legacy"
+branch = "1.7.10"
+status = "active"
+
+["FalsepatternLib"]
+repo = "FalsePattern/FalsePatternLib"
+branch = "master"
+status = "active"
+
+["Healer"]
+repo = "Glease/Healer"
+branch = "master"
+status = "active"
+note = "Fix for the log4j vulnerability; unlikely to change unless something breaks."
+
+["Hunger-Overhaul"]
+repo = "progwml6/HungerOverhaul"
+branch = "master"
+status = "legacy"
+note = "master is not the default branch. The pack jar (jenkins104, CurseForge 2016-09-26) may not match its tip."
+
+["Tinkers-Gregworks"]
+repo = "Vexatos/TinkersGregworks"
+branch = "GT-NH"
+note = "PRs go upstream to this repo; the GTNewHorizons fork is only used to push branches."
+
+["JourneyMap"]
+repo = "TeamJM/journeymap-legacy"
+branch = "master"
+status = "passive"
+note = "PRs are accepted; the maintainer's own work is on JourneyMap 6, which is closed."
+
+["JourneyMap Server"]
+closed = true
+status = "legacy"
+note = "No source located (jar from 2015-04-03)."
+
+["Mobs Info"]
+repo = "kuba6000/Mobs-Info"
+branch = "master"
+status = "active"
+
+["Salis Arcana"]
+repo = "rndmorris/Salis-Arcana"
+branch = "main"
+status = "active"
+
+["TC-4-Tweaks"]
+repo = "Glease/TC4Tweaks"
+branch = "master"
+status = "active"
+
+["UniLib"]
+repo = "CDAGaming/UniLib"
+host = "gitlab.com"
+branch = "1.7.10"
+status = "active"
+
+["Ztones"]
+closed = true
+status = "legacy"
+note = "All rights reserved, no public repository even for newer versions."
 
 ["Thaumcraft"]
 closed = true

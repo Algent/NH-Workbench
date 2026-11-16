@@ -110,8 +110,11 @@ def _new_entry(name: str, kind: str, asset: dict, source: dict) -> PackEntry:
         kind=kind,
         version="",
         repo=source.get("repo", repo),
+        host=source.get("host", "github.com"),
         branch=source.get("branch", branch),
         closed=bool(source.get("closed")),
+        dev_status=source.get("status", ""),
+        note=source.get("note", ""),
         license=asset.get("license"),
         url=asset.get("external_url"),
     )
@@ -133,14 +136,22 @@ def build_entries(daily: dict, release: dict, assets: list[dict], sources: dict[
 
 def link_local(entries: Iterable[PackEntry], states: Iterable[RepoState]) -> None:
     """Match pack mods to local checkouts by repository, and copy their versions onto the checkouts."""
-    by_slug: dict[str, RepoState] = {}
+    states = list(states)
+    by_key: dict[str, RepoState] = {}
     for st in states:
         st.daily = st.release = ""
-        for slug in (st.origin.slug if st.origin else None, st.canonical):
-            if slug:
-                by_slug[slug.lower()] = st
+        renamed = f"github.com/{st.canonical}".lower() if st.canonical else None
+        for key in (git.remote_key(st.origin.url) if st.origin else None, renamed):
+            if key:
+                by_key[key] = st
+    # Then the other remotes, for forks kept only to push branches towards an upstream. Origins win.
+    for st in states:
+        for remote in st.remotes.values():
+            key = git.remote_key(remote.url)
+            if key:
+                by_key.setdefault(key, st)
     for entry in entries:
-        entry.local = by_slug.get((entry.repo or "").lower())
+        entry.local = by_key.get(entry.key or "")
         if entry.local:
             entry.local.daily, entry.local.release = entry.version, entry.release_version
 
@@ -188,4 +199,4 @@ async def clone(entry: PackEntry, root: Path) -> Result:
     dest = root / entry.repo.partition("/")[2]
     if dest.exists():
         return Result(1, "", f"{dest} already exists")
-    return await git.clone(f"https://github.com/{entry.repo}.git", dest, entry.branch)
+    return await git.clone(f"https://{entry.host}/{entry.repo}.git", dest, entry.branch)

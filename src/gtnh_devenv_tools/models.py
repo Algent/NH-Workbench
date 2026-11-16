@@ -144,12 +144,24 @@ class PackEntry:
     version: str  # in the current daily, empty when the daily no longer ships it
     release_version: str = ""  # in the latest stable release, empty when it was not part of it
     repo: str | None = None  # owner/name of the source repository, when known
+    host: str = "github.com"
     branch: str | None = None
+    dev_status: str = ""  # active | passive | legacy, for sources maintained outside the org
+    note: str = ""
     closed: bool = False
     private: bool = False
     license: str | None = None
     url: str | None = None
     local: RepoState | None = None
+
+    @property
+    def key(self) -> str | None:
+        """host/owner/name in lower case, comparable with git.remote_key()."""
+        return f"{self.host}/{self.repo}".lower() if self.repo else None
+
+    @property
+    def web_url(self) -> str | None:
+        return f"https://{self.host}/{self.repo}" if self.repo else self.url
 
     @property
     def status(self) -> str:
