@@ -6,6 +6,8 @@ from importlib import resources
 from pathlib import Path
 
 import platformdirs
+import tomlkit
+import tomlkit.exceptions
 
 from . import APP_NAME
 
@@ -77,6 +79,30 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
         )
     except (TypeError, ValueError) as e:
         raise ConfigError(f'Invalid config "{path}": {e}') from e
+
+
+def save_setting(keys: tuple[str, ...], value: str | bool | int | None, path: Path | None = None) -> Path:
+    """Set (or with None, remove) one value in the config file, keeping its comments and layout."""
+    path = path or config_path()
+    try:
+        doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
+    except (tomlkit.exceptions.TOMLKitError, OSError) as e:
+        raise ConfigError(f'Could not read config "{path}": {e}') from e
+    table = doc
+    for key in keys[:-1]:
+        if key not in table:
+            table[key] = tomlkit.table()
+        table = table[key]
+    if value is None:
+        table.pop(keys[-1], None)
+    else:
+        table[keys[-1]] = value
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    except OSError as e:
+        raise ConfigError(f'Could not write config "{path}": {e}') from e
+    return path
 
 
 def find_ide(cfg: Config) -> str | None:

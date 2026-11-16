@@ -145,19 +145,24 @@ def link_local(entries: Iterable[PackEntry], states: Iterable[RepoState]) -> Non
             entry.local.daily, entry.local.release = entry.version, entry.release_version
 
 
-def load_sync(cfg: Config, force: bool = False) -> PackInfo:
+async def load(cfg: Config, force: bool = False) -> PackInfo:
     cache = cache_dir()
     for stale in cache.glob("assets-slim.json*"):  # cache layout of earlier versions
         stale.unlink(missing_ok=True)
-    daily = _cached_json(_BASE + "releases/manifests/daily.json", cache / "daily.json", force=force)
-    assets = _cached_json(_BASE + "gtnh-assets.json", cache / "assets.json", _slim_assets, force=force)
-    modpack = _cached_json(_BASE + "gtnh-modpack.json", cache / "modpack.json", force=force)
+
+    def get(remote: str, local: str, transform: Callable | None = None):
+        return asyncio.to_thread(_cached_json, _BASE + remote, cache / local, transform, force)
+
+    daily, assets, modpack = await asyncio.gather(
+        get("releases/manifests/daily.json", "daily.json"),
+        get("gtnh-assets.json", "assets.json", _slim_assets),
+        get("gtnh-modpack.json", "modpack.json"),
+    )
     name = latest_release(modpack.get("releases", []))
     release: dict = {}
     if name:
         try:
-            url = _BASE + f"releases/manifests/{name}.json"
-            release = _cached_json(url, cache / f"release-{name}.json", force=force)
+            release = await get(f"releases/manifests/{name}.json", f"release-{name}.json")
         except PackError as e:
             log.warning("No manifest for release %s: %s", name, e)
     return PackInfo(
@@ -170,10 +175,6 @@ def load_sync(cfg: Config, force: bool = False) -> PackInfo:
         daily_attempt=assets.get("latest_daily"),
         fetched=datetime.fromtimestamp((cache / "daily.json").stat().st_mtime, UTC),
     )
-
-
-async def load(cfg: Config, force: bool = False) -> PackInfo:
-    return await asyncio.to_thread(load_sync, cfg, force)
 
 
 def find(entries: Iterable[PackEntry], name: str) -> PackEntry | None:

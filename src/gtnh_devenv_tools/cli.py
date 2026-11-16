@@ -43,7 +43,7 @@ def main(
             logging.basicConfig(filename=config.cache_dir() / "tui.log", level=logging.DEBUG)
         from .tui import RepoApp
 
-        RepoApp(cfg).run()
+        RepoApp(cfg, root_override=root).run()
     elif verbose:
         logging.basicConfig(stream=sys.stderr, level=logging.DEBUG, format="%(levelname)-7s %(message)s")
 
@@ -80,7 +80,7 @@ def reviews(
 ) -> None:
     """Open pull requests waiting on your review."""
     with err.status("Asking GitHub for review requests..."):
-        items, error = asyncio.run(github.fetch_reviews())
+        items, error = asyncio.run(github.fetch_reviews(team))
     if error and not items:
         err.print(f"[bold red]Review requests unavailable: {error}")
         raise typer.Exit(1)
@@ -88,8 +88,8 @@ def reviews(
         err.print(f"[yellow]Team review requests are incomplete: {error}")
     direct = sum(1 for item in items if item.direct)
     out.print(render.reviews_table([i for i in items if team or i.direct], width=max(30, out.width - 90)))
-    hint = "" if team else " (--team lists them)"
-    out.print(f"\n[dim]{direct} asked of you · {len(items) - direct} more through teams{hint}")
+    more = f"{len(items) - direct} more through teams" if team else "--team also lists requests through teams"
+    out.print(f"\n[dim]{direct} asked of you · {more}")
 
 
 async def _with_prs(states: list[RepoState]) -> None:

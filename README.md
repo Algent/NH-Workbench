@@ -43,7 +43,7 @@ Only fast-forwards, never merges, rebases or forces.
 ## Terminal UI keys
 
 `Enter` or a click on the highlighted row: actions for that one repo (fetch, pull, switch to main, delete merged branches, open) ·
-`Tab` next view · `/` filter · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
+`Tab` next view · `/` filter · `s` or a click on a column header: sort · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
 `r` rescan · `o` open in IntelliJ · `g` open PR or GitHub page ·
 `m` switch repos on a merged branch back to main · `d` delete merged branches ·
 `c` clone (Pack view) · `x` extras (refresh pack data, open the config or logs folder) · `q` quit
@@ -60,7 +60,16 @@ Repos get a Daily and a Release column (`status --pack` on the command line), bo
 - `+N` after the released version: the repo's `release/<major>.<minor>.x` branch has N commits since that
   version's tag. The UI's detail pane lists them.
 
-The Reviews view lists open PRs waiting on your review, the ones asked of you personally first.
+The Reviews view lists open PRs that ask for your review personally. `t` there also loads the ones that
+reach you through a team (slower), and `t` again hides them.
+
+## Settings from the UI
+
+These write to the config file and keep its comments:
+
+- Extras (`x`) → change the repo folder.
+- A repo's menu (`Enter`) → set its group, or hide it from the tool. To show a hidden repo again, remove
+  its `ignore = true` line from the config file.
 
 ## Groups
 

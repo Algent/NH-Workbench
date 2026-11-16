@@ -1,3 +1,4 @@
+import asyncio
 import webbrowser
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -29,6 +30,13 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "reviews": ("Reviews", None),
     "pack": ("Pack", None),
 }
+SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
+    "name": ("name", lambda st: st.name.lower()),
+    "recent": ("last commit", lambda st: -(st.date.timestamp() if st.date else 0)),
+    "behind": ("most behind", lambda st: -(st.behind + st.main_behind)),
+    "branch": ("off main first", lambda st: (not st.off_main, (st.head or "").lower())),
+}
+HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
 TABLES = {"pack": "#pack", "reviews": "#reviews"}  # views with their own table; the rest share #repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
@@ -91,7 +99,7 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
 def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
-    hint = Text(f"{item.pr.url}   Enter or g: open in the browser", "dim")
+    hint = Text(f"{item.pr.url}   Enter or g: open in the browser   t: show or hide team requests", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
@@ -139,6 +147,35 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(value)
 
 
+class PromptScreen(ModalScreen[str | None]):
+    """Ask for one line of text. Dismisses with the text, or None when cancelled."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, value: str = "", hint: str = "") -> None:
+        super().__init__()
+        self._title, self._value, self._hint = title, value, hint
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield dialog_head(self._title)
+            yield Input(value=self._value, id="prompt")
+            yield Static(Text(f"{self._hint}  Enter to save, Esc or ✕ to cancel".strip(), "dim"))
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()  # keep it away from the app's filter box handler
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
     """(hotkey, id, label, reason it is unavailable) for the single-repo menu."""
     main = st.tracked or "main"
@@ -156,6 +193,8 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
         ("o", "ide", "Open in IntelliJ", None),
         ("g", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
+        ("u", "group", f"Set group (now {st.group})", None),
+        ("h", "hide", "Hide this repo from the tool", None),
     ]
 
 
@@ -207,6 +246,7 @@ class ExtrasMenu(MenuScreen):
             lines.append(render.pack_header(info))
         actions = [
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
+            ("o", "root", "Change the repo folder", None),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
         ]
@@ -228,6 +268,8 @@ class RepoApp(App[None]):
         Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
+        Binding("s", "sort", "Sort"),
+        Binding("t", "toggle_team", "Team reviews", show=False),
         Binding("x", "extras", "Extras"),
         Binding("C", "open_folder('config')", "Config dir", show=False),
         Binding("L", "open_folder('logs')", "Logs dir", show=False),
@@ -237,9 +279,12 @@ class RepoApp(App[None]):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, root_override: Path | None = None) -> None:
         super().__init__()
         self.cfg = cfg
+        self.root_override = root_override  # --root on the command line wins over the config file
+        self.sort = "name"
+        self.team_reviews = False
         self.states: dict[str, RepoState] = {}
         self.prs = github.PrData()
         self.entries: list[PackEntry] = []
@@ -279,14 +324,26 @@ class RepoApp(App[None]):
     async def load_everything(self) -> None:
         if not await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), reset=True):
             return
+        # Independent sources: none of them should hold the others up.
+        await asyncio.gather(self._load_prs(), self._load_reviews(quiet=True), self._load_pack())
+
+    async def _load_prs(self) -> None:
         data = await github.fetch_prs(self.states.values())
         if data.error:
             self.notify(f"PR status unavailable: {data.error}", severity="warning")
-        else:
+        if data.prs or data.canonical or not data.error:
             self.prs = data
             github.attach(self.states.values(), data)
-            self.reviews, _ = await github.fetch_reviews()
-        await self._load_pack()
+            await self._relink()  # canonical names can change which pack mod a repo matches
+            self._refresh()
+
+    async def _load_reviews(self, quiet: bool = False) -> None:
+        items, error = await github.fetch_reviews(self.team_reviews)
+        if error and not quiet:
+            self.notify(f"Review requests: {error}", severity="warning")
+        if items or not error:
+            self.reviews = items
+            self._refresh()
 
     async def _load_pack(self, force: bool = False) -> None:
         try:
@@ -399,6 +456,7 @@ class RepoApp(App[None]):
 
     def _refresh(self) -> None:
         states = sorted(self.states.values(), key=lambda st: st.name.lower())
+        states.sort(key=SORTS[self.sort][1])  # stable, so ties stay in name order
         special = {"pack": len(self.entries), "reviews": sum(1 for item in self.reviews if item.direct)}
         for key, (label, wanted) in VIEWS.items():
             count = special[key] if wanted is None else sum(1 for st in states if wanted(st))
@@ -415,7 +473,8 @@ class RepoApp(App[None]):
             shown = [st for st in states if wanted(st) and self.needle in st.name.lower()]
             self._fill(self.query_one("#repos", DataTable), [(str(st.path), repo_cells(st)) for st in shown])
         if not self.busy:
-            self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}"
+            order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
+            self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
         self._update_detail()
 
     def _update_detail(self) -> None:
@@ -435,6 +494,12 @@ class RepoApp(App[None]):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table is self._table():
             self._update_detail()
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        wanted = HEADER_SORT.get(event.column_key.value or "")
+        if wanted and event.data_table.id == "repos":
+            self.sort = wanted
+            self._refresh()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if self.view == "reviews":
@@ -462,6 +527,26 @@ class RepoApp(App[None]):
             self._open_web(st, None)
         elif choice == "folder":
             proc.open_path(st.path)
+        elif choice == "group":
+            hint = "Leave empty for the automatic group."
+            group = await self.push_screen_wait(PromptScreen(f"Group for {st.name}", st.group, hint))
+            if group is not None:
+                self._save_setting(("repos", st.name, "group"), group or None)
+        elif choice == "hide":
+            body = Text(f"Adds ignore = true for {st.name} to the config file.\nTo undo, edit the file (Extras, c).")
+            if await self.push_screen_wait(ConfirmScreen(f"Hide {st.name} from the tool?", body)):
+                self._save_setting(("repos", st.name, "ignore"), True)
+
+    def _save_setting(self, keys: tuple[str, ...], value: str | bool | None) -> None:
+        """Write one value to the config file, then reload it and rescan."""
+        try:
+            path = config.save_setting(keys, value)
+            self.cfg = config.load(self.root_override)
+        except config.ConfigError as e:
+            self.notify(str(e), severity="error")
+            return
+        self.notify(f"Saved to {path}")
+        self.load_everything()
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         self.view = (event.tab.id or "view-all").removeprefix("view-")
@@ -506,6 +591,22 @@ class RepoApp(App[None]):
     def action_rescan(self) -> None:
         self.load_everything()
 
+    def action_sort(self) -> None:
+        if self._modal() or self.view in TABLES:
+            return
+        keys = list(SORTS)
+        self.sort = keys[(keys.index(self.sort) + 1) % len(keys)]
+        self._refresh()
+
+    @work(group="reviews", exclusive=True)
+    async def action_toggle_team(self) -> None:
+        if self._modal() or self.view != "reviews":
+            return
+        self.team_reviews = not self.team_reviews
+        if self.team_reviews:
+            self.notify("Loading team review requests, this takes a few seconds...")
+        await self._load_reviews()
+
     def action_fetch(self, one: bool = False) -> None:
         self._operate("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)
 
@@ -546,6 +647,16 @@ class RepoApp(App[None]):
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
+        elif choice == "root":
+            hint = "Folder that holds your checkouts."
+            folder = await self.push_screen_wait(PromptScreen("Repo folder", str(self.cfg.root), hint))
+            if not folder:
+                return
+            if not Path(folder).expanduser().is_dir():
+                self.notify(f"Not a folder: {folder}", severity="error")
+                return
+            self.root_override = None
+            self._save_setting(("root",), folder)
 
     def action_open_folder(self, which: str) -> None:
         folder = config.config_path().parent if which == "config" else config.cache_dir()

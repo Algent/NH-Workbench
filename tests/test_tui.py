@@ -19,13 +19,13 @@ def offline(monkeypatch):
         entries = [closed, PackEntry("Missing", "github", "1", repo="o/m")]
         return PackInfo(entries=entries, release="2.9.0", daily_build=836)
 
-    async def fake_reviews():
+    async def fake_reviews(team=False):
         def item(number: int, direct: bool) -> ReviewItem:
             url = f"https://example.invalid/pull/{number}"
             pr = PrInfo(number, "OPEN", False, None, None, "", url, f"PR {number}")
             return ReviewItem("o/m", pr, "ann", None, direct)
 
-        return [item(1, True), item(2, False)], None
+        return [item(1, True)] + ([item(2, False)] if team else []), None
 
     monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(github, "fetch_prs", no_prs)
@@ -102,16 +102,80 @@ async def test_reviews_tab_opens_pr_in_browser(sandbox, offline, monkeypatch):
         tabs.active = "view-reviews"
         await settle(app, pilot)
         table = app.query_one("#reviews", DataTable)
-        assert table.row_count == 2 and table.display and not app.query_one("#repos").display
+        assert table.row_count == 1 and table.display and not app.query_one("#repos").display  # team ones not loaded
 
         await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("t")  # now also the requests that come through a team
+        await settle(app, pilot)
+        assert table.row_count == 2 and str(tabs.query_one("#view-reviews").label) == "Reviews 1"
         await pilot.press("down", "g")
         await pilot.pause()
         assert opened == ["https://example.invalid/pull/1", "https://example.invalid/pull/2"]
 
+        await pilot.press("t")
+        await settle(app, pilot)
+        assert table.row_count == 1
+
         tabs.active = "view-all"
         await settle(app, pilot)
         assert app.query_one("#repos").display and not table.display
+
+
+async def test_sorting_by_key_and_header(sandbox, offline):
+    other = sandbox.root / "second"
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(other))
+    sandbox.git(other, "checkout", "-b", "algent/feature")
+
+    def first_row(app) -> str:
+        table = app.query_one("#repos", DataTable)
+        return str(table.get_row_at(0)[0])
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.sort == "name" and first_row(app) == "repo"
+        await pilot.press("s", "s", "s")
+        await pilot.pause()
+        assert app.sort == "branch" and first_row(app) == "second"  # the one off main comes first
+        assert "sorted by off main first" in app.sub_title
+        await pilot.press("s")
+        await pilot.pause()
+        assert app.sort == "name" and first_row(app) == "repo"
+        await pilot.click("#repos", offset=(30, 0))  # the Branch header
+        await pilot.pause()
+        assert app.sort == "branch"
+
+
+async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import config
+    from gtnh_devenv_tools.tui import ConfirmScreen, PromptScreen
+
+    cfg_file = tmp_path / "user" / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(sandbox.root / "second"))
+
+    app = RepoApp(sandbox.cfg, root_override=sandbox.root)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter", "u")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)
+        app.screen.query_one(Input).value = "reference"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.states[str(sandbox.work)].group == "reference" and app.needle == ""
+        assert 'group = "reference"' in cfg_file.read_text(encoding="utf-8")
+
+        await pilot.press("enter", "h")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert [st.name for st in app.states.values()] == ["second"]
+        assert config.load(sandbox.root, cfg_file).repo("repo").ignore
 
 
 async def test_extras_menu_forces_pack_refresh(sandbox, offline):

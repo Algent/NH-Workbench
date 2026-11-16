@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from collections.abc import Iterable
@@ -123,11 +124,13 @@ def _chunks(states: Iterable[RepoState]) -> list[list[tuple[RepoState, list[Look
 async def fetch_prs(states: Iterable[RepoState]) -> PrData:
     """Resolve PRs for every non-main local branch and each repo's canonical name, through the gh CLI."""
     result = PrData()
-    for chunk in _chunks(states):
-        data, result.error = await _graphql(build_query(chunk))
+    chunks = _chunks(states)
+    answers = await asyncio.gather(*(_graphql(build_query(chunk)) for chunk in chunks))
+    for chunk, (data, error) in zip(chunks, answers, strict=True):
         if data is None:
-            break
-        parse_response(data, chunk, result)
+            result.error = error
+        else:
+            parse_response(data, chunk, result)
     return result
 
 
@@ -196,13 +199,16 @@ def parse_reviews(data: dict) -> list[ReviewItem]:
     return sorted(newest_first, key=lambda i: not i.direct)
 
 
-async def fetch_reviews() -> tuple[list[ReviewItem], str | None]:
-    """Open PRs waiting on your review. A failed team search still returns the direct requests."""
+async def fetch_reviews(team: bool = False) -> tuple[list[ReviewItem], str | None]:
+    """Open PRs waiting on your review; with team, also the (slow) ones that reach you through a team."""
     direct, error = await _search_all("user-review-requested:@me")
     if error:
         return [], error
-    team, error = await _search_all("review-requested:@me")
-    return parse_reviews({"direct": {"nodes": direct}, "team": {"nodes": team}}), error
+    if not team:
+        return parse_reviews({"direct": {"nodes": direct}}), None
+    # A failed team search still returns the direct requests.
+    through_team, error = await _search_all("review-requested:@me")
+    return parse_reviews({"direct": {"nodes": direct}, "team": {"nodes": through_team}}), error
 
 
 def attach(states: Iterable[RepoState], data: PrData) -> None:
