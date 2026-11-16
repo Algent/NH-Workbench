@@ -11,6 +11,8 @@ uv run gtnh-dev              # terminal UI
 uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 ```
 
+`gtnh-dev.cmd` starts the terminal UI from anywhere (double-click it, or point a shortcut at it).
+
 ## Commands
 
 | Command | What it does |
