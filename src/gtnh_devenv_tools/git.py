@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .models import Branch, Outcome, Remote, RepoState
+from .models import Branch, Outcome, Remote, RepoState, Worktree
 from .proc import Result, run
 
 _GITHUB = re.compile(r"github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$", re.IGNORECASE)
@@ -102,6 +102,22 @@ def parse_refs(text: str) -> tuple[list[Branch], str | None, list[str]]:
     return branches, origin_head, releases
 
 
+def parse_worktrees(text: str, own: Path) -> tuple[list[Worktree], Path | None]:
+    """Parse `git worktree list --porcelain` into the other working trees and, for a linked one, its main."""
+    trees: list[Worktree] = []
+    for block in text.strip().split("\n\n"):
+        fields = dict(line.partition(" ")[::2] for line in block.splitlines())
+        if "worktree" in fields and "bare" not in fields:
+            branch = fields.get("branch", "").removeprefix("refs/heads/") or None
+            trees.append(Worktree(Path(fields["worktree"]), branch))
+    if not trees:
+        return [], None
+    here = own.resolve()
+    others = [t for t in trees if t.path.resolve() != here]
+    main = trees[0].path
+    return others, (main if main.resolve() != here else None)
+
+
 def _git_dir(path: Path) -> Path:
     dot = path / ".git"
     if dot.is_file():
@@ -120,10 +136,11 @@ async def read_state(
     path: Path, tracked_override: str | None = None, slug_branches: dict[str, str] | None = None
 ) -> RepoState:
     st = RepoState(path=path, name=path.name)
-    status, refs, urls = await asyncio.gather(
+    status, refs, urls, trees = await asyncio.gather(
         git(path, "status", "--porcelain=v2", "--branch", "--show-stash"),
         git(path, "for-each-ref", f"--format={_REF_FORMAT}", "refs/heads", "refs/remotes/origin/HEAD", _RELEASE_REFS),
         git(path, "config", "--get-regexp", r"^remote\..*\.url$"),
+        git(path, "worktree", "list", "--porcelain"),
     )
     if not status.ok or not refs.ok:
         st.error = (status if not status.ok else refs).message
@@ -131,6 +148,8 @@ async def read_state(
 
     parse_status(status.out, st)
     st.branches, origin_head, st.release_branches = parse_refs(refs.out)
+    if trees.ok:
+        st.worktrees, st.worktree_of = parse_worktrees(trees.out, path)
     for line in urls.out.splitlines():
         key, _, url = line.partition(" ")
         name = key.removeprefix("remote.").removesuffix(".url")
@@ -187,6 +206,10 @@ async def safe_pull(st: RepoState, dry_run: bool = False) -> Outcome:
         return Outcome("current", f"no local {t}")
     on_tracked = st.head == t
     label = "" if on_tracked else f"{t} "
+    elsewhere = st.checked_out_elsewhere(t)
+    if elsewhere and not on_tracked:
+        # Git would refuse anyway; that working tree gets fast-forwarded on its own turn.
+        return Outcome("current", f"{t} lives in {elsewhere.path.name}")
     up = local.upstream or f"origin/{t}"
     up_ref = f"refs/remotes/{up}"
     if local.gone or not (await git(st.path, "rev-parse", "-q", "--verify", up_ref)).ok:

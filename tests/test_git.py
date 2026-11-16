@@ -280,3 +280,58 @@ async def test_group_from_subfolder_and_config(sandbox):
     assert (await ops.scan_repo(sandbox.cfg, nested)).group == "_External"
     cfg = Config(root=sandbox.root, repos={"repo": RepoConfig(group="reference")})
     assert (await ops.scan_repo(cfg, sandbox.work)).group == "reference"
+
+
+def test_parse_worktrees(tmp_path):
+    main, linked = tmp_path / "repo", tmp_path / "repo-fix"
+    text = (
+        f"worktree {main.as_posix()}\nHEAD a1\nbranch refs/heads/master\n\n"
+        f"worktree {linked.as_posix()}\nHEAD b2\nbranch refs/heads/algent/fix\n\n"
+        f"worktree {(tmp_path / 'loose').as_posix()}\nHEAD c3\ndetached\n"
+    )
+    others, parent = git.parse_worktrees(text, main)
+    assert parent is None and [(t.path.name, t.branch) for t in others] == [("repo-fix", "algent/fix"), ("loose", None)]
+    others, parent = git.parse_worktrees(text, linked)
+    assert parent == main and [t.path.name for t in others] == ["repo", "loose"]
+    assert git.parse_worktrees("", main) == ([], None)
+
+
+async def test_worktrees_are_recognised_and_respected(sandbox):
+    linked = sandbox.root / "repo-fix"
+    sandbox.git(sandbox.work, "worktree", "add", "-b", "algent/fix", str(linked))
+    assert [p.name for p in ops.discover(sandbox.cfg)] == ["repo", "repo-fix"]
+
+    main = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    wt = await ops.scan_repo(sandbox.cfg, linked)
+    assert main.worktree_of is None and [t.branch for t in main.worktrees] == ["algent/fix"]
+    assert wt.worktree_of.resolve() == sandbox.work.resolve() and wt.repo_root == wt.worktree_of
+    assert wt.head == "algent/fix" and wt.off_main and wt.checked_out_elsewhere("master")
+    assert main.checked_out_elsewhere("algent/fix") and not main.checked_out_elsewhere("master")
+
+    tip = sandbox.push_upstream("second")
+    states = await ops.run_all([sandbox.work, linked], lambda p: ops.pull_repo(sandbox.cfg, p), 8)
+    by_name = {st.name: st for st in states}
+    assert by_name["repo"].note.kind == "updated" and sandbox.sha(sandbox.work) == tip
+    # The linked tree leaves master to the tree that has it checked out, and says so.
+    assert by_name["repo-fix"].note.kind in ("current", "updated")
+    assert sandbox.sha(linked, "master") == tip
+
+    merged = PrInfo(1, "MERGED", False, None, None, wt.head_sha, "", "")
+    wt = await ops.scan_repo(sandbox.cfg, linked)
+    wt.current.pr = merged
+    assert ops.to_main_candidates([wt]) == []  # master is in use by the main working tree
+
+    main = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    main.branch("algent/fix").pr = merged
+    safe, kept = await ops.cleanup_candidates([main])
+    assert safe == [] and kept == []  # the branch is checked out in the linked tree
+
+
+async def test_linked_worktree_skips_main_held_elsewhere(sandbox):
+    linked = sandbox.root / "repo-fix"
+    sandbox.git(sandbox.work, "worktree", "add", "-b", "algent/fix", str(linked))
+    sandbox.push_upstream("second")
+    sandbox.git(sandbox.work, "fetch")
+    wt = await ops.scan_repo(sandbox.cfg, linked)
+    outcome = await git.safe_pull(wt)
+    assert (outcome.kind, outcome.text) == ("current", "master lives in repo")

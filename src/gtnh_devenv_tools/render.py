@@ -115,6 +115,13 @@ def pr_text(pr: PrInfo | None) -> Text:
     return text
 
 
+def name_text(st: RepoState) -> Text:
+    """Repo name; a linked working tree is marked and names the repo it belongs to."""
+    if st.worktree_of:
+        return Text.assemble(("↳ ", "dim"), (st.name, "bold"), (f" ({st.worktree_of.name})", "dim"))
+    return Text(st.name, "bold")
+
+
 def daily_text(st: RepoState) -> Text:
     """Version in the daily, plus how many commits main has that it lacks."""
     text = version_text(st.daily) if st.in_pack else Text("")
@@ -146,7 +153,7 @@ def repo_table(states: Iterable[RepoState], release: str | None = None) -> Table
         table.add_column("Result", no_wrap=True)
     table.add_column("Last commit", no_wrap=True, overflow="ellipsis")
     for st in states:
-        row = [Text(st.name, "bold"), *([Text(st.group, "dim")] if groups else [])]
+        row = [name_text(st), *([Text(st.group, "dim")] if groups else [])]
         row += [branch_text(st), state_text(st), sync_text(st)]
         if release is not None:
             row += [daily_text(st), release_text(st)]
@@ -177,6 +184,9 @@ def summary(states: Iterable[RepoState]) -> Text:
 
 def branch_row(st: RepoState, br: Branch, width: int = 60) -> list[Text]:
     name = Text(("* " if br.name == st.head else "  ") + br.name, "bold yellow" if br.name == st.head else "")
+    elsewhere = st.checked_out_elsewhere(br.name)
+    if elsewhere:
+        name.append(f" (in {elsewhere.path.name})", "dim")
     detail = br.pr.title if br.pr else br.subject
     return [
         name,

@@ -78,6 +78,14 @@ A repo inside a subfolder of the root (for example `IdeaProjects\_External\Forge
 subfolder name as its group. `group`, `tracked_branch` and `ignore` can be set per repo in the config,
 see `config.example.toml`.
 
+## Forks and worktrees
+
+- A checkout whose `origin` is a fork kept only to push branches (PRs go to another remote's repo) is
+  matched to the pack through that other remote, and PRs are looked up in both repos.
+- Git worktrees under the root are listed with a `↳` and the repo they belong to. A branch checked out
+  in another working tree is never moved, switched to or deleted from elsewhere; the tool says where
+  it lives instead.
+
 ## Branch cleanup
 
 A branch is offered for deletion only when its PR is merged and every local commit is part of that PR.

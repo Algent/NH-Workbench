@@ -51,11 +51,21 @@ async def scan_repo(cfg: Config, path: Path) -> RepoState:
     return st
 
 
+_fetch_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _fetch_lock(st: RepoState) -> asyncio.Lock:
+    """Working trees of one repo share their refs, so their fetches must not overlap."""
+    key = (id(asyncio.get_running_loop()), str(st.repo_root.resolve()).lower())
+    return _fetch_locks.setdefault(key, asyncio.Lock())
+
+
 async def fetch_repo(cfg: Config, path: Path) -> RepoState:
     st = await scan_repo(cfg, path)
     if st.error:
         return st
-    outcome = await git.fetch(st, cfg.prune)
+    async with _fetch_lock(st):
+        outcome = await git.fetch(st, cfg.prune)
     st = await scan_repo(cfg, path)
     st.note = outcome
     return st
@@ -105,6 +115,7 @@ def to_main_candidates(states: Iterable[RepoState]) -> list[RepoState]:
         st
         for st in states
         if st.off_main and not st.dirty and st.current and st.current.pr and st.current.pr.state == "MERGED"
+        and not st.checked_out_elsewhere(st.tracked)
     ]
 
 
@@ -130,7 +141,8 @@ async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[Re
     for st in states:
         for br in st.branches:
             pr = br.pr
-            if br.name in (st.head, st.tracked) or not pr or pr.state != "MERGED":
+            in_use = br.name in (st.head, st.tracked) or st.checked_out_elsewhere(br.name)
+            if in_use or not pr or pr.state != "MERGED":
                 continue
             extra = 0
             if br.sha != pr.head_sha:

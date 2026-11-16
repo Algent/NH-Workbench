@@ -43,6 +43,12 @@ class Outcome:
     commits: int = 0
 
 
+@dataclass(frozen=True)
+class Worktree:
+    path: Path
+    branch: str | None  # None when detached
+
+
 @dataclass
 class Branch:
     name: str
@@ -84,6 +90,16 @@ class RepoState:
     release_ahead: int | None = None  # commits on the release branch since the released version
     release_commits: list[str] = field(default_factory=list)  # their subjects, newest first
     daily_ahead: int | None = None  # commits on main that the daily's version does not have yet
+    worktrees: list[Worktree] = field(default_factory=list)  # the repo's other working trees
+    worktree_of: Path | None = None  # main working tree, when this folder is a linked one
+
+    @property
+    def repo_root(self) -> Path:
+        """Folder of the main working tree; all worktrees of one repo share it (and its refs)."""
+        return self.worktree_of or self.path
+
+    def checked_out_elsewhere(self, branch: str | None) -> Worktree | None:
+        return next((w for w in self.worktrees if branch and w.branch == branch), None)
 
     @property
     def in_pack(self) -> bool:

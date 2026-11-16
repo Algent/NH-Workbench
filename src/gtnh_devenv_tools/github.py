@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .models import Branch, PrInfo, RepoState, ReviewItem
+from .models import Branch, PrInfo, Remote, RepoState, ReviewItem
 from .proc import run
 
 _PR_NUMBER = re.compile(r"(?:^|[/_-])pr[-_]?(\d+)$", re.IGNORECASE)
@@ -31,6 +31,7 @@ class PrData:
     prs: dict[tuple[str, str], PrInfo] = field(default_factory=dict)
     canonical: dict[str, str] = field(default_factory=dict)
     error: str | None = None
+    rank: dict[tuple[str, str], tuple] = field(default_factory=dict)  # how well each kept PR fits its branch
 
 
 def lookup_for(st: RepoState, br: Branch) -> Lookup:
@@ -44,10 +45,24 @@ def lookup_for(st: RepoState, br: Branch) -> Lookup:
     return Lookup(st.name, br.name, br.sha, head=br.name, head_owner=st.origin.owner if st.origin else None)
 
 
-def build_query(repos: list[tuple[RepoState, list[Lookup]]]) -> str:
+def upstream_lookups(st: RepoState, base: Remote) -> list[Lookup]:
+    """Lookups for PRs opened from origin (a fork kept to push branches) against another remote's repo."""
+    origin = st.origin
+    lookups = []
+    for br in st.extra_branches:
+        remote = st.remote_of(br)
+        if remote in (None, origin.name):
+            head = br.upstream[len(remote) + 1 :] if remote else br.name
+            lookups.append(Lookup(st.name, br.name, br.sha, head=head, head_owner=origin.owner))
+    return lookups
+
+
+Target = tuple[RepoState, list[Lookup], Remote]  # repo, what to look up, and the GitHub repo to look in
+
+
+def build_query(repos: list[Target]) -> str:
     parts = []
-    for i, (st, lookups) in enumerate(repos):
-        base = st.origin
+    for i, (_st, lookups, base) in enumerate(repos):
         fields = ["nameWithOwner"]
         for j, lk in enumerate(lookups):
             if lk.number is not None:
@@ -91,28 +106,44 @@ def to_pr(node: dict) -> PrInfo:
     )
 
 
-def parse_response(data: dict, repos: list[tuple[RepoState, list[Lookup]]], into: PrData) -> None:
-    for i, (st, lookups) in enumerate(repos):
+def parse_response(data: dict, repos: list[Target], into: PrData) -> None:
+    for i, (st, lookups, base) in enumerate(repos):
         repo = data.get(f"r{i}")
         if not repo:
             continue
-        into.canonical[st.name] = repo["nameWithOwner"]
+        primary = base is st.origin
+        if primary:
+            into.canonical[st.name] = repo["nameWithOwner"]
         for j, lk in enumerate(lookups):
             value = repo.get(f"p{j}")
             nodes = [value] if lk.number is not None else (value or {}).get("nodes") or []
             node = pick(nodes, lk)
-            if node:
-                into.prs[(st.name, lk.branch)] = to_pr(node)
+            if not node:
+                continue
+            # A branch can have a PR in its own repo and one upstream: keep the one that fits it best.
+            found = to_pr(node)
+            rank = (found.head_sha == lk.sha, found.state == "OPEN", primary)
+            key = (st.name, lk.branch)
+            if key not in into.prs or rank > into.rank[key]:
+                into.prs[key], into.rank[key] = found, rank
 
 
-def _chunks(states: Iterable[RepoState]) -> list[list[tuple[RepoState, list[Lookup]]]]:
-    chunks, current, size = [], [], 0
+def _chunks(states: Iterable[RepoState]) -> list[list[Target]]:
+    targets: list[Target] = []
     for st in states:
         if st.error or not st.origin or not st.origin.owner:
             continue
-        lookups = [lookup_for(st, br) for br in st.extra_branches]
-        current.append((st, lookups))
-        size += max(len(lookups), 1)
+        targets.append((st, [lookup_for(st, br) for br in st.extra_branches], st.origin))
+        for remote in st.remotes.values():
+            if remote.owner and remote.slug.lower() != st.origin.slug.lower():
+                lookups = upstream_lookups(st, remote)
+                if lookups:
+                    targets.append((st, lookups, remote))
+
+    chunks, current, size = [], [], 0
+    for target in targets:
+        current.append(target)
+        size += max(len(target[1]), 1)
         if size >= _CHUNK:
             chunks.append(current)
             current, size = [], 0
@@ -134,11 +165,22 @@ async def fetch_prs(states: Iterable[RepoState]) -> PrData:
     return result
 
 
-async def _graphql(query: str) -> tuple[dict | None, str | None]:
+async def _graphql(query: str, attempts: int = 2) -> tuple[dict | None, str | None]:
     """Run a query through the gh CLI. Returns (data, None) or (None, why it failed)."""
-    res = await run("gh", "api", "graphql", "--input", "-", stdin=json.dumps({"query": query}), timeout=60)
+    data, error = await _graphql_once(query)
+    # Connections to GitHub drop now and then; one more try saves a whole batch of repos.
+    if data is None and attempts > 1 and error != _NO_GH:
+        return await _graphql(query, attempts - 1)
+    return data, error
+
+
+_NO_GH = "gh CLI not found"
+
+
+async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
+    res = await run("gh", "api", "graphql", "--input", "-", stdin=json.dumps({"query": query}), timeout=30)
     if res.code == 127:
-        return None, "gh CLI not found"
+        return None, _NO_GH
     try:
         payload = json.loads(res.out)
     except ValueError:

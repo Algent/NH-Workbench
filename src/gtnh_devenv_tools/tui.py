@@ -45,7 +45,7 @@ BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
 
 def repo_cells(st: RepoState) -> list[Text]:
     return [
-        Text(st.name, "bold"),
+        render.name_text(st),
         Text(st.group, "dim"),
         render.branch_text(st),
         render.state_text(st),
@@ -79,6 +79,10 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     )
     head.append(f"  {st.path}", "dim").append("  Enter: actions", "dim italic")
     lines: list[RenderableType] = [head]
+    if st.worktree_of:
+        lines.append(Text(f"working tree of {st.worktree_of}", "dim"))
+    for tree in st.worktrees:
+        lines.append(Text(f"other working tree: {tree.path}  on {tree.branch or 'a detached commit'}", "dim"))
     if info and st.in_pack:
         lines.append(pack_line(st, info))
         for subject in st.release_commits[:BACKPORTS_SHOWN]:
@@ -186,7 +190,10 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
     if not st.off_main:
         no_switch = f"already on {main}" if st.tracked else "no main branch known"
     else:
+        elsewhere = st.checked_out_elsewhere(st.tracked)
         no_switch = "uncommitted changes" if st.dirty else None
+        if elsewhere:
+            no_switch = f"{main} is checked out in {elsewhere.path.name}"
     return [
         ("f", "fetch", "Fetch", None),
         ("p", "pull", f"Pull: fast-forward {main} if safe", None),

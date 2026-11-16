@@ -304,3 +304,70 @@ def test_pack_entries_and_local_matching():
     assert (entries["Biomes O' Plenty"].repo, entries["Biomes O' Plenty"].branch) == ("Example/BoP", "1.7.10")
     assert pack.find(entries.values(), "unimixins") is entries["UniMixins"]
     assert pack.find(entries.values(), "bop") is entries["Biomes O' Plenty"]
+
+
+def test_prs_opened_from_a_fork_are_found_upstream():
+    st = repo(
+        "TinkersGregworks",
+        origin="https://github.com/GTNewHorizons/TinkersGregworks",
+        UPSTREAM="https://github.com/Vexatos/TinkersGregworks",
+    )
+    st.branches = [
+        Branch("master", "m", upstream="origin/master"),
+        Branch("algent/part-swap", "abc", upstream="origin/algent/part-swap"),
+        Branch("algent/both", "def", upstream="origin/algent/both"),
+        Branch("algent/local", "ghi"),
+        Branch("GT-NH", "jkl", upstream="UPSTREAM/GT-NH"),
+    ]
+    (chunk,) = github._chunks([st])
+    assert [(t[2].slug, len(t[1])) for t in chunk] == [
+        ("GTNewHorizons/TinkersGregworks", 4),
+        ("Vexatos/TinkersGregworks", 3),  # not GT-NH: that one tracks the upstream itself
+    ]
+    query = github.build_query(chunk)
+    assert 'repository(owner: "Vexatos", name: "TinkersGregworks")' in query
+    assert all(lk.head_owner == "GTNewHorizons" for lk in chunk[1][1])
+
+    data = {
+        "r0": {
+            "nameWithOwner": "GTNewHorizons/TinkersGregworks",
+            "p1": {"nodes": [node(26, "CLOSED", sha="old")]},  # algent/both, closed in the fork
+        },
+        "r1": {
+            "nameWithOwner": "Vexatos/TinkersGregworks",
+            "p0": {"nodes": [node(40, "OPEN", sha="abc"), node(41, "OPEN", owner="someone-else")]},
+            "p1": {"nodes": [node(42, "OPEN", sha="def")]},  # algent/both, open upstream
+        },
+    }
+    result = github.PrData()
+    github.parse_response(data, chunk, result)
+    github.attach([st], result)
+    assert st.canonical == "GTNewHorizons/TinkersGregworks"  # never renamed after the upstream
+    assert st.branch("algent/part-swap").pr.number == 40
+    assert st.branch("algent/both").pr.number == 42  # the open upstream PR beats the closed fork one
+    assert st.branch("algent/local").pr is None
+
+    reversed_result = github.PrData()
+    github.parse_response({"r0": data["r1"], "r1": data["r0"]}, [chunk[1], chunk[0]], reversed_result)
+    assert reversed_result.prs[("TinkersGregworks", "algent/both")].number == 42  # order does not matter
+
+
+async def test_graphql_retries_once_but_not_without_gh(monkeypatch):
+    from gtnh_devenv_tools.proc import Result
+
+    answers = [Result(1, "", "TLS handshake timeout"), Result(0, '{"data": {"ok": 1}}', "")]
+
+    async def flaky(*args, **kwargs):
+        return answers.pop(0)
+
+    monkeypatch.setattr(github, "run", flaky)
+    assert await github._graphql("query { x }") == ({"ok": 1}, None) and answers == []
+
+    calls = []
+
+    async def missing(*args, **kwargs):
+        calls.append(args)
+        return Result(127, "", "not found")
+
+    monkeypatch.setattr(github, "run", missing)
+    assert await github._graphql("query { x }") == (None, "gh CLI not found") and len(calls) == 1
