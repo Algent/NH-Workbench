@@ -1,0 +1,21 @@
+# Copy to %APPDATA%\gtnh-devenv-tools\config.toml (everything is optional).
+
+# root = "C:/Users/you/IdeaProjects"   # folder holding the checkouts
+# org = "GTNewHorizons"                # repos of this org form the "gtnh" group, the rest is "other"
+# concurrency = 8                      # repos handled at the same time
+# prune = true                         # drop stale remote-tracking refs on fetch
+# ide_command = "C:/path/to/idea64.exe"
+
+# Per repo, keyed by folder name.
+[repos.ForgeEssentials]
+tracked_branch = "1.7.10/develop"      # the branch that counts as "main" here
+group = "reference"                    # override the automatic group
+
+[repos.SomeScratchRepo]
+ignore = true                          # never listed, fetched or pulled
+
+# Source of pack mods hosted outside the org, keyed by the name used in the daily manifest.
+[pack.sources."Some External Mod"]
+repo = "owner/name"
+branch = "1.7.10"                      # only when it is not the repository default
+# closed = true                        # no public source

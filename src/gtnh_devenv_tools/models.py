@@ -1,0 +1,138 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Remote:
+    name: str
+    url: str
+    owner: str | None = None
+    repo: str | None = None
+
+    @property
+    def slug(self) -> str | None:
+        return f"{self.owner}/{self.repo}" if self.owner else None
+
+
+@dataclass(frozen=True)
+class PrInfo:
+    number: int
+    state: str  # OPEN | MERGED | CLOSED
+    draft: bool
+    review: str | None
+    checks: str | None
+    head_sha: str
+    url: str
+    title: str
+
+
+@dataclass(frozen=True)
+class Outcome:
+    kind: str  # updated | current | skipped | failed | planned | info
+    text: str
+    commits: int = 0
+
+
+@dataclass
+class Branch:
+    name: str
+    sha: str
+    upstream: str | None = None
+    gone: bool = False
+    ahead: int = 0
+    behind: int = 0
+    date: datetime | None = None
+    subject: str = ""
+    pr: PrInfo | None = None
+
+
+@dataclass
+class RepoState:
+    path: Path
+    name: str
+    head: str | None = None  # None when detached
+    head_sha: str = ""
+    tracked: str | None = None  # the branch that counts as "main" for this repo
+    upstream: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    changed: int = 0
+    untracked: int = 0
+    stash: int = 0
+    in_progress: str | None = None
+    remotes: dict[str, Remote] = field(default_factory=dict)
+    branches: list[Branch] = field(default_factory=list)
+    date: datetime | None = None
+    subject: str = ""
+    error: str | None = None
+    note: Outcome | None = None
+    canonical: str | None = None  # owner/name as GitHub reports it (follows renames)
+    pack: str = ""
+    group: str = ""  # gtnh | other | name of the subfolder or the config override
+
+    @property
+    def origin(self) -> Remote | None:
+        return self.remotes.get("origin") or next(iter(self.remotes.values()), None)
+
+    @property
+    def slug(self) -> str | None:
+        return self.canonical or (self.origin.slug if self.origin else None)
+
+    def branch(self, name: str | None) -> Branch | None:
+        return next((b for b in self.branches if b.name == name), None)
+
+    @property
+    def current(self) -> Branch | None:
+        return self.branch(self.head)
+
+    @property
+    def off_main(self) -> bool:
+        return self.tracked is not None and self.head != self.tracked
+
+    @property
+    def gone(self) -> bool:
+        cur = self.current
+        return bool(cur and cur.gone)
+
+    @property
+    def main_behind(self) -> int:
+        """How far the local main branch lags when another branch is checked out."""
+        main = self.branch(self.tracked) if self.off_main else None
+        return main.behind if main else 0
+
+    @property
+    def is_behind(self) -> bool:
+        return self.behind > 0 or self.main_behind > 0
+
+    @property
+    def dirty(self) -> bool:
+        return self.changed > 0 or self.in_progress is not None
+
+    @property
+    def extra_branches(self) -> list[Branch]:
+        return [b for b in self.branches if b.name != self.tracked]
+
+
+@dataclass
+class PackEntry:
+    name: str
+    kind: str  # github | external
+    version: str
+    repo: str | None = None  # owner/name of the source repository, when known
+    branch: str | None = None
+    closed: bool = False
+    private: bool = False
+    license: str | None = None
+    url: str | None = None
+    local: RepoState | None = None
+
+    @property
+    def status(self) -> str:
+        if self.local:
+            return "cloned"
+        if self.closed:
+            return "closed"
+        if not self.repo:
+            return "unknown"
+        return "missing"

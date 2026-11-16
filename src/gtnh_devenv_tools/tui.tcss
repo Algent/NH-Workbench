@@ -1,0 +1,39 @@
+#filter {
+    height: 3;
+}
+
+#repos, #pack {
+    height: 1fr;
+}
+
+#detail {
+    height: auto;
+    max-height: 14;
+    padding: 0 1;
+    border-top: solid $primary;
+}
+
+ConfirmScreen {
+    align: center middle;
+}
+
+#dialog {
+    width: 80;
+    max-width: 90%;
+    height: auto;
+    max-height: 80%;
+    padding: 1 2;
+    border: thick $warning;
+    background: $surface;
+}
+
+#dialog-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#dialog-body {
+    height: auto;
+    max-height: 20;
+    margin-bottom: 1;
+}

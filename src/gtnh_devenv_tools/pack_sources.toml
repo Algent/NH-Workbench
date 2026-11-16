@@ -1,0 +1,42 @@
+# Where the source of pack mods hosted outside the GTNewHorizons org lives.
+# Keys are the names used in DreamAssemblerXXL's manifest (case-insensitive).
+# Override or extend in your config.toml under [pack.sources."<mod name>"].
+#   repo   = "owner/name" on GitHub
+#   branch = branch to treat as main when it is not the repository default
+#   closed = true when there is no public source
+
+["EndlessIDs"]
+repo = "GTMEGA/EndlessIDs"
+
+["Thaumcraft"]
+closed = true
+
+["Witchery"]
+closed = true
+
+["Industrial Craft 2"]
+closed = true
+
+["Extra Utilities"]
+closed = true
+
+["BiblioCraft"]
+closed = true
+
+["BiblioCraft: BiblioWoods Biomes O'Plenty Edition"]
+closed = true
+
+["BiblioCraft: BiblioWoods Forestry Edition"]
+closed = true
+
+["BiblioCraft: BiblioWoods Natura Edition"]
+closed = true
+
+["Advanced Solar Panel For 1.7.10 (Unofficial)"]
+closed = true
+
+["Gravitation-Suite-old"]
+closed = true
+
+["Compact Kinetic Generators"]
+closed = true
