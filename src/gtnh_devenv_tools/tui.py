@@ -271,6 +271,12 @@ class RepoApp(App[None]):
         try:
             self.pack_info = await pack.load(self.cfg, force)
             self.entries = self.pack_info.entries
+            # Rebuild the headers so they name the daily build and the release.
+            table = self.query_one("#pack", DataTable)
+            labels = render.pack_labels(self.pack_info)
+            table.clear(columns=True)
+            for column in PACK_COLUMNS:
+                table.add_column(labels.get(column, column), key=column)
         except pack.PackError as e:
             self.notify(str(e), severity="warning")
         await self._relink()

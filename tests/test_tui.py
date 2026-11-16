@@ -16,7 +16,8 @@ def offline(monkeypatch):
     async def fake_pack(cfg, force=False):
         loads.append(force)
         closed = PackEntry("Thaumcraft", "external", "4.2", closed=True)
-        return PackInfo(entries=[closed, PackEntry("Missing", "github", "1", repo="o/m")], release="2.9.0")
+        entries = [closed, PackEntry("Missing", "github", "1", repo="o/m")]
+        return PackInfo(entries=entries, release="2.9.0", daily_build=836)
 
     monkeypatch.setattr(github, "fetch_prs", no_prs)
     monkeypatch.setattr(pack, "load", fake_pack)
@@ -92,6 +93,11 @@ async def test_extras_menu_forces_pack_refresh(sandbox, offline):
         await settle(app, pilot)
         assert offline == [False, True] and not isinstance(app.screen, ExtrasMenu)
         assert app.pack_info.release == "2.9.0"
+        table = app.query_one("#pack", DataTable)
+        assert [str(c.label) for c in table.columns.values()][2:4] == ["Daily (#836)", "Release (2.9.0)"]
+        app.query_one(Tabs).active = "view-pack"
+        await settle(app, pilot)
+        assert table.row_count == 2
 
 
 async def test_lists_repos_and_pulls(sandbox, offline):

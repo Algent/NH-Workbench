@@ -234,9 +234,17 @@ def pack_header(info: PackInfo) -> Text:
     return text.append(f"   checked {ago(info.fetched)} ago", "dim")
 
 
-def pack_table(entries: Iterable[PackEntry], release: str = "") -> Table:
+def pack_labels(info: PackInfo | None) -> dict[str, str]:
+    """Headers of the two version columns, naming the daily build and the release they describe."""
+    daily = f"Daily (#{info.daily_build})" if info and info.daily_build else "Daily"
+    release = f"Release ({info.release})" if info and info.release else "Release"
+    return {"Daily": daily, "Release": release}
+
+
+def pack_table(entries: Iterable[PackEntry], info: PackInfo | None = None) -> Table:
+    labels = pack_labels(info)
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for column in ("Mod", "Kind", "Daily", release or "Release", "Local"):
+    for column in ("Mod", "Kind", labels["Daily"], labels["Release"], "Local"):
         table.add_column(column, no_wrap=True)
     table.add_column("Source", no_wrap=True, overflow="ellipsis")
     for entry in entries:

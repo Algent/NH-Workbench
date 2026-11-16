@@ -244,7 +244,7 @@ def pack_command(
         err.print(f"[bold red]{e}")
         raise typer.Exit(1) from e
     entries = info.entries
-    out.print(render.pack_table([e for e in entries if not missing or not e.local], info.release))
+    out.print(render.pack_table([e for e in entries if not missing or not e.local], info))
     out.print()
     out.print(render.pack_header(info))
     counts = {s: sum(1 for e in entries if e.status == s) for s in ("cloned", "missing", "closed", "unknown")}
