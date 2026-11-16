@@ -2,7 +2,7 @@ from pathlib import Path
 
 from gtnh_devenv_tools import git, ops
 from gtnh_devenv_tools.config import Config, RepoConfig
-from gtnh_devenv_tools.models import RepoState
+from gtnh_devenv_tools.models import PrInfo, RepoState
 
 
 def test_parse_status():
@@ -187,6 +187,35 @@ async def test_tracked_branch_override(sandbox):
     st = await ops.scan_repo(cfg, sandbox.work)
     assert st.tracked == "1.7.10/develop" and not st.off_main
     assert (await ops.scan_repo(sandbox.cfg, sandbox.work)).off_main
+
+
+async def test_to_main_after_merged_pr(sandbox):
+    def pr(state: str) -> PrInfo:
+        return PrInfo(1, state, False, None, None, "", "", "")
+
+    sandbox.git(sandbox.work, "checkout", "-b", "algent/done")
+    sandbox.commit(sandbox.work, "feature-work")
+    (sandbox.work / "scratch.txt").write_text("untracked", encoding="utf-8")
+    tip = sandbox.push_upstream("second")
+
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    assert ops.to_main_candidates([st]) == []  # no PR known
+    st.current.pr = pr("OPEN")
+    assert ops.to_main_candidates([st]) == []
+    st.current.pr = pr("MERGED")
+    assert ops.to_main_candidates([st]) == [st]
+
+    (sandbox.work / "first.txt").write_text("uncommitted", encoding="utf-8")
+    dirty = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    dirty.current.pr = pr("MERGED")
+    assert ops.to_main_candidates([dirty]) == []
+    sandbox.git(sandbox.work, "checkout", "--", "first.txt")
+
+    new = await ops.to_main(sandbox.cfg, st)
+    assert (new.head, new.off_main, new.note.kind) == ("master", False, "updated")
+    assert new.note.text == "on master, +1" and sandbox.sha(sandbox.work) == tip
+    assert new.branch("algent/done") is not None
+    assert (sandbox.work / "scratch.txt").exists()
 
 
 async def test_delete_branch_checks_tip(sandbox):

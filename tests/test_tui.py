@@ -24,6 +24,56 @@ async def settle(app, pilot):
     await pilot.pause()
 
 
+async def test_repo_menu_acts_on_one_repo(sandbox, offline):
+    from gtnh_devenv_tools.tui import RepoMenu
+
+    other = sandbox.root / "second"
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(other))
+    sandbox.git(sandbox.work, "checkout", "-b", "algent/feature")
+    before = sandbox.sha(other)
+    tip = sandbox.push_upstream("second")
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+
+        await pilot.press("enter")  # cursor starts on "repo"
+        await pilot.pause()
+        assert isinstance(app.screen, RepoMenu)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert not isinstance(app.screen, RepoMenu) and sandbox.sha(sandbox.work, "master") == before
+
+        await pilot.press("enter", "m")
+        await settle(app, pilot)
+        st = app.states[str(sandbox.work)]
+        assert (st.head, st.note.text) == ("master", "on master, +1")
+        assert sandbox.sha(sandbox.work) == tip and sandbox.sha(other) == before
+
+        await pilot.press("enter", "m")  # already on master: the option is disabled
+        await pilot.pause()
+        assert isinstance(app.screen, RepoMenu)
+        await pilot.press("q")  # closes the menu, does not quit the app
+        await pilot.pause()
+        assert app.is_running and not isinstance(app.screen, RepoMenu)
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.click("#close")
+        await pilot.pause()
+        assert not isinstance(app.screen, RepoMenu)
+
+        await pilot.click("#repos", offset=(4, 2))  # second row: the first click only highlights
+        await pilot.pause()
+        assert not isinstance(app.screen, RepoMenu)
+        await pilot.click("#repos", offset=(4, 2))
+        await pilot.pause()
+        assert isinstance(app.screen, RepoMenu) and app.screen._st.name == "second"
+        await pilot.press("down", "enter")  # second option: pull
+        await settle(app, pilot)
+        assert sandbox.sha(other) == tip
+
+
 async def test_lists_repos_and_pulls(sandbox, offline):
     sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(sandbox.root / "second"))
     sandbox.git(sandbox.work, "checkout", "-b", "algent/feature")

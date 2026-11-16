@@ -9,9 +9,11 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Input, Static, Tab, Tabs
+from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
+from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
 from .config import Config
@@ -47,7 +49,7 @@ def repo_detail(st: RepoState) -> RenderableType:
     head = Text.assemble(
         (st.name, "bold"), "  ", (st.slug or "no GitHub remote", "dim"), "  main: ", (st.tracked or "?", "green")
     )
-    head.append(f"  {st.path}", "dim")
+    head.append(f"  {st.path}", "dim").append("  Enter: actions", "dim italic")
     if not st.extra_branches:
         return Group(head, Text("no other local branches", "dim"))
     table = Table(box=None, pad_edge=False, show_header=False)
@@ -69,8 +71,22 @@ def pack_detail(entry: PackEntry) -> RenderableType:
     return Group(*lines)
 
 
+class CloseButton(Static):
+    """Clickable way out of a dialog, for terminals that swallow Esc."""
+
+    def __init__(self) -> None:
+        super().__init__("✕", id="close")
+
+    def on_click(self) -> None:
+        self.screen.dismiss(None)
+
+
+def dialog_head(title: RenderableType) -> Horizontal:
+    return Horizontal(Static(title, id="dialog-title"), CloseButton(), id="dialog-head")
+
+
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,q,escape", "answer(False)", "No")]
 
     def __init__(self, title: str, body: RenderableType) -> None:
         super().__init__()
@@ -78,13 +94,65 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Static(self._title, id="dialog-title")
+            yield dialog_head(self._title)
             with VerticalScroll(id="dialog-body"):
                 yield Static(self._body)
             yield Static(Text.assemble(("y", "bold"), " yes    ", ("n", "bold"), " no"))
 
     def action_answer(self, value: bool) -> None:
         self.dismiss(value)
+
+
+def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
+    """(hotkey, id, label, reason it is unavailable) for the single-repo menu."""
+    main = st.tracked or "main"
+    merged = sum(1 for b in st.extra_branches if b.name != st.head and b.pr and b.pr.state == "MERGED")
+    pr = st.current.pr if st.current else None
+    if not st.off_main:
+        no_switch = f"already on {main}" if st.tracked else "no main branch known"
+    else:
+        no_switch = "uncommitted changes" if st.dirty else None
+    return [
+        ("f", "fetch", "Fetch", None),
+        ("p", "pull", f"Pull: fast-forward {main} if safe", None),
+        ("m", "main", f"Switch to {main} and pull", no_switch),
+        ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
+        ("o", "ide", "Open in IntelliJ", None),
+        ("g", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
+        ("e", "folder", "Open folder", None),
+    ]
+
+
+class RepoMenu(ModalScreen[str | None]):
+    # Esc alone is not enough: JetBrains terminals grab it to refocus the editor.
+    BINDINGS = [Binding("escape,q,backspace,left", "close", "Close")]
+
+    def __init__(self, st: RepoState) -> None:
+        super().__init__()
+        self._st = st
+        self._actions = repo_actions(st)
+
+    def compose(self) -> ComposeResult:
+        options = []
+        for key, id_, label, why in self._actions:
+            prompt = Text.assemble((key, "bold"), f"  {label}", (f"  ({why})" if why else "", "dim"))
+            options.append(Option(prompt, id=id_, disabled=bool(why)))
+        with Vertical(id="dialog"):
+            yield dialog_head(Text.assemble((self._st.name, "bold"), "  ", render.branch_text(self._st)))
+            yield OptionList(*options, id="menu")
+            yield Static(Text("Enter or the letter to run, q or Esc to close", "dim"))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def on_key(self, event: Key) -> None:
+        choice = next((id_ for key, id_, _, why in self._actions if key == event.key and not why), None)
+        if choice:
+            event.stop()
+            self.dismiss(choice)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 
 class RepoApp(App[None]):
@@ -99,8 +167,11 @@ class RepoApp(App[None]):
         Binding("slash", "filter", "Filter"),
         Binding("o", "open_ide", "IDE"),
         Binding("g", "open_web", "GitHub"),
+        Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
+        Binding("C", "open_folder('config')", "Config dir"),
+        Binding("L", "open_folder('logs')", "Logs dir"),
         Binding("tab", "cycle_view(1)", "Next view", priority=True),
         Binding("shift+tab", "cycle_view(-1)", show=False, priority=True),
         Binding("escape", "clear_filter", show=False),
@@ -120,7 +191,7 @@ class RepoApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Tabs(*(Tab(label, id=f"view-{key}") for key, (label, _) in VIEWS.items()))
-        yield Input(placeholder="Filter by name, Enter to keep, Esc to clear", id="filter")
+        yield Input(placeholder="Filter by name: Enter keeps it, Enter on empty (or Esc) removes it", id="filter")
         yield DataTable(id="repos", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="pack", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
@@ -262,6 +333,30 @@ class RepoApp(App[None]):
         if event.data_table is self._table():
             self._update_detail()
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        st = self._selected_repo()
+        if st and not st.error and not self._modal():
+            self._repo_menu(st)
+
+    @work(group="dialog")
+    async def _repo_menu(self, st: RepoState) -> None:
+        choice = await self.push_screen_wait(RepoMenu(st))
+        one = [st.path]
+        if choice == "fetch":
+            await self._batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)
+        elif choice == "pull":
+            await self._batch("Pulling", lambda p: ops.pull_repo(self.cfg, p), one)
+        elif choice == "main":
+            await self._batch("Switching", lambda p: ops.to_main(self.cfg, st), one)
+        elif choice == "cleanup":
+            await self._cleanup([st])
+        elif choice == "ide":
+            self._open_ide(st)
+        elif choice == "web":
+            self._open_web(st, None)
+        elif choice == "folder":
+            proc.open_path(st.path)
+
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         self.view = (event.tab.id or "view-all").removeprefix("view-")
         self.query_one("#repos").display = self.view != "pack"
@@ -275,6 +370,8 @@ class RepoApp(App[None]):
         self._refresh()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if not event.value.strip():
+            event.input.display = False
         self._table().focus()
 
     # --- actions --------------------------------------------------------------
@@ -320,17 +417,26 @@ class RepoApp(App[None]):
 
     def action_open_ide(self) -> None:
         st = self._selected_repo()
+        if st:
+            self._open_ide(st)
+
+    def _open_ide(self, st: RepoState) -> None:
         ide = config.find_ide(self.cfg)
-        if not st:
-            return
         if not ide:
             self.notify("No IDE launcher found, set ide_command in the config", severity="warning")
             return
         proc.launch(ide, str(st.path))
         self.notify(f"Opening {st.name}")
 
+    def action_open_folder(self, which: str) -> None:
+        folder = config.config_path().parent if which == "config" else config.cache_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        proc.open_path(folder)
+
     def action_open_web(self) -> None:
-        entry, st = self._selected_entry(), self._selected_repo()
+        self._open_web(self._selected_repo(), self._selected_entry())
+
+    def _open_web(self, st: RepoState | None, entry: PackEntry | None) -> None:
         url = None
         if st:
             pr = st.current.pr if st.current else None
@@ -342,11 +448,15 @@ class RepoApp(App[None]):
 
     @work(group="dialog")
     async def action_cleanup(self) -> None:
-        if self._modal() or self.busy:
+        if not self._modal():
+            await self._cleanup(list(self.states.values()))
+
+    async def _cleanup(self, states: list[RepoState]) -> None:
+        if self.busy:
             return
-        safe, unpushed = await ops.cleanup_candidates(self.states.values())
+        safe, unpushed = await ops.cleanup_candidates(states)
         if not safe:
-            kept = f" ({len(unpushed)} merged ones hold local commits)" if unpushed else ""
+            kept = f" ({len(unpushed)} merged ones kept: local commits not in their PR)" if unpushed else ""
             self.notify(f"No merged branches to clean up{kept}")
             return
         body = Text("\n").join(
@@ -368,6 +478,23 @@ class RepoApp(App[None]):
         note = f"Deleted {report.branches} branches and {report.remotes} remotes, undo commands in {log_file}"
         failed = len(report.failed)
         self.notify(note + (f"; {failed} failed" if failed else ""), severity="warning" if failed else "information")
+
+    @work(group="dialog")
+    async def action_to_main(self) -> None:
+        if self._modal() or self.busy:
+            return
+        candidates = {st.path: st for st in ops.to_main_candidates(self.states.values())}
+        if not candidates:
+            self.notify("No repo is parked on a merged branch with a clean working tree")
+            return
+        body = Text("\n").join(
+            Text.assemble((st.name, "bold"), f"  {st.head} → {st.tracked}", (f"  PR #{st.current.pr.number}", "dim"))
+            for st in candidates.values()
+        )
+        if not await self.push_screen_wait(ConfirmScreen(f"Switch {len(candidates)} repos back to main?", body)):
+            return
+        if await self._batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
+            self.notify("Switched. Press d to delete the merged branches.")
 
     @work(group="clone")
     async def action_clone(self) -> None:

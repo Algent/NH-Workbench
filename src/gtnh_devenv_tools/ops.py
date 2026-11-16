@@ -76,16 +76,50 @@ async def pull_repo(cfg: Config, path: Path, dry_run: bool = False) -> RepoState
     return st
 
 
+def to_main_candidates(states: Iterable[RepoState]) -> list[RepoState]:
+    """Repos parked on a branch whose PR is merged, with nothing uncommitted in the way."""
+    return [
+        st
+        for st in states
+        if st.off_main and not st.dirty and st.current and st.current.pr and st.current.pr.state == "MERGED"
+    ]
+
+
+async def to_main(cfg: Config, st: RepoState) -> RepoState:
+    """Check out the main branch, then fetch and fast-forward it. The old branch is left for cleanup."""
+    res = await git.switch(st.path, st.tracked)
+    if not res.ok:
+        new = await scan_repo(cfg, st.path)
+        new.note = Outcome("failed", f"switch failed: {res.message}")
+        return new
+    new = await pull_repo(cfg, st.path)
+    if new.note and new.note.kind != "failed":
+        new.note = Outcome("updated", f"on {st.tracked}, {new.note.text}", new.note.commits)
+    return new
+
+
 async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[RepoState, Branch]], list[tuple]]:
-    """Split merged-PR branches into safe to delete and merged-but-holding-local-commits."""
-    safe, unpushed = [], []
+    """Split merged-PR branches into safe to delete and kept ones.
+
+    Kept entries are (repo, branch, n): n local commits are not in the PR, or None if that could not be checked.
+    """
+    safe, kept = [], []
     for st in states:
         for br in st.branches:
-            if br.name in (st.head, st.tracked) or not br.pr or br.pr.state != "MERGED":
+            pr = br.pr
+            if br.name in (st.head, st.tracked) or not pr or pr.state != "MERGED":
                 continue
-            pushed = br.sha == br.pr.head_sha or await git.is_ancestor(st.path, br.sha, br.pr.head_sha)
-            (safe if pushed else unpushed).append((st, br))
-    return safe, unpushed
+            extra = 0
+            if br.sha != pr.head_sha:
+                # The PR may have moved on after the last local fetch of its branch.
+                if not await git.has_commit(st.path, pr.head_sha) and st.origin:
+                    await git.fetch_pr_head(st.path, st.origin.name, pr.number)
+                extra = await git.commits_not_in(st.path, pr.head_sha, br.sha)
+            if extra == 0:
+                safe.append((st, br))
+            else:
+                kept.append((st, br, extra))
+    return safe, kept
 
 
 def orphaned_remotes(doomed: Iterable[tuple[RepoState, Branch]]) -> list[tuple[RepoState, Remote]]:

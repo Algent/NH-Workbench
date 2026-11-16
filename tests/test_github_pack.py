@@ -95,9 +95,27 @@ async def test_cleanup_candidates(sandbox):
     st.branch("open-pr").pr = PrInfo(2, "OPEN", False, None, None, base, "", "")
     st.branch("master").pr = merged(base)
 
-    safe, unpushed = await ops.cleanup_candidates([st])
+    safe, kept = await ops.cleanup_candidates([st])
     assert sorted(br.name for _, br in safe) == ["behind-pr", "pushed"]
-    assert [br.name for _, br in unpushed] == ["extra-work"]
+    assert [(br.name, extra) for _, br, extra in kept] == [("extra-work", 1)]
+
+
+async def test_cleanup_fetches_pr_head_missing_locally(sandbox):
+    # The PR got one more commit after the last local fetch, then its branch was deleted on GitHub.
+    sandbox.git(sandbox.work, "branch", "stale")
+    sandbox.git(sandbox.seed, "checkout", "-b", "pr")
+    pr_head = sandbox.commit(sandbox.seed, "review-fixup")
+    sandbox.git(sandbox.seed, "push", "origin", "HEAD:refs/pull/7/head")
+
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    st.branch("stale").pr = PrInfo(7, "MERGED", False, None, None, pr_head, "", "")
+    assert not await git.has_commit(sandbox.work, pr_head)
+    safe, kept = await ops.cleanup_candidates([st])
+    assert [br.name for _, br in safe] == ["stale"] and kept == []
+
+    st.branch("stale").pr = PrInfo(8, "MERGED", False, None, None, "0" * 40, "", "")
+    safe, kept = await ops.cleanup_candidates([st])
+    assert safe == [] and [(br.name, extra) for _, br, extra in kept] == [("stale", None)]
 
 
 async def test_cleanup_removes_fork_remote_once_unused(sandbox):

@@ -55,6 +55,14 @@ async def run(*args: str, cwd: Path | None = None, stdin: str | None = None, tim
     return Result(proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
 
 
+def open_path(path: Path) -> None:
+    """Show a folder in the system file manager."""
+    if sys.platform == "win32":
+        os.startfile(path)
+    else:
+        launch("open" if sys.platform == "darwin" else "xdg-open", str(path))
+
+
 def launch(*args: str) -> None:
     """Start a detached GUI program (IDE) without waiting for it."""
     cmd = list(args)

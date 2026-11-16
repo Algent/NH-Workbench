@@ -19,6 +19,7 @@ uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 | `gtnh-dev status [--off-main] [--behind] [--dirty] [--group G] [--fetch]` | One line per repo |
 | `gtnh-dev fetch` | Fetch every repo, move nothing |
 | `gtnh-dev pull [--dry-run]` | Fetch, then fast-forward main where safe |
+| `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
 | `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
 | `gtnh-dev pack [--missing] [--refresh]` | Mods of the current daily and whether they are cloned |
 | `gtnh-dev clone NAME...` | Clone pack mods into the root |
@@ -38,9 +39,11 @@ Only fast-forwards, never merges, rebases or forces.
 
 ## Terminal UI keys
 
+`Enter` or a click on the highlighted row: actions for that one repo (fetch, pull, switch to main, delete merged branches, open) ·
 `Tab` next view · `/` filter · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
-`r` rescan · `o` open in IntelliJ · `g` open PR or GitHub page · `d` delete merged branches ·
-`c` clone (Pack view) · `q` quit
+`r` rescan · `o` open in IntelliJ · `g` open PR or GitHub page ·
+`m` switch repos on a merged branch back to main · `d` delete merged branches ·
+`c` clone (Pack view) · `C` open the config folder · `L` open the logs/cache folder · `q` quit
 
 ## Groups
 

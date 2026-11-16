@@ -145,8 +145,9 @@ def branches(
         out.print(f"\n[dim]{count} branches in {len(with_branches)} repos")
         return
 
-    for st, br in unpushed:
-        out.print(f"[yellow]kept[/] {st.name} {br.name}: PR #{br.pr.number} merged, but has commits not in it")
+    for st, br, extra in unpushed:
+        why = "could not be compared with it" if extra is None else f"has {extra} local commits not in it"
+        out.print(f"[yellow]kept[/] {st.name} {br.name}: PR #{br.pr.number} merged, but the branch {why}")
     if not safe:
         out.print("Nothing to clean up.")
         return
@@ -167,6 +168,34 @@ def branches(
         out.print(f"  [dim]{line}", soft_wrap=True)
     for line in report.failed:
         out.print(f"[red]failed[/] {line}")
+
+
+@app.command(name="to-main")
+def to_main(ctx: typer.Context) -> None:
+    """Switch repos parked on a merged PR branch back to main, then fast-forward it."""
+    cfg: Config = ctx.obj
+
+    async def collect() -> list[RepoState]:
+        states = await _each(cfg, "Scanning", lambda p: ops.scan_repo(cfg, p))
+        await _with_prs(states)
+        return ops.to_main_candidates(states)
+
+    candidates = asyncio.run(collect())
+    if not candidates:
+        out.print("No repo is parked on a merged branch with a clean working tree.")
+        return
+    for st in candidates:
+        out.print(f"  {st.name} [bold]{st.head}[/] → {st.tracked} [dim]PR #{st.current.pr.number} merged")
+    if not typer.confirm(f"Switch these {len(candidates)} repos back to main?"):
+        raise typer.Exit(0)
+
+    async def switch() -> list[RepoState]:
+        return await ops.run_all(candidates, lambda st: ops.to_main(cfg, st), cfg.concurrency)
+
+    done = asyncio.run(switch())
+    out.print(render.repo_table(done))
+    out.print("\n[dim]The merged branches are still there: `gtnh-dev branches --cleanup` removes them.")
+    raise typer.Exit(1 if any(st.note and st.note.kind == "failed" for st in done) else 0)
 
 
 async def _load_pack(cfg: Config, refresh: bool) -> tuple[list, list[RepoState]]:

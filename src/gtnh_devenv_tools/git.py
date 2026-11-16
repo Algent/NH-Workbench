@@ -204,8 +204,24 @@ async def safe_pull(st: RepoState, dry_run: bool = False) -> Outcome:
     return Outcome("updated", f"{label}+{behind}", behind)
 
 
-async def is_ancestor(path: Path, ancestor: str, descendant: str) -> bool:
-    return (await git(path, "merge-base", "--is-ancestor", ancestor, descendant)).ok
+async def switch(path: Path, branch: str) -> Result:
+    return await git(path, "switch", branch, timeout=300)
+
+
+async def has_commit(path: Path, sha: str) -> bool:
+    return (await git(path, "cat-file", "-e", f"{sha}^{{commit}}")).ok
+
+
+async def fetch_pr_head(path: Path, remote: str, number: int) -> bool:
+    """Download a PR's final commit; GitHub keeps refs/pull/N/head after the branch is deleted."""
+    res = await git(path, "fetch", "--no-tags", "--no-write-fetch-head", remote, f"refs/pull/{number}/head")
+    return res.ok
+
+
+async def commits_not_in(path: Path, base: str, tip: str) -> int | None:
+    """Number of commits reachable from tip but not from base, None when either is unknown locally."""
+    res = await git(path, "rev-list", "--count", f"{base}..{tip}")
+    return int(res.out) if res.ok else None
 
 
 async def delete_branch(path: Path, name: str, expected_sha: str) -> Result:
