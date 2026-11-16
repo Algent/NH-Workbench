@@ -19,6 +19,7 @@ _REF_FORMAT = "%00".join(
         "%(contents:subject)",
     ]
 )
+_RELEASE_REFS = "refs/remotes/origin/release"
 _IN_PROGRESS = {
     "rebase-merge": "rebase",
     "rebase-apply": "rebase",
@@ -60,9 +61,10 @@ def parse_status(text: str, st: RepoState) -> None:
             st.untracked += 1
 
 
-def parse_refs(text: str) -> tuple[list[Branch], str | None]:
-    """Parse for-each-ref output into local branches and origin's default branch name."""
+def parse_refs(text: str) -> tuple[list[Branch], str | None, list[str]]:
+    """Parse for-each-ref output into local branches, origin's default branch and origin's release branches."""
     branches: list[Branch] = []
+    releases: list[str] = []
     origin_head = None
     for line in text.splitlines():
         parts = line.split("\x00", 6)
@@ -71,6 +73,9 @@ def parse_refs(text: str) -> tuple[list[Branch], str | None]:
         ref, sha, upstream, track, date, symref, subject = parts
         if ref == "refs/remotes/origin/HEAD":
             origin_head = symref.removeprefix("origin/") or None
+            continue
+        if ref.startswith("refs/remotes/origin/release/"):
+            releases.append(ref.removeprefix("refs/remotes/origin/"))
             continue
         if not ref.startswith("refs/heads/"):
             continue
@@ -87,7 +92,7 @@ def parse_refs(text: str) -> tuple[list[Branch], str | None]:
                 subject=subject,
             )
         )
-    return branches, origin_head
+    return branches, origin_head, releases
 
 
 def _git_dir(path: Path) -> Path:
@@ -110,7 +115,7 @@ async def read_state(
     st = RepoState(path=path, name=path.name)
     status, refs, urls = await asyncio.gather(
         git(path, "status", "--porcelain=v2", "--branch", "--show-stash"),
-        git(path, "for-each-ref", f"--format={_REF_FORMAT}", "refs/heads", "refs/remotes/origin/HEAD"),
+        git(path, "for-each-ref", f"--format={_REF_FORMAT}", "refs/heads", "refs/remotes/origin/HEAD", _RELEASE_REFS),
         git(path, "config", "--get-regexp", r"^remote\..*\.url$"),
     )
     if not status.ok or not refs.ok:
@@ -118,7 +123,7 @@ async def read_state(
         return st
 
     parse_status(status.out, st)
-    st.branches, origin_head = parse_refs(refs.out)
+    st.branches, origin_head, st.release_branches = parse_refs(refs.out)
     for line in urls.out.splitlines():
         key, _, url = line.partition(" ")
         name = key.removeprefix("remote.").removesuffix(".url")

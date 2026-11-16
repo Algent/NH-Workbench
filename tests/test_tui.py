@@ -2,7 +2,7 @@ import pytest
 from textual.widgets import DataTable, Tabs
 
 from gtnh_devenv_tools import github, pack
-from gtnh_devenv_tools.models import PackEntry
+from gtnh_devenv_tools.models import PackEntry, PackInfo
 from gtnh_devenv_tools.tui import RepoApp
 
 
@@ -11,12 +11,16 @@ def offline(monkeypatch):
     async def no_prs(states):
         return github.PrData()
 
+    loads = []
+
     async def fake_pack(cfg, force=False):
+        loads.append(force)
         closed = PackEntry("Thaumcraft", "external", "4.2", closed=True)
-        return [closed, PackEntry("Missing", "github", "1", repo="o/m")]
+        return PackInfo(entries=[closed, PackEntry("Missing", "github", "1", repo="o/m")], release="2.9.0")
 
     monkeypatch.setattr(github, "fetch_prs", no_prs)
     monkeypatch.setattr(pack, "load", fake_pack)
+    return loads
 
 
 async def settle(app, pilot):
@@ -72,6 +76,22 @@ async def test_repo_menu_acts_on_one_repo(sandbox, offline):
         await pilot.press("down", "enter")  # second option: pull
         await settle(app, pilot)
         assert sandbox.sha(other) == tip
+
+
+async def test_extras_menu_forces_pack_refresh(sandbox, offline):
+    from gtnh_devenv_tools.tui import ExtrasMenu
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert offline == [False]
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, ExtrasMenu)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert offline == [False, True] and not isinstance(app.screen, ExtrasMenu)
+        assert app.pack_info.release == "2.9.0"
 
 
 async def test_lists_repos_and_pulls(sandbox, offline):

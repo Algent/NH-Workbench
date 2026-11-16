@@ -18,12 +18,12 @@ uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 | Command | What it does |
 |---|---|
 | `gtnh-dev` | Terminal UI |
-| `gtnh-dev status [--off-main] [--behind] [--dirty] [--group G] [--fetch]` | One line per repo |
+| `gtnh-dev status [--off-main] [--behind] [--dirty] [--group G] [--fetch] [--pack]` | One line per repo |
 | `gtnh-dev fetch` | Fetch every repo, move nothing |
 | `gtnh-dev pull [--dry-run]` | Fetch, then fast-forward main where safe |
 | `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
 | `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
-| `gtnh-dev pack [--missing] [--refresh]` | Mods of the current daily and whether they are cloned |
+| `gtnh-dev pack [--missing] [--refresh]` | Mods of the current daily and the latest release, and whether they are cloned |
 | `gtnh-dev clone NAME...` | Clone pack mods into the root |
 
 Global options: `--root PATH`, `-v`.
@@ -45,7 +45,16 @@ Only fast-forwards, never merges, rebases or forces.
 `Tab` next view · `/` filter · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
 `r` rescan · `o` open in IntelliJ · `g` open PR or GitHub page ·
 `m` switch repos on a merged branch back to main · `d` delete merged branches ·
-`c` clone (Pack view) · `C` open the config folder · `L` open the logs/cache folder · `q` quit
+`c` clone (Pack view) · `x` extras (refresh pack data, open the config or logs folder) · `q` quit
+
+## Pack data
+
+Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --refresh` or `x` in the UI
+forces it): the daily manifest, the manifest of the latest stable release, and the number of the last
+successful daily build. The Pack view lists every mod of either, with its version in each.
+
+Repos get a Daily and a Release column (`status --pack` on the command line). A `+N` after the released
+version means the repo's `release/<major>.<minor>.x` branch has N commits since that version's tag.
 
 ## Groups
 

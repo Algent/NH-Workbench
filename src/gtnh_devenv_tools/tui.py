@@ -17,7 +17,7 @@ from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
 from .config import Config
-from .models import PackEntry, RepoState
+from .models import PackEntry, PackInfo, RepoState
 
 VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "all": ("All", lambda st: True),
@@ -28,8 +28,8 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "other": ("Other", lambda st: st.group != "gtnh"),
     "pack": ("Pack", None),
 }
-REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Pack", "Result", "Last commit")
-PACK_COLUMNS = ("Mod", "Kind", "Daily", "Local", "Source")
+REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
+PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
 
 
 def repo_cells(st: RepoState) -> list[Text]:
@@ -39,30 +39,50 @@ def repo_cells(st: RepoState) -> list[Text]:
         render.branch_text(st),
         render.state_text(st),
         render.sync_text(st),
-        Text(st.pack, "dim"),
+        render.daily_text(st),
+        render.release_text(st),
         render.note_text(st.note),
         render.last_text(st),
     ]
 
 
-def repo_detail(st: RepoState) -> RenderableType:
+def pack_line(st: RepoState, info: PackInfo) -> Text:
+    """Where a checkout stands in the pack: daily version, released version, release branch activity."""
+    text = Text.assemble(("pack  ", "dim"), "daily ", (st.daily or "—", "bold"))
+    text.append(f"   {info.release or 'release'} ").append(st.release or "—", "bold")
+    branch = pack.release_branch(info.release) if info.release else ""
+    if branch in st.release_branches and st.release:
+        if st.release_ahead is None:
+            text.append(f"   {branch}: tag {st.release} not found locally", "dim")
+        else:
+            style = "cyan" if st.release_ahead else "dim"
+            text.append(f"   {branch}: {st.release_ahead} commits since {st.release}", style)
+    return text
+
+
+def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     head = Text.assemble(
         (st.name, "bold"), "  ", (st.slug or "no GitHub remote", "dim"), "  main: ", (st.tracked or "?", "green")
     )
     head.append(f"  {st.path}", "dim").append("  Enter: actions", "dim italic")
+    lines: list[RenderableType] = [head]
+    if info and st.in_pack:
+        lines.append(pack_line(st, info))
     if not st.extra_branches:
-        return Group(head, Text("no other local branches", "dim"))
+        return Group(*lines, Text("no other local branches", "dim"))
     table = Table(box=None, pad_edge=False, show_header=False)
     for _ in range(4):
         table.add_column(no_wrap=True)
     table.add_column(no_wrap=True, overflow="ellipsis")
     for br in st.extra_branches:
         table.add_row(*render.branch_row(st, br))
-    return Group(head, table)
+    return Group(*lines, table)
 
 
-def pack_detail(entry: PackEntry) -> RenderableType:
-    lines = [Text.assemble((entry.name, "bold"), f"  {entry.kind}  daily {entry.version}")]
+def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
+    release = f"{info.release or 'release'} {entry.release_version or '—'}"
+    versions = f"  {entry.kind}  daily {entry.version or '—'}  {release}"
+    lines = [render.pack_header(info), Text.assemble((entry.name, "bold"), versions)]
     lines.append(Text(f"licence: {entry.license or 'unknown'}   {entry.url or ''}", "dim"))
     if entry.local:
         lines.append(Text(f"checked out at {entry.local.path}", "green"))
@@ -123,14 +143,15 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
     ]
 
 
-class RepoMenu(ModalScreen[str | None]):
+class MenuScreen(ModalScreen[str | None]):
+    """A list of (hotkey, id, label, reason it is unavailable) actions; dismisses with the chosen id."""
+
     # Esc alone is not enough: JetBrains terminals grab it to refocus the editor.
     BINDINGS = [Binding("escape,q,backspace,left", "close", "Close")]
 
-    def __init__(self, st: RepoState) -> None:
+    def __init__(self, title: RenderableType, actions: list[tuple[str, str, str, str | None]], info=None) -> None:
         super().__init__()
-        self._st = st
-        self._actions = repo_actions(st)
+        self._title, self._actions, self._info = title, actions, info
 
     def compose(self) -> ComposeResult:
         options = []
@@ -138,7 +159,9 @@ class RepoMenu(ModalScreen[str | None]):
             prompt = Text.assemble((key, "bold"), f"  {label}", (f"  ({why})" if why else "", "dim"))
             options.append(Option(prompt, id=id_, disabled=bool(why)))
         with Vertical(id="dialog"):
-            yield dialog_head(Text.assemble((self._st.name, "bold"), "  ", render.branch_text(self._st)))
+            yield dialog_head(self._title)
+            if self._info is not None:
+                yield Static(self._info, id="dialog-info")
             yield OptionList(*options, id="menu")
             yield Static(Text("Enter or the letter to run, q or Esc to close", "dim"))
 
@@ -153,6 +176,25 @@ class RepoMenu(ModalScreen[str | None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class RepoMenu(MenuScreen):
+    def __init__(self, st: RepoState) -> None:
+        super().__init__(Text.assemble((st.name, "bold"), "  ", render.branch_text(st)), repo_actions(st))
+        self._st = st
+
+
+class ExtrasMenu(MenuScreen):
+    def __init__(self, cfg: Config, info: PackInfo | None) -> None:
+        lines = [Text(f"Root: {cfg.root}", "dim"), Text(f"Config: {config.config_path()}", "dim")]
+        if info:
+            lines.append(render.pack_header(info))
+        actions = [
+            ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
+            ("c", "config", "Open config folder", None),
+            ("l", "logs", "Open logs and cache folder", None),
+        ]
+        super().__init__(Text("Extras", "bold"), actions, Group(*lines))
 
 
 class RepoApp(App[None]):
@@ -170,8 +212,9 @@ class RepoApp(App[None]):
         Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
-        Binding("C", "open_folder('config')", "Config dir"),
-        Binding("L", "open_folder('logs')", "Logs dir"),
+        Binding("x", "extras", "Extras"),
+        Binding("C", "open_folder('config')", "Config dir", show=False),
+        Binding("L", "open_folder('logs')", "Logs dir", show=False),
         Binding("tab", "cycle_view(1)", "Next view", priority=True),
         Binding("shift+tab", "cycle_view(-1)", show=False, priority=True),
         Binding("escape", "clear_filter", show=False),
@@ -184,6 +227,7 @@ class RepoApp(App[None]):
         self.states: dict[str, RepoState] = {}
         self.prs = github.PrData()
         self.entries: list[PackEntry] = []
+        self.pack_info: PackInfo | None = None
         self.view = "all"
         self.needle = ""
         self.busy = ""
@@ -221,11 +265,27 @@ class RepoApp(App[None]):
         else:
             self.prs = data
             github.attach(self.states.values(), data)
+        await self._load_pack()
+
+    async def _load_pack(self, force: bool = False) -> None:
         try:
-            self.entries = await pack.load(self.cfg)
+            self.pack_info = await pack.load(self.cfg, force)
+            self.entries = self.pack_info.entries
         except pack.PackError as e:
             self.notify(str(e), severity="warning")
+        await self._relink()
         self._refresh()
+
+    async def _relink(self, paths: list[Path] | None = None) -> None:
+        """Copy pack versions onto the repos, and recount release-branch commits for the given ones."""
+        if not self.pack_info:
+            return
+        pack.link_local(self.entries, self.states.values())
+        if self.pack_info.release:
+            keys = self.states if paths is None else [str(p) for p in paths]
+            states = [self.states[k] for k in keys if k in self.states]
+            branch = pack.release_branch(self.pack_info.release)
+            await ops.release_progress(states, branch, self.cfg.concurrency)
 
     async def _batch(
         self,
@@ -250,6 +310,9 @@ class RepoApp(App[None]):
                 nonlocal done
                 done += 1
                 github.attach([st], self.prs)
+                old = self.states.get(str(st.path))
+                if old:  # keep the pack columns steady until they are recomputed after the batch
+                    st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
                 self.states[str(st.path)] = st
                 self._update_row(st)
                 self.sub_title = f"{label} {done}/{len(paths)}"
@@ -257,6 +320,7 @@ class RepoApp(App[None]):
             await ops.run_all(paths, worker, self.cfg.concurrency, on_done)
         finally:
             self.busy = ""
+        await self._relink(paths)
         self._refresh()
         return True
 
@@ -299,8 +363,6 @@ class RepoApp(App[None]):
                 table.update_cell(key, column, cell, update_width=True)
 
     def _refresh(self) -> None:
-        if self.entries:
-            pack.link_local(self.entries, self.states.values())
         states = sorted(self.states.values(), key=lambda st: st.name.lower())
         for key, (label, wanted) in VIEWS.items():
             count = len(self.entries) if wanted is None else sum(1 for st in states if wanted(st))
@@ -320,10 +382,10 @@ class RepoApp(App[None]):
     def _update_detail(self) -> None:
         detail = self.query_one("#detail", Static)
         entry, st = self._selected_entry(), self._selected_repo()
-        if entry:
-            detail.update(pack_detail(entry))
+        if entry and self.pack_info:
+            detail.update(pack_detail(entry, self.pack_info))
         elif st:
-            detail.update(repo_detail(st))
+            detail.update(repo_detail(st, self.pack_info))
         else:
             detail.update(Text("nothing selected", "dim"))
 
@@ -427,6 +489,18 @@ class RepoApp(App[None]):
             return
         proc.launch(ide, str(st.path))
         self.notify(f"Opening {st.name}")
+
+    @work(group="dialog")
+    async def action_extras(self) -> None:
+        if self._modal():
+            return
+        choice = await self.push_screen_wait(ExtrasMenu(self.cfg, self.pack_info))
+        if choice == "refresh":
+            self.notify("Refreshing pack data...")
+            await self._load_pack(force=True)
+            self.notify("Pack data refreshed")
+        elif choice in ("config", "logs"):
+            self.action_open_folder(choice)
 
     def action_open_folder(self, which: str) -> None:
         folder = config.config_path().parent if which == "config" else config.cache_dir()

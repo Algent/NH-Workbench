@@ -68,8 +68,15 @@ class RepoState:
     error: str | None = None
     note: Outcome | None = None
     canonical: str | None = None  # owner/name as GitHub reports it (follows renames)
-    pack: str = ""
     group: str = ""  # gtnh | other | name of the subfolder or the config override
+    daily: str = ""  # version the current daily ships, empty if it does not ship this repo
+    release: str = ""  # version the latest stable release shipped
+    release_branches: list[str] = field(default_factory=list)  # e.g. release/2.9.x, as found on origin
+    release_ahead: int | None = None  # commits on the release branch since the released version
+
+    @property
+    def in_pack(self) -> bool:
+        return bool(self.daily or self.release)
 
     @property
     def origin(self) -> Remote | None:
@@ -123,7 +130,8 @@ class RepoState:
 class PackEntry:
     name: str
     kind: str  # github | external
-    version: str
+    version: str  # in the current daily, empty when the daily no longer ships it
+    release_version: str = ""  # in the latest stable release, empty when it was not part of it
     repo: str | None = None  # owner/name of the source repository, when known
     branch: str | None = None
     closed: bool = False
@@ -141,3 +149,15 @@ class PackEntry:
         if not self.repo:
             return "unknown"
         return "missing"
+
+
+@dataclass
+class PackInfo:
+    entries: list[PackEntry] = field(default_factory=list)
+    release: str = ""  # latest stable release, e.g. 2.9.0
+    release_updated: datetime | None = None
+    daily_config: str = ""
+    daily_updated: datetime | None = None
+    daily_build: int | None = None  # latest daily that built successfully
+    daily_attempt: int | None = None  # latest daily that was started
+    fetched: datetime | None = None

@@ -17,6 +17,11 @@ ConfirmScreen, RepoMenu {
     align: center middle;
 }
 
+#dialog-info {
+    height: auto;
+    margin-bottom: 1;
+}
+
 #menu {
     height: auto;
     max-height: 12;

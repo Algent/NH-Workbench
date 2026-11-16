@@ -42,11 +42,12 @@ def test_parse_refs():
             line("refs/heads/algent/y", "c3", "origin/algent/y", "ahead 92, behind 1", "", "", ""),
             line("refs/heads/local", "d4", "", "", "", "", "no upstream"),
             line("refs/remotes/origin/HEAD", "a1", "", "", "", "origin/master", "subject"),
+            line("refs/remotes/origin/release/2.9.x", "e5", "", "", "", "", "backport"),
         ]
     )
-    branches, origin_head = git.parse_refs(text)
+    branches, origin_head, releases = git.parse_refs(text)
     by_name = {b.name: b for b in branches}
-    assert origin_head == "master"
+    assert origin_head == "master" and releases == ["release/2.9.x"]
     assert by_name["master"].behind == 4 and not by_name["master"].gone
     assert by_name["algent/x"].gone
     assert (by_name["algent/y"].ahead, by_name["algent/y"].behind) == (92, 1)
@@ -216,6 +217,33 @@ async def test_to_main_after_merged_pr(sandbox):
     assert new.note.text == "on master, +1" and sandbox.sha(sandbox.work) == tip
     assert new.branch("algent/done") is not None
     assert (sandbox.work / "scratch.txt").exists()
+
+
+async def test_release_branch_progress(sandbox):
+    from gtnh_devenv_tools import pack
+
+    branch = pack.release_branch("1.2.0")
+    assert branch == "release/1.2.x" and pack.release_branch("2.9.0") == "release/2.9.x"
+
+    sandbox.git(sandbox.seed, "tag", "1.2.0")
+    sandbox.git(sandbox.seed, "checkout", "-b", branch)
+    sandbox.commit(sandbox.seed, "backport-1")
+    sandbox.commit(sandbox.seed, "backport-2")
+    sandbox.git(sandbox.seed, "push", "origin", branch, "--tags")
+
+    st = await ops.fetch_repo(sandbox.cfg, sandbox.work)
+    assert st.release_branches == [branch] and st.head == "master"
+
+    await ops.release_progress([st], branch)
+    assert st.release_ahead is None  # not known to be part of the release
+
+    st.release = "1.2.0"
+    await ops.release_progress([st], branch)
+    assert st.release_ahead == 2
+
+    st.release = "9.9.9"  # version whose tag does not exist here
+    await ops.release_progress([st], branch)
+    assert st.release_ahead is None
 
 
 async def test_delete_branch_checks_tip(sandbox):

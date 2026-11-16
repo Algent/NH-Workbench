@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from rich.table import Table
 from rich.text import Text
 
-from .models import Branch, Outcome, PackEntry, PrInfo, RepoState
+from .models import Branch, Outcome, PackEntry, PackInfo, PrInfo, RepoState
 
 NOTE_STYLE = {
     "updated": "bold green",
@@ -115,23 +115,37 @@ def pr_text(pr: PrInfo | None) -> Text:
     return text
 
 
-def repo_table(states: Iterable[RepoState], pack: bool = False) -> Table:
+def daily_text(st: RepoState) -> Text:
+    return version_text(st.daily) if st.in_pack else Text("")
+
+
+def release_text(st: RepoState) -> Text:
+    """Released version, plus how many commits the release branch gained since."""
+    text = version_text(st.release) if st.in_pack else Text("")
+    if st.release_ahead:
+        text.append(f" +{st.release_ahead}", "bold cyan")
+    return text
+
+
+def repo_table(states: Iterable[RepoState], release: str | None = None) -> Table:
+    """One line per repo. Pass the release name to add the Daily and release version columns."""
     states = list(states)
     notes = any(st.note for st in states)
     groups = len({st.group for st in states}) > 1
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in ("Repo", *(["Group"] if groups else []), "Branch", "State", "Sync"):
         table.add_column(column, no_wrap=True)
-    if pack:
-        table.add_column("Pack", no_wrap=True)
+    if release is not None:
+        table.add_column("Daily", no_wrap=True)
+        table.add_column(release or "Release", no_wrap=True)
     if notes:
         table.add_column("Result", no_wrap=True)
     table.add_column("Last commit", no_wrap=True, overflow="ellipsis")
     for st in states:
         row = [Text(st.name, "bold"), *([Text(st.group, "dim")] if groups else [])]
         row += [branch_text(st), state_text(st), sync_text(st)]
-        if pack:
-            row.append(Text(st.pack, "dim"))
+        if release is not None:
+            row += [daily_text(st), release_text(st)]
         if notes:
             row.append(note_text(st.note))
         table.add_row(*row, last_text(st))
@@ -190,6 +204,10 @@ def pack_status_text(entry: PackEntry) -> Text:
     return Text(label, _PACK_STATUS[status])
 
 
+def version_text(version: str) -> Text:
+    return Text(clip(version, 24)) if version else Text("—", "dim")
+
+
 def pack_row(entry: PackEntry) -> list[Text]:
     source = entry.repo or ""
     if entry.branch:
@@ -197,15 +215,28 @@ def pack_row(entry: PackEntry) -> list[Text]:
     return [
         Text(clip(entry.name, 36), "bold"),
         Text(entry.kind, "" if entry.kind == "github" else "cyan"),
-        Text(clip(entry.version, 24)),
+        version_text(entry.version),
+        release_text(entry.local) if entry.local else version_text(entry.release_version),
         pack_status_text(entry),
         Text(clip(source or (entry.url or ""), 56), "dim"),
     ]
 
 
-def pack_table(entries: Iterable[PackEntry]) -> Table:
+def pack_header(info: PackInfo) -> Text:
+    """Which daily and which release the pack data describes, and how fresh it is."""
+    text = Text.assemble((f"Daily #{info.daily_build}" if info.daily_build else "Daily", "bold"))
+    text.append(f" {info.daily_config}").append(f" · {ago(info.daily_updated)} ago", "dim")
+    if info.daily_attempt and info.daily_attempt != info.daily_build:
+        text.append(f" (#{info.daily_attempt} did not succeed)", "yellow")
+    if info.release:
+        text.append("   ").append(f"Release {info.release}", "bold")
+        text.append(f" · {ago(info.release_updated)} ago", "dim")
+    return text.append(f"   checked {ago(info.fetched)} ago", "dim")
+
+
+def pack_table(entries: Iterable[PackEntry], release: str = "") -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for column in ("Mod", "Kind", "Daily", "Local"):
+    for column in ("Mod", "Kind", "Daily", release or "Release", "Local"):
         table.add_column(column, no_wrap=True)
     table.add_column("Source", no_wrap=True, overflow="ellipsis")
     for entry in entries:

@@ -76,6 +76,19 @@ async def pull_repo(cfg: Config, path: Path, dry_run: bool = False) -> RepoState
     return st
 
 
+async def release_progress(states: Iterable[RepoState], branch: str, limit: int = 8) -> None:
+    """Count the commits each repo's release branch gained since the version that was released."""
+
+    async def one(st: RepoState) -> None:
+        st.release_ahead = None
+        if st.release and branch in st.release_branches:
+            st.release_ahead = await git.commits_not_in(
+                st.path, f"refs/tags/{st.release}", f"refs/remotes/origin/{branch}"
+            )
+
+    await run_all(states, one, limit)
+
+
 def to_main_candidates(states: Iterable[RepoState]) -> list[RepoState]:
     """Repos parked on a branch whose PR is merged, with nothing uncommitted in the way."""
     return [

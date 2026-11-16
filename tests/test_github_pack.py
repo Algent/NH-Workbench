@@ -153,6 +153,34 @@ def test_parse_github_url():
     assert pack.parse_github_url(None) == (None, None)
 
 
+def test_latest_release_skips_betas_and_dailies():
+    names = ["2.8.4", "2.9.0", "2.9.0-RC-2", "2.9.0-beta-3", "2.10.0-beta-1", "daily", "experimental", "previous_daily"]
+    assert pack.latest_release(names) == "2.9.0"
+    assert pack.latest_release(["2.9.0", "2.10.0", "2.9.1"]) == "2.10.0"
+    assert pack.latest_release(["daily"]) is None
+
+
+def test_pack_header():
+    from datetime import UTC, datetime, timedelta
+
+    from gtnh_devenv_tools import render
+    from gtnh_devenv_tools.models import PackInfo
+
+    now = datetime.now(UTC)
+    info = PackInfo(
+        release="2.9.0",
+        release_updated=now - timedelta(days=16),
+        daily_config="2.10.0-nightly",
+        daily_updated=now - timedelta(hours=5),
+        daily_build=835,
+        daily_attempt=836,
+        fetched=now - timedelta(minutes=12),
+    )
+    text = render.pack_header(info).plain
+    assert "Daily #835 2.10.0-nightly · 5h ago" in text and "#836 did not succeed" in text
+    assert "Release 2.9.0 · 2w ago" in text and "checked 12m ago" in text
+
+
 def test_pack_entries_and_local_matching():
     manifest = {
         "github_mods": {"GT5-Unofficial": {"version": "5.09"}, "Applied-Energistics-2-NH": {"version": "1.0"}},
@@ -169,15 +197,21 @@ def test_pack_entries_and_local_matching():
         {"name": "Thaumcraft", "external_url": "https://www.curseforge.com/x", "license": "ARR"},
     ]
     sources = {"biomes o' plenty": {"repo": "Example/BoP", "branch": "1.7.10"}, "thaumcraft": {"closed": True}}
-    entries = {e.name: e for e in pack.build_entries(manifest, assets, sources)}
+    release = {"github_mods": {"GT5-Unofficial": {"version": "5.08"}, "OldMod": {"version": "1.0"}}}
+    entries = {e.name: e for e in pack.build_entries(manifest, release, assets, sources)}
 
-    gt5, ae2, renamed = repo("GT5-Unofficial"), repo("Applied-Energistics-2-Unofficial"), repo("Unrelated")
+    names = ("GT5-Unofficial", "Applied-Energistics-2-Unofficial", "Unrelated", "OldMod")
+    gt5, ae2, renamed, old = (repo(n) for n in names)
     ae2.canonical = "GTNewHorizons/Applied-Energistics-2-NH"
-    pack.link_local(entries.values(), [gt5, ae2, renamed])
+    pack.link_local(entries.values(), [gt5, ae2, renamed, old])
 
-    assert entries["GT5-Unofficial"].local is gt5 and gt5.pack == "daily 5.09"
-    assert entries["Applied-Energistics-2-NH"].local is ae2
-    assert renamed.pack == ""
+    assert entries["GT5-Unofficial"].local is gt5 and (gt5.daily, gt5.release) == ("5.09", "5.08")
+    assert (entries["GT5-Unofficial"].version, entries["GT5-Unofficial"].release_version) == ("5.09", "5.08")
+    ae2_nh = entries["Applied-Energistics-2-NH"]
+    assert ae2_nh.local is ae2 and ae2_nh.release_version == ""
+    assert (entries["OldMod"].version, entries["OldMod"].release_version) == ("", "1.0")
+    assert entries["OldMod"].local is old and (old.daily, old.release, old.in_pack) == ("", "1.0", True)
+    assert not renamed.in_pack
     assert {n: e.status for n, e in entries.items() if e.kind == "external"} == {
         "UniMixins": "missing",
         "Biomes O' Plenty": "missing",

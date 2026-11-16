@@ -11,7 +11,7 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 
 from . import config, github, ops, pack, render
 from .config import Config
-from .models import RepoState
+from .models import PackInfo, RepoState
 
 app = typer.Typer(add_completion=False, help="Keep track of many GTNH mod checkouts.")
 out = Console()
@@ -56,10 +56,22 @@ async def _each(cfg: Config, label: str, worker: Callable[[Path], Awaitable[Repo
         return await ops.run_all(paths, worker, cfg.concurrency, lambda _: progress.advance(task))
 
 
-def _show(states: list[RepoState], shown: list[RepoState] | None = None, pack_column: bool = False) -> None:
-    out.print(render.repo_table(states if shown is None else shown, pack=pack_column))
+def _show(states: list[RepoState], shown: list[RepoState] | None = None, info: PackInfo | None = None) -> None:
+    out.print(render.repo_table(states if shown is None else shown, release=info.release if info else None))
     out.print()
+    if info:
+        out.print(render.pack_header(info))
     out.print(render.summary(states))
+
+
+async def _attach_pack(cfg: Config, states: list[RepoState], refresh: bool = False) -> PackInfo:
+    """Load pack data and copy versions and release-branch progress onto the local repos."""
+    with err.status("Loading pack data..."):
+        info = await pack.load(cfg, force=refresh)
+    pack.link_local(info.entries, states)
+    if info.release:
+        await ops.release_progress(states, pack.release_branch(info.release), cfg.concurrency)
+    return info
 
 
 async def _with_prs(states: list[RepoState]) -> None:
@@ -78,11 +90,23 @@ def status(
     dirty: Annotated[bool, typer.Option("--dirty", help="Only repos with uncommitted tracked changes.")] = False,
     group: Annotated[str | None, typer.Option("--group", help="Only this group (gtnh, other, a subfolder).")] = None,
     fetch: Annotated[bool, typer.Option("--fetch", help="Fetch every repo first.")] = False,
+    with_pack: Annotated[
+        bool, typer.Option("--pack", help="Add the version in the daily and in the latest release.")
+    ] = False,
 ) -> None:
     """One line per repo: branch, working tree state, ahead/behind, last commit."""
     cfg: Config = ctx.obj
     worker = ops.fetch_repo if fetch else ops.scan_repo
-    states = asyncio.run(_each(cfg, "Fetching" if fetch else "Scanning", lambda p: worker(cfg, p)))
+
+    async def collect() -> tuple[list[RepoState], PackInfo | None]:
+        states = await _each(cfg, "Fetching" if fetch else "Scanning", lambda p: worker(cfg, p))
+        try:
+            return states, await _attach_pack(cfg, states) if with_pack else None
+        except pack.PackError as e:
+            err.print(f"[yellow]Pack data unavailable: {e}")
+            return states, None
+
+    states, info = asyncio.run(collect())
     shown = [
         st
         for st in states
@@ -94,7 +118,7 @@ def status(
     for st in states:
         if st.note and st.note.text == "fetched":
             st.note = None
-    _show(states, shown)
+    _show(states, shown, info)
 
 
 @app.command()
@@ -198,34 +222,38 @@ def to_main(ctx: typer.Context) -> None:
     raise typer.Exit(1 if any(st.note and st.note.kind == "failed" for st in done) else 0)
 
 
-async def _load_pack(cfg: Config, refresh: bool) -> tuple[list, list[RepoState]]:
+async def _load_pack(cfg: Config, refresh: bool) -> tuple[PackInfo, list[RepoState]]:
     states = await _each(cfg, "Scanning", lambda p: ops.scan_repo(cfg, p))
     await _with_prs(states)  # canonical names, so renamed repos still match
-    with err.status("Loading the daily manifest..."):
-        entries = await pack.load(cfg, force=refresh)
-    pack.link_local(entries, states)
-    return entries, states
+    return await _attach_pack(cfg, states, refresh), states
 
 
 @app.command(name="pack")
 def pack_command(
     ctx: typer.Context,
     missing: Annotated[bool, typer.Option("--missing", help="Only mods that are not checked out.")] = False,
-    refresh: Annotated[bool, typer.Option("--refresh", help="Re-download the manifest now.")] = False,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Re-download pack data now (otherwise at most once an hour).")
+    ] = False,
 ) -> None:
-    """Mods of the current daily build and whether you have them checked out."""
+    """Mods of the current daily and the latest release, and whether you have them checked out."""
     cfg: Config = ctx.obj
     try:
-        entries, states = asyncio.run(_load_pack(cfg, refresh))
+        info, states = asyncio.run(_load_pack(cfg, refresh))
     except pack.PackError as e:
         err.print(f"[bold red]{e}")
         raise typer.Exit(1) from e
-    out.print(render.pack_table([e for e in entries if not missing or not e.local]))
+    entries = info.entries
+    out.print(render.pack_table([e for e in entries if not missing or not e.local], info.release))
+    out.print()
+    out.print(render.pack_header(info))
     counts = {s: sum(1 for e in entries if e.status == s) for s in ("cloned", "missing", "closed", "unknown")}
-    extra = sum(1 for st in states if not st.pack)
+    daily = sum(1 for e in entries if e.version)
+    extra = sum(1 for st in states if not st.in_pack)
     out.print(
-        f"\n[dim]{len(entries)} mods in daily · {counts['cloned']} cloned · {counts['missing']} missing · "
-        f"{counts['closed']} closed source · {counts['unknown']} source unknown · {extra} local repos not in the pack"
+        f"[dim]{daily} mods in daily, {len(entries) - daily} only in {info.release or 'the release'} · "
+        f"{counts['cloned']} cloned · {counts['missing']} missing · {counts['closed']} closed source · "
+        f"{counts['unknown']} source unknown · {extra} local repos not in the pack"
     )
 
 
@@ -238,12 +266,12 @@ def clone(
     cfg: Config = ctx.obj
 
     async def work() -> int:
-        entries = await pack.load(cfg)
+        entries = (await pack.load(cfg)).entries
         failed = 0
         for name in names:
             entry = pack.find(entries, name)
             if not entry:
-                err.print(f"[red]{name}: not a mod of the daily build")
+                err.print(f"[red]{name}: not a mod of the daily or the latest release")
                 failed += 1
                 continue
             with err.status(f"Cloning {entry.repo or entry.name}..."):
