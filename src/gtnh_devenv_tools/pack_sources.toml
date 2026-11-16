@@ -127,4 +127,7 @@ closed = true
 closed = true
 
 ["Compact Kinetic Generators"]
-closed = true
+repo = "PinkaLulan/CompactKineticGenerators"
+branch = "master"
+status = "legacy"
+note = "No commits since 2016 apart from an MIT licence added in March 2026."

@@ -236,3 +236,35 @@ async def test_lists_repos_and_pulls(sandbox, offline):
         await pilot.press("escape")
         await settle(app, pilot)
         assert app.needle == "" and app.query_one("#pack", DataTable).row_count == 2
+
+
+async def test_new_worktree_appears_on_rescan_under_its_repo(sandbox, offline):
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(sandbox.root / "second"))
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        table = app.query_one("#repos", DataTable)
+        assert table.row_count == 2
+
+        sandbox.git(sandbox.work, "worktree", "add", "-b", "algent/zz", str(sandbox.root / "zz-tree"))
+        await pilot.press("r")
+        await settle(app, pilot)
+        names = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        assert names == ["repo", "↳ zz-tree (repo)", "second"]  # under its repo, not at the end
+
+
+async def test_footer_follows_the_view(sandbox, offline):
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+
+        def shown() -> set[str]:
+            return {binding.binding.description for binding in app.screen.active_bindings.values() if binding.enabled}
+
+        assert {"Fetch all", "Sort", "Web"} <= shown() and not {"Clone", "Team reviews"} & shown()
+        app.query_one(Tabs).active = "view-pack"
+        await settle(app, pilot)
+        assert "Clone" in shown() and not {"Fetch all", "Sort", "Team reviews"} & shown()
+        app.query_one(Tabs).active = "view-reviews"
+        await settle(app, pilot)
+        assert "Team reviews" in shown() and not {"Fetch all", "Clone"} & shown()

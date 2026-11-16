@@ -31,12 +31,13 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "pack": ("Pack", None),
 }
 SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
-    "name": ("name", lambda st: st.name.lower()),
+    "name": ("name", ops.by_repo),
     "recent": ("last commit", lambda st: -(st.date.timestamp() if st.date else 0)),
     "behind": ("most behind", lambda st: -(st.behind + st.main_behind)),
     "branch": ("off main first", lambda st: (not st.off_main, (st.head or "").lower())),
 }
 HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
+REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup", "sort"}  # hidden on the Reviews and Pack tabs
 TABLES = {"pack": "#pack", "reviews": "#reviews"}  # views with their own table; the rest share #repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
@@ -253,12 +254,14 @@ class ExtrasMenu(MenuScreen):
         lines = [Text(f"Root: {cfg.root}", "dim"), Text(f"Config: {config.config_path()}", "dim")]
         if info:
             lines.append(render.pack_header(info))
+        closed = sum(1 for entry in info.entries if entry.closed) if info else 0
         actions = [
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
+            ("j", "jars", f"Download closed-source jars ({closed})", None if closed else "pack data not loaded"),
         ]
         super().__init__(Text("Extras", "bold"), actions, Group(*lines))
 
@@ -274,12 +277,12 @@ class RepoApp(App[None]):
         Binding("r", "rescan", "Rescan"),
         Binding("slash", "filter", "Filter"),
         Binding("o", "open_ide", "IDE"),
-        Binding("g", "open_web", "GitHub"),
+        Binding("g", "open_web", "Web"),
         Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
         Binding("s", "sort", "Sort"),
-        Binding("t", "toggle_team", "Team reviews", show=False),
+        Binding("t", "toggle_team", "Team reviews"),
         Binding("x", "extras", "Extras"),
         Binding("C", "open_folder('config')", "Config dir", show=False),
         Binding("L", "open_folder('logs')", "Logs dir", show=False),
@@ -465,7 +468,7 @@ class RepoApp(App[None]):
                 table.update_cell(key, column, cell, update_width=True)
 
     def _refresh(self) -> None:
-        states = sorted(self.states.values(), key=lambda st: st.name.lower())
+        states = sorted(self.states.values(), key=ops.by_repo)
         states.sort(key=SORTS[self.sort][1])  # stable, so ties stay in name order
         special = {"pack": len(self.entries), "reviews": sum(1 for item in self.reviews if item.direct)}
         for key, (label, wanted) in VIEWS.items():
@@ -565,7 +568,20 @@ class RepoApp(App[None]):
             self.query_one(table_id).display = self.view == view
         if not isinstance(self.focused, Input):
             self._table().focus()
+        self.refresh_bindings()
         self._refresh()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Keep the footer to what works in the current view."""
+        if action in REPO_ONLY_ACTIONS:
+            return self.view not in TABLES
+        if action == "clone":
+            return self.view == "pack"
+        if action == "toggle_team":
+            return self.view == "reviews"
+        if action == "open_ide":
+            return self.view != "reviews" or self._selected_repo() is not None
+        return True
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.needle = event.value.strip().lower()
@@ -657,6 +673,13 @@ class RepoApp(App[None]):
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
+        elif choice == "jars":
+            folder = self.cfg.root / pack.JAR_FOLDER
+            self.notify("Downloading closed-source jars...")
+            report = await pack.download_closed(self.entries, folder)
+            for line in report.failed:
+                self.notify(line, severity="error")
+            self.notify(f"{report.summary} in {folder}")
         elif choice == "unhide":
             # Number keys pick a repo; beyond nine, use the arrows.
             names = self.cfg.hidden

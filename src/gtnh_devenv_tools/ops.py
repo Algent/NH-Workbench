@@ -20,6 +20,11 @@ def discover(cfg: Config) -> list[Path]:
     return sorted((p for p in found if not cfg.repo(p.name).ignore), key=lambda p: p.name.lower())
 
 
+def by_repo(st: RepoState) -> tuple[str, bool, str]:
+    """Sort key by name that keeps linked working trees right under the repo they belong to."""
+    return (st.repo_root.name.lower(), st.worktree_of is not None, st.name.lower())
+
+
 def group_of(cfg: Config, st: RepoState) -> str:
     explicit = cfg.repo(st.name).group
     if explicit:

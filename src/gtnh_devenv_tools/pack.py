@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,10 +30,21 @@ class PackError(Exception):
     pass
 
 
+JAR_FOLDER = "_GTNH_Closed_Source"
+_JAR_KEYS = ("version_tag", "filename", "download_url")
+
+
+def _slim_mod(mod: dict) -> dict:
+    slim = {k: mod.get(k) for k in _SLIM_KEYS}
+    if mod.get("source"):  # hosted outside GitHub: remember where each version's jar comes from
+        slim["versions"] = [{k: v.get(k) for k in _JAR_KEYS} for v in mod.get("versions") or []]
+    return slim
+
+
 def _slim_assets(data: dict) -> dict:
     # The asset index is ~16 MB because of per-version changelogs; keep only what is used here.
     return {
-        "mods": [{k: mod.get(k) for k in _SLIM_KEYS} for mod in data["mods"]],
+        "mods": [_slim_mod(mod) for mod in data["mods"]],
         "latest_daily": data.get("latest_daily"),
         "latest_successful_daily": data.get("latest_successful_daily"),
     }
@@ -131,7 +143,65 @@ def build_entries(daily: dict, release: dict, assets: list[dict], sources: dict[
                 if key not in entries:
                     entries[key] = _new_entry(name, kind, by_name.get(key, {}), sources.get(key, {}))
                 setattr(entries[key], field_name, info.get("version", ""))
+    for key, entry in entries.items():
+        wanted = entry.version or entry.release_version
+        versions = by_name.get(key, {}).get("versions") or []
+        jar = next((v for v in versions if v.get("version_tag") == wanted and v.get("download_url")), None)
+        if jar:
+            entry.jar_url = jar["download_url"]
+            entry.jar_name = jar.get("filename") or jar["download_url"].rpartition("/")[2]
     return sorted(entries.values(), key=lambda e: e.name.lower())
+
+
+@dataclass
+class JarReport:
+    downloaded: list[str] = field(default_factory=list)
+    present: int = 0
+    failed: list[str] = field(default_factory=list)
+
+    @property
+    def summary(self) -> str:
+        parts = [f"{len(self.downloaded)} downloaded", f"{self.present} already there"]
+        return ", ".join(parts + ([f"{len(self.failed)} failed"] if self.failed else []))
+
+
+def _download_jar(entry: PackEntry, folder: Path) -> str:
+    """Returns "present", "downloaded" or an error text. Never overwrites an existing jar."""
+    dest = folder / Path(entry.jar_name).name
+    if dest.exists():
+        return "present"
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        req = urllib.request.Request(entry.jar_url, headers={"User-Agent": APP_NAME})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            tmp.write_bytes(resp.read())
+        tmp.replace(dest)
+    except (OSError, ValueError) as e:
+        tmp.unlink(missing_ok=True)
+        return str(e)
+    return "downloaded"
+
+
+async def download_closed(entries: Iterable[PackEntry], folder: Path) -> JarReport:
+    """Fetch the jars of mods without public source, from where DreamAssemblerXXL gets them."""
+    report = JarReport()
+    folder.mkdir(parents=True, exist_ok=True)
+    closed = [e for e in entries if e.closed]
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_download_jar, e, folder) if e.jar_url else _no_jar() for e in closed)
+    )
+    for entry, result in zip(closed, results, strict=True):
+        if result == "present":
+            report.present += 1
+        elif result == "downloaded":
+            report.downloaded.append(entry.jar_name)
+        else:
+            report.failed.append(f"{entry.name}: {result}")
+    return report
+
+
+async def _no_jar() -> str:
+    return "no download known for this version"
 
 
 def link_local(entries: Iterable[PackEntry], states: Iterable[RepoState]) -> None:
@@ -158,15 +228,16 @@ def link_local(entries: Iterable[PackEntry], states: Iterable[RepoState]) -> Non
 
 async def load(cfg: Config, force: bool = False) -> PackInfo:
     cache = cache_dir()
-    for stale in cache.glob("assets-slim.json*"):  # cache layout of earlier versions
-        stale.unlink(missing_ok=True)
+    for pattern in ("assets-slim.json*", "assets.json*"):  # cache layouts of earlier versions
+        for stale in cache.glob(pattern):
+            stale.unlink(missing_ok=True)
 
     def get(remote: str, local: str, transform: Callable | None = None):
         return asyncio.to_thread(_cached_json, _BASE + remote, cache / local, transform, force)
 
     daily, assets, modpack = await asyncio.gather(
         get("releases/manifests/daily.json", "daily.json"),
-        get("gtnh-assets.json", "assets.json", _slim_assets),
+        get("gtnh-assets.json", "assets-v2.json", _slim_assets),
         get("gtnh-modpack.json", "modpack.json"),
     )
     name = latest_release(modpack.get("releases", []))

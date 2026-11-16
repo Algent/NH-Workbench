@@ -371,3 +371,45 @@ async def test_graphql_retries_once_but_not_without_gh(monkeypatch):
 
     monkeypatch.setattr(github, "run", missing)
     assert await github._graphql("query { x }") == (None, "gh CLI not found") and len(calls) == 1
+
+
+async def test_closed_source_jars_are_downloaded_once(tmp_path):
+    jar = tmp_path / "served" / "Thaumcraft-1.7.10-4.2.3.5.jar"
+    jar.parent.mkdir()
+    jar.write_bytes(b"jar bytes")
+    manifest = {"external_mods": {"Thaumcraft": {"version": "4.2.3.5"}, "Witchery": {"version": "0.24.1"}}}
+    release = {"external_mods": {"Open": {"version": "1"}}}
+    assets = [
+        {
+            "name": "Thaumcraft",
+            "versions": [
+                {"version_tag": "4.2.3.4", "filename": "old.jar", "download_url": "file:///nowhere/old.jar"},
+                {"version_tag": "4.2.3.5", "filename": jar.name, "download_url": jar.as_uri()},
+            ],
+        },
+        {"name": "Witchery", "versions": [{"version_tag": "0.24.0", "filename": "w.jar", "download_url": "x"}]},
+        {"name": "Open", "versions": [{"version_tag": "1", "filename": "open.jar", "download_url": jar.as_uri()}]},
+    ]
+    sources = {"thaumcraft": {"closed": True}, "witchery": {"closed": True}}
+    entries = pack.build_entries(manifest, release, assets, sources)
+    by_name = {e.name: e for e in entries}
+    assert by_name["Thaumcraft"].jar_name == jar.name and by_name["Witchery"].jar_url == ""
+
+    folder = tmp_path / "root" / pack.JAR_FOLDER
+    report = await pack.download_closed(entries, folder)
+    assert report.downloaded == [jar.name] and report.present == 0
+    assert report.failed == ["Witchery: no download known for this version"]
+    assert (folder / jar.name).read_bytes() == b"jar bytes" and not (folder / "open.jar").exists()
+
+    (folder / jar.name).write_bytes(b"kept")
+    report = await pack.download_closed(entries, folder)
+    assert (report.downloaded, report.present) == ([], 1) and (folder / jar.name).read_bytes() == b"kept"
+    assert list(folder.glob("*.part")) == []
+
+
+def test_slim_assets_keeps_jar_locations_for_external_mods_only():
+    version = {"version_tag": "1", "filename": "a.jar", "download_url": "u", "changelog": "long text"}
+    data = {"mods": [{"name": "Ext", "source": "curse", "versions": [version]}, {"name": "Org", "versions": [version]}]}
+    ext, org = pack._slim_assets(data)["mods"]
+    assert ext["versions"] == [{"version_tag": "1", "filename": "a.jar", "download_url": "u"}]
+    assert "versions" not in org

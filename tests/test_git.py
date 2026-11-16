@@ -335,3 +335,12 @@ async def test_linked_worktree_skips_main_held_elsewhere(sandbox):
     wt = await ops.scan_repo(sandbox.cfg, linked)
     outcome = await git.safe_pull(wt)
     assert (outcome.kind, outcome.text) == ("current", "master lives in repo")
+
+
+def test_parse_worktrees_ignores_stale_entries(tmp_path):
+    main = tmp_path / "repo"
+    text = (
+        f"worktree {main.as_posix()}\nHEAD a1\nbranch refs/heads/master\n\n"
+        f"worktree {(tmp_path / 'gone').as_posix()}\nHEAD d4\ndetached\nprunable gitdir file points nowhere\n"
+    )
+    assert git.parse_worktrees(text, main) == ([], None)

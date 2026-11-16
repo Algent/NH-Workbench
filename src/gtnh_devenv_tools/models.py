@@ -164,6 +164,8 @@ class PackEntry:
     branch: str | None = None
     dev_status: str = ""  # active | passive | legacy, for sources maintained outside the org
     note: str = ""
+    jar_name: str = ""  # file DreamAssemblerXXL ships for the version in use, for mods without source
+    jar_url: str = ""
     closed: bool = False
     private: bool = False
     license: str | None = None

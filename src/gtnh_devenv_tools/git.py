@@ -107,7 +107,8 @@ def parse_worktrees(text: str, own: Path) -> tuple[list[Worktree], Path | None]:
     trees: list[Worktree] = []
     for block in text.strip().split("\n\n"):
         fields = dict(line.partition(" ")[::2] for line in block.splitlines())
-        if "worktree" in fields and "bare" not in fields:
+        # "prunable" marks a leftover entry whose folder is gone.
+        if "worktree" in fields and "bare" not in fields and "prunable" not in fields:
             branch = fields.get("branch", "").removeprefix("refs/heads/") or None
             trees.append(Worktree(Path(fields["worktree"]), branch))
     if not trees:

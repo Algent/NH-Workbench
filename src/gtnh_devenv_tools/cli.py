@@ -53,7 +53,8 @@ async def _each(cfg: Config, label: str, worker: Callable[[Path], Awaitable[Repo
     columns = (TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn())
     with Progress(*columns, console=err, transient=True) as progress:
         task = progress.add_task(label, total=len(paths))
-        return await ops.run_all(paths, worker, cfg.concurrency, lambda _: progress.advance(task))
+        states = await ops.run_all(paths, worker, cfg.concurrency, lambda _: progress.advance(task))
+    return sorted(states, key=ops.by_repo)
 
 
 def _show(states: list[RepoState], shown: list[RepoState] | None = None, info: PackInfo | None = None) -> None:
@@ -273,6 +274,29 @@ def pack_command(
         f"{counts['cloned']} cloned · {counts['missing']} missing · {counts['closed']} closed source · "
         f"{counts['unknown']} source unknown · {extra} local repos not in the pack"
     )
+
+
+@app.command()
+def jars(ctx: typer.Context) -> None:
+    """Download the jars of closed-source pack mods into _GTNH_Closed_Source under the root."""
+    cfg: Config = ctx.obj
+
+    async def work() -> pack.JarReport:
+        info = await pack.load(cfg)
+        with err.status("Downloading jars..."):
+            return await pack.download_closed(info.entries, cfg.root / pack.JAR_FOLDER)
+
+    try:
+        report = asyncio.run(work())
+    except pack.PackError as e:
+        err.print(f"[bold red]{e}")
+        raise typer.Exit(1) from e
+    for name in report.downloaded:
+        out.print(f"[green]downloaded[/] {name}")
+    for line in report.failed:
+        out.print(f"[red]failed[/] {line}")
+    out.print(f"[dim]{report.summary} in {cfg.root / pack.JAR_FOLDER}")
+    raise typer.Exit(1 if report.failed else 0)
 
 
 @app.command()

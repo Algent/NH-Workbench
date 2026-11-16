@@ -78,6 +78,12 @@ A repo inside a subfolder of the root (for example `IdeaProjects\_External\Forge
 subfolder name as its group. `group`, `tracked_branch` and `ignore` can be set per repo in the config,
 see `config.example.toml`.
 
+## Closed-source mods
+
+`gtnh-dev jars` (or Extras → "Download closed-source jars") fetches the jar of every pack mod without
+public source into `_GTNH_Closed_Source` under the root, from where DreamAssemblerXXL gets it. Jars
+already there are left alone.
+
 ## Forks and worktrees
 
 - A checkout whose `origin` is a fork kept only to push branches (PRs go to another remote's repo) is
