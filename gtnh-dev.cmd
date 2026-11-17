@@ -1,5 +1,6 @@
 @echo off
 rem Starts the gtnh-dev terminal UI. Arguments are passed through, e.g. gtnh-dev.cmd status
+title GTNH Dev
 cd /d "%~dp0"
 rem A copy that is still running locks files uv wants to replace: start with what is installed then.
 uv sync --quiet 2>nul || echo Could not update the environment, another copy may still be running. Starting anyway.

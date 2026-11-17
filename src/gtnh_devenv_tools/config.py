@@ -57,6 +57,11 @@ class Config:
     def hidden(self) -> list[str]:
         return sorted(name for name, repo in self.repos.items() if repo.ignore)
 
+    @property
+    def kept(self) -> list[tuple[str, str]]:
+        """(repo, branch) pairs protected from cleanup."""
+        return sorted((name, br) for name, repo in self.repos.items() for br in repo.keep_branches)
+
 
 def config_path() -> Path:
     return Path(platformdirs.user_config_dir(APP_NAME, appauthor=False, roaming=True)) / "config.toml"

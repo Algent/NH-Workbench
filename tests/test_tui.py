@@ -346,6 +346,18 @@ async def test_main_branch_and_auto_refresh_settings(sandbox, offline, monkeypat
         assert app.states[str(sandbox.work)].branch("1.7.10/develop").keep
         assert app.cfg.repo("repo").keep_branches == ("1.7.10/develop", "nope")
 
+        await pilot.press("x", "k")
+        await pilot.pause()
+        await pilot.press("2")  # sorted: ("repo", "1.7.10/develop"), ("repo", "nope")
+        await settle(app, pilot)
+        assert app.cfg.repo("repo").keep_branches == ("1.7.10/develop",)
+        await pilot.press("x", "k")
+        await pilot.pause()
+        await pilot.press("1")
+        await settle(app, pilot)
+        assert app.cfg.kept == [] and "keep_branches" not in cfg_file.read_text(encoding="utf-8")
+        assert not app.states[str(sandbox.work)].branch("1.7.10/develop").keep
+
         await pilot.press("x", "a")
         await pilot.pause()
         app.screen.query_one(Input).value = "soon"

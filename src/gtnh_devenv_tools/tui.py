@@ -284,6 +284,7 @@ class ExtrasMenu(MenuScreen):
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
+            ("k", "unkeep", f"Unprotect a kept branch ({len(cfg.kept)})", None if cfg.kept else "none protected"),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
             ("j", "jars", f"Download closed-source jars ({closed})", None if closed else "pack data not loaded"),
@@ -792,6 +793,16 @@ class RepoApp(App[None]):
             name = await self.push_screen_wait(MenuScreen(Text("Show which repo again?", "bold"), actions))
             if name:
                 self._save_setting(("repos", name, "ignore"), None)
+        elif choice == "unkeep":
+            kept = self.cfg.kept
+            actions = [
+                (str(i) if i < 10 else " ", str(i), f"{repo}  {br}", None) for i, (repo, br) in enumerate(kept, 1)
+            ]
+            picked = await self.push_screen_wait(MenuScreen(Text("Unprotect which branch?", "bold"), actions))
+            if picked:
+                repo, br = kept[int(picked) - 1]
+                rest = [b for b in self.cfg.repo(repo).keep_branches if b != br]
+                self._save_setting(("repos", repo, "keep_branches"), rest or None)
         elif choice == "auto":
             hint = "Minutes between automatic rescans, 0 to turn them off."
             value = await self.push_screen_wait(
