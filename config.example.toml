@@ -10,6 +10,7 @@
 [repos.ForgeEssentials]
 tracked_branch = "1.7.10/develop"      # the branch that counts as "main" here
 group = "reference"                    # override the automatic group
+# keep_branches = ["algent/java"]      # never deleted by the merged-branch cleanup
 
 [repos.SomeScratchRepo]
 ignore = true                          # never listed, fetched or pulled

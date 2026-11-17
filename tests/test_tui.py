@@ -338,6 +338,14 @@ async def test_main_branch_and_auto_refresh_settings(sandbox, offline, monkeypat
         await settle(app, pilot)
         assert app.states[str(sandbox.work)].tracked == "master"
 
+        await pilot.press("enter", "k")
+        await pilot.pause()
+        app.screen.query_one(Input).value = "1.7.10/develop, nope, 1.7.10/develop"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.states[str(sandbox.work)].branch("1.7.10/develop").keep
+        assert app.cfg.repo("repo").keep_branches == ("1.7.10/develop", "nope")
+
         await pilot.press("x", "a")
         await pilot.pause()
         app.screen.query_one(Input).value = "soon"

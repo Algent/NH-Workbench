@@ -21,6 +21,12 @@ class RepoConfig:
     tracked_branch: str | None = None
     ignore: bool = False
     group: str | None = None
+    keep_branches: tuple[str, ...] = ()  # never deleted by the cleanup
+
+
+def _repo_config(values: dict) -> RepoConfig:
+    keep = values.get("keep_branches", ())
+    return RepoConfig(**{**values, "keep_branches": tuple([keep] if isinstance(keep, str) else keep)})
 
 
 @dataclass
@@ -84,14 +90,14 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             refresh_minutes=max(0, int(data.get("refresh_minutes", 15))),
             prune=bool(data.get("prune", True)),
             ide_command=data.get("ide_command"),
-            repos={k.lower(): RepoConfig(**v) for k, v in data.get("repos", {}).items()},
+            repos={k.lower(): _repo_config(v) for k, v in data.get("repos", {}).items()},
             sources=sources,
         )
     except (TypeError, ValueError) as e:
         raise ConfigError(f'Invalid config "{path}": {e}') from e
 
 
-def save_setting(keys: tuple[str, ...], value: str | bool | int | None, path: Path | None = None) -> Path:
+def save_setting(keys: tuple[str, ...], value: str | bool | int | list | None, path: Path | None = None) -> Path:
     """Set (or with None, remove) one value in the config file, keeping its comments and layout."""
     path = path or config_path()
     try:

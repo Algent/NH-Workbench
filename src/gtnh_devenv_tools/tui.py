@@ -206,7 +206,8 @@ class PromptScreen(ModalScreen[str | None]):
 def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
     """(hotkey, id, label, reason it is unavailable) for the single-repo menu."""
     main = st.tracked or "main"
-    merged = sum(1 for b in st.extra_branches if b.name != st.head and b.pr and b.pr.state == "MERGED")
+    merged = sum(1 for b in st.extra_branches if b.name != st.head and not b.keep and b.pr and b.pr.state == "MERGED")
+    kept = sum(1 for b in st.branches if b.keep)
     pr = st.current.pr if st.current else None
     if not st.off_main:
         no_switch = f"already on {main}" if st.tracked else "no main branch known"
@@ -220,6 +221,7 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
         ("p", "pull", f"Pull: fast-forward {main} if safe", None),
         ("m", "main", f"Switch to {main} and pull", no_switch),
         ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
+        ("k", "keep", f"Protect branches from cleanup ({kept})", None),
         ("o", "ide", "Open in IntelliJ", None),
         ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
@@ -632,6 +634,17 @@ class RepoApp(App[None]):
             if branch and st.branch(branch) is None:
                 self.notify(f"No local branch {branch} yet: pull will say so until it exists", severity="warning")
             self._save_setting(("repos", st.name, "tracked_branch"), branch or None)
+        elif choice == "keep":
+            hint = "Branch names, separated by commas. Leave empty to protect none."
+            current = ", ".join(self.cfg.repo(st.name).keep_branches)
+            answer = await self.push_screen_wait(PromptScreen(f"Branches of {st.name} to keep", current, hint))
+            if answer is None:
+                return
+            names = list(dict.fromkeys(n.strip() for n in answer.split(",") if n.strip()))
+            missing = [n for n in names if st.branch(n) is None]
+            if missing:
+                self.notify(f"No local branch {', '.join(missing)}: saved anyway", severity="warning")
+            self._save_setting(("repos", st.name, "keep_branches"), names or None)
         elif choice == "group":
             hint = "Leave empty for the automatic group."
             group = await self.push_screen_wait(PromptScreen(f"Group for {st.name}", st.group, hint))
@@ -642,7 +655,7 @@ class RepoApp(App[None]):
             if await self.push_screen_wait(ConfirmScreen(f"Hide {st.name} from the tool?", body)):
                 self._save_setting(("repos", st.name, "ignore"), True)
 
-    def _save_setting(self, keys: tuple[str, ...], value: str | bool | int | None) -> None:
+    def _save_setting(self, keys: tuple[str, ...], value: str | bool | int | list | None) -> None:
         """Write one value to the config file, then reload it and rescan."""
         try:
             path = config.save_setting(keys, value)

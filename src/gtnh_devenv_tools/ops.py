@@ -53,6 +53,10 @@ async def run_all[T, R](
 async def scan_repo(cfg: Config, path: Path) -> RepoState:
     st = await git.read_state(path, cfg.repo(path.name).tracked_branch, cfg.slug_branches)
     st.group = group_of(cfg, st)
+    # Worktrees share their branches with the main checkout, so its protections apply too.
+    keep = set(cfg.repo(path.name).keep_branches) | set(cfg.repo(st.repo_root.name).keep_branches)
+    for br in st.branches:
+        br.keep = br.name in keep
     return st
 
 
@@ -147,7 +151,7 @@ async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[Re
         for br in st.branches:
             pr = br.pr
             in_use = br.name in (st.head, st.tracked) or st.checked_out_elsewhere(br.name)
-            if in_use or not pr or pr.state != "MERGED":
+            if in_use or br.keep or not pr or pr.state != "MERGED":
                 continue
             extra = 0
             if br.sha != pr.head_sha:

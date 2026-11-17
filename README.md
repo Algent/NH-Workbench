@@ -99,6 +99,8 @@ already there are left alone.
 ## Branch cleanup
 
 A branch is offered for deletion only when its PR is merged and every local commit is part of that PR.
+Branches listed in a repo's `keep_branches` (repo menu → "Protect branches from cleanup") are never
+offered, and show `(kept)` in branch lists.
 Deleted branches are listed with the command to restore them (the UI logs them to
 `%LOCALAPPDATA%\gtnh-devenv-tools\Cache\deleted-branches.log`).
 

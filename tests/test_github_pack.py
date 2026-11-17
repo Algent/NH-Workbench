@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from gtnh_devenv_tools import git, github, ops, pack, render
+from gtnh_devenv_tools.config import RepoConfig
 from gtnh_devenv_tools.models import Branch, PrInfo, RepoState
 
 
@@ -118,6 +119,13 @@ async def test_cleanup_candidates(sandbox):
     safe, kept = await ops.cleanup_candidates([st])
     assert sorted(br.name for _, br in safe) == ["behind-pr", "pushed"]
     assert [(br.name, extra) for _, br, extra in kept] == [("extra-work", 1)]
+
+    sandbox.cfg.repos["repo"] = RepoConfig(keep_branches=("pushed",))
+    st2 = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    for br in st2.branches:
+        br.pr = st.branch(br.name).pr
+    safe, _ = await ops.cleanup_candidates([st2])
+    assert [br.name for _, br in safe] == ["behind-pr"] and st2.branch("pushed").keep
 
 
 async def test_cleanup_fetches_pr_head_missing_locally(sandbox):

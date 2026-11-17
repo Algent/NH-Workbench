@@ -44,3 +44,12 @@ def test_refresh_minutes_default_and_bounds(tmp_path):
     assert config.load(tmp_path, path).refresh_minutes == 0
     path.write_text("refresh_minutes = 60\n", encoding="utf-8")
     assert config.load(tmp_path, path).refresh_minutes == 60
+
+
+def test_keep_branches_list_or_single_name(tmp_path):
+    path = tmp_path / "config.toml"
+    config.save_setting(("repos", "ForgeMultipart", "keep_branches"), ["algent/java", "old"], path)
+    path.write_text(path.read_text(encoding="utf-8") + '[repos.Other]\nkeep_branches = "solo"\n', encoding="utf-8")
+    cfg = config.load(tmp_path, path)
+    assert cfg.repo("forgemultipart").keep_branches == ("algent/java", "old")
+    assert cfg.repo("other").keep_branches == ("solo",)

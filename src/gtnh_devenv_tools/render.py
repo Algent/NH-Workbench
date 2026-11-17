@@ -187,6 +187,8 @@ def branch_row(st: RepoState, br: Branch, width: int = 60) -> list[Text]:
     elsewhere = st.checked_out_elsewhere(br.name)
     if elsewhere:
         name.append(f" (in {elsewhere.path.name})", "dim")
+    if br.keep:
+        name.append(" (kept)", "dim")
     detail = br.pr.title if br.pr else br.subject
     return [
         name,

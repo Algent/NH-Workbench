@@ -60,6 +60,7 @@ class Branch:
     date: datetime | None = None
     subject: str = ""
     pr: PrInfo | None = None
+    keep: bool = False  # protected from cleanup in the config
 
 
 @dataclass
