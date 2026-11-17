@@ -2,7 +2,7 @@
     height: 3;
 }
 
-#repos, #pack, #reviews {
+#repos, #pack, #reviews, #mine {
     height: 1fr;
 }
 
@@ -64,4 +64,13 @@ ConfirmScreen, MenuScreen {
     height: auto;
     max-height: 20;
     margin-bottom: 1;
+}
+
+#dialog-buttons {
+    height: auto;
+    align-horizontal: right;
+}
+
+#dialog-buttons Button {
+    margin-left: 2;
 }

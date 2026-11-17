@@ -1,4 +1,5 @@
 import asyncio
+import time
 import webbrowser
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -13,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
+from textual.widgets import Button, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
@@ -27,6 +28,7 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "dirty": ("Dirty", lambda st: st.dirty),
     "branches": ("Branches", lambda st: bool(st.extra_branches)),
     "other": ("Other", lambda st: st.group != "gtnh"),
+    "mine": ("My PRs", None),
     "reviews": ("Reviews", None),
     "pack": ("Pack", None),
 }
@@ -38,7 +40,8 @@ SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
 }
 HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
 REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup", "sort"}  # hidden on the Reviews and Pack tabs
-TABLES = {"pack": "#pack", "reviews": "#reviews"}  # views with their own table; the rest share #repos
+TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine"}  # views with their own table; the rest share #repos
+PR_VIEWS = ("reviews", "mine")  # views listing pull requests rather than repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
@@ -108,6 +111,16 @@ def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
     return Group(head, Text(item.pr.title), where, hint)
 
 
+def mine_detail(item: ReviewItem, local: tuple[RepoState, str] | None) -> RenderableType:
+    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr))
+    if local:
+        where = Text(f"branch {local[1]} in {local[0].path}", "green")
+    else:
+        where = Text("branch not checked out here", "dim")
+    hint = Text(f"{item.pr.url}   Enter or w: open in the browser", "dim")
+    return Group(head, Text(item.pr.title), where, hint)
+
+
 def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
     release = f"{info.release or 'release'} {entry.release_version or '—'}"
     versions = f"  {entry.kind}  daily {entry.version or '—'}  {release}"
@@ -138,6 +151,7 @@ def dialog_head(title: RenderableType) -> Horizontal:
 
 class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,q,escape", "answer(False)", "No")]
+    AUTO_FOCUS = "#no"  # Enter on its own must never confirm
 
     def __init__(self, title: str, body: RenderableType) -> None:
         super().__init__()
@@ -148,7 +162,13 @@ class ConfirmScreen(ModalScreen[bool]):
             yield dialog_head(self._title)
             with VerticalScroll(id="dialog-body"):
                 yield Static(self._body)
-            yield Static(Text.assemble(("y", "bold"), " yes    ", ("n", "bold"), " no"))
+            with Horizontal(id="dialog-buttons"):
+                yield Button("Yes (y)", id="yes", variant="warning")
+                yield Button("No (n)", id="no", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(event.button.id == "yes")
 
     def action_answer(self, value: bool) -> None:
         self.dismiss(value)
@@ -203,6 +223,7 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
         ("o", "ide", "Open in IntelliJ", None),
         ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
+        ("b", "main_branch", f"Set main branch (now {main})", None),
         ("u", "group", f"Set group (now {st.group})", None),
         ("h", "hide", "Hide this repo from the tool", None),
     ]
@@ -255,7 +276,9 @@ class ExtrasMenu(MenuScreen):
         if info:
             lines.append(render.pack_header(info))
         closed = sum(1 for entry in info.entries if entry.closed) if info else 0
+        every = f"every {cfg.refresh_minutes} min" if cfg.refresh_minutes else "off"
         actions = [
+            ("a", "auto", f"Auto-refresh interval (now {every})", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
@@ -303,6 +326,8 @@ class RepoApp(App[None]):
         self.entries: list[PackEntry] = []
         self.pack_info: PackInfo | None = None
         self.reviews: list[ReviewItem] = []
+        self.mine: list[ReviewItem] = []
+        self.last_loaded = time.monotonic()
         self.view = "all"
         self.needle = ""
         self.busy = ""
@@ -314,12 +339,18 @@ class RepoApp(App[None]):
         yield DataTable(id="repos", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="pack", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="mine", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(Tabs).can_focus = False
-        layout = (("#repos", REPO_COLUMNS), ("#pack", PACK_COLUMNS), ("#reviews", render.REVIEW_COLUMNS))
+        layout = (
+            ("#repos", REPO_COLUMNS),
+            ("#pack", PACK_COLUMNS),
+            ("#reviews", render.REVIEW_COLUMNS),
+            ("#mine", render.MINE_COLUMNS),
+        )
         for table_id, columns in layout:
             table = self.query_one(table_id, DataTable)
             for column in columns:
@@ -330,15 +361,32 @@ class RepoApp(App[None]):
         self.query_one("#repos").focus()
         self.sub_title = str(self.cfg.root)
         self.load_everything()
+        # Checked every minute, so a new interval set from Extras applies without a restart.
+        self.set_interval(60, self.auto_refresh)
+
+    def auto_refresh(self) -> None:
+        """Rescan like `r` does once the interval has passed, unless something else is going on."""
+        minutes = self.cfg.refresh_minutes
+        if not minutes or self.busy or self._modal():
+            return
+        if time.monotonic() - self.last_loaded >= minutes * 60:
+            self.load_everything()
 
     # --- data -----------------------------------------------------------------
 
     @work(exclusive=True, group="load")
     async def load_everything(self) -> None:
+        self.last_loaded = time.monotonic()
         if not await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), reset=True):
             return
         # Independent sources: none of them should hold the others up.
-        await asyncio.gather(self._load_prs(), self._load_reviews(quiet=True), self._load_pack())
+        await asyncio.gather(self._load_prs(), self._load_reviews(quiet=True), self._load_mine(), self._load_pack())
+
+    async def _load_mine(self) -> None:
+        items, error = await github.fetch_mine()
+        if items or not error:
+            self.mine = items
+            self._refresh()
 
     async def _load_prs(self) -> None:
         data = await github.fetch_prs(self.states.values())
@@ -437,15 +485,37 @@ class RepoApp(App[None]):
         if self.view == "pack":
             entry = self._selected_entry()
             return entry.local if entry else None
-        if self.view == "reviews":
+        if self.view in PR_VIEWS:
             item = self._selected_review()
-            slug = item.repo.lower() if item else None
-            return next((st for st in self.states.values() if (st.slug or "").lower() == slug), None)
+            return self._repo_for(item) if item else None
         return self.states.get(key) if key else None
 
     def _selected_review(self) -> ReviewItem | None:
+        """The highlighted pull request on the Reviews or My PRs tab."""
+        if self.view not in PR_VIEWS:
+            return None
         key = self._cursor_key()
-        return next((i for i in self.reviews if i.pr.url == key), None) if self.view == "reviews" else None
+        items = self.reviews if self.view == "reviews" else self.mine
+        return next((i for i in items if i.pr.url == key), None)
+
+    def _local_branch(self, item: ReviewItem) -> tuple[RepoState, str] | None:
+        """The checkout and local branch a pull request was opened from, when it is here."""
+        for st in self.states.values():
+            for br in st.branches:
+                if br.pr and br.pr.url == item.pr.url:
+                    return st, br.name
+        return None
+
+    def _repo_for(self, item: ReviewItem) -> RepoState | None:
+        local = self._local_branch(item)
+        if local:
+            return local[0]
+        wanted = item.repo.lower()
+        # Any remote counts: a PR to an upstream repo still belongs to the fork checked out here.
+        for st in sorted(self.states.values(), key=lambda s: s.worktree_of is not None):
+            if any((r.slug or "").lower() == wanted for r in st.remotes.values()) or (st.slug or "").lower() == wanted:
+                return st
+        return None
 
     def _selected_entry(self) -> PackEntry | None:
         key = self._cursor_key()
@@ -470,7 +540,11 @@ class RepoApp(App[None]):
     def _refresh(self) -> None:
         states = sorted(self.states.values(), key=ops.by_repo)
         states.sort(key=SORTS[self.sort][1])  # stable, so ties stay in name order
-        special = {"pack": len(self.entries), "reviews": sum(1 for item in self.reviews if item.direct)}
+        special = {
+            "pack": len(self.entries),
+            "reviews": sum(1 for item in self.reviews if item.direct),
+            "mine": len(self.mine),
+        }
         for key, (label, wanted) in VIEWS.items():
             count = special[key] if wanted is None else sum(1 for st in states if wanted(st))
             self.query_one(f"#view-{key}", Tab).label = f"{label} {count}"
@@ -478,6 +552,13 @@ class RepoApp(App[None]):
         if self.view == "reviews":
             shown = [i for i in self.reviews if self.needle in f"{i.repo} {i.pr.title} {i.author}".lower()]
             self._fill(self.query_one("#reviews", DataTable), [(i.pr.url, render.review_row(i)) for i in shown])
+        elif self.view == "mine":
+            shown = [i for i in self.mine if self.needle in f"{i.repo} {i.pr.title}".lower()]
+            rows = []
+            for item in shown:
+                local = self._local_branch(item)
+                rows.append((item.pr.url, render.mine_row(item, local[1] if local else "")))
+            self._fill(self.query_one("#mine", DataTable), rows)
         elif self.view == "pack":
             shown = [e for e in self.entries if self.needle in e.name.lower()]
             self._fill(self.query_one("#pack", DataTable), [(e.name, render.pack_row(e)) for e in shown])
@@ -493,7 +574,9 @@ class RepoApp(App[None]):
     def _update_detail(self) -> None:
         detail = self.query_one("#detail", Static)
         entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
-        if review:
+        if review and self.view == "mine":
+            detail.update(mine_detail(review, self._local_branch(review)))
+        elif review:
             detail.update(review_detail(review, st))
         elif entry and self.pack_info:
             detail.update(pack_detail(entry, self.pack_info))
@@ -515,7 +598,7 @@ class RepoApp(App[None]):
             self._refresh()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if self.view == "reviews":
+        if self.view in PR_VIEWS:
             self.action_open_web()
             return
         st = self._selected_repo()
@@ -540,6 +623,15 @@ class RepoApp(App[None]):
             self._open_web(st, None)
         elif choice == "folder":
             proc.open_path(st.path)
+        elif choice == "main_branch":
+            hint = "Leave empty to go back to the automatic choice."
+            current = self.cfg.repo(st.name).tracked_branch or ""
+            branch = await self.push_screen_wait(PromptScreen(f"Main branch for {st.name}", current, hint))
+            if branch is None:
+                return
+            if branch and st.branch(branch) is None:
+                self.notify(f"No local branch {branch} yet: pull will say so until it exists", severity="warning")
+            self._save_setting(("repos", st.name, "tracked_branch"), branch or None)
         elif choice == "group":
             hint = "Leave empty for the automatic group."
             group = await self.push_screen_wait(PromptScreen(f"Group for {st.name}", st.group, hint))
@@ -550,7 +642,7 @@ class RepoApp(App[None]):
             if await self.push_screen_wait(ConfirmScreen(f"Hide {st.name} from the tool?", body)):
                 self._save_setting(("repos", st.name, "ignore"), True)
 
-    def _save_setting(self, keys: tuple[str, ...], value: str | bool | None) -> None:
+    def _save_setting(self, keys: tuple[str, ...], value: str | bool | int | None) -> None:
         """Write one value to the config file, then reload it and rescan."""
         try:
             path = config.save_setting(keys, value)
@@ -580,7 +672,7 @@ class RepoApp(App[None]):
         if action == "toggle_team":
             return self.view == "reviews"
         if action == "open_ide":
-            return self.view != "reviews" or self._selected_repo() is not None
+            return self.view not in PR_VIEWS or self._selected_repo() is not None
         return True
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -687,6 +779,17 @@ class RepoApp(App[None]):
             name = await self.push_screen_wait(MenuScreen(Text("Show which repo again?", "bold"), actions))
             if name:
                 self._save_setting(("repos", name, "ignore"), None)
+        elif choice == "auto":
+            hint = "Minutes between automatic rescans, 0 to turn them off."
+            value = await self.push_screen_wait(
+                PromptScreen("Auto-refresh interval", str(self.cfg.refresh_minutes), hint)
+            )
+            if value is None:
+                return
+            if not value.isdigit():
+                self.notify(f"Not a number of minutes: {value}", severity="error")
+                return
+            self._save_setting(("refresh_minutes",), int(value))
         elif choice == "root":
             hint = "Folder that holds your checkouts."
             folder = await self.push_screen_wait(PromptScreen("Repo folder", str(self.cfg.root), hint))

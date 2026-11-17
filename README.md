@@ -60,6 +60,9 @@ Repos get a Daily and a Release column (`status --pack` on the command line), bo
 - `+N` after the released version: the repo's `release/<major>.<minor>.x` branch has N commits since that
   version's tag. The UI's detail pane lists them.
 
+The My PRs view lists your own open PRs across GitHub with review and CI state, and the local branch
+each one comes from when it is checked out here.
+
 The Reviews view lists open PRs that ask for your review personally. `t` there also loads the ones that
 reach you through a team (slower), and `t` again hides them.
 
@@ -67,9 +70,10 @@ reach you through a team (slower), and `t` again hides them.
 
 These write to the config file and keep its comments:
 
-- Extras (`x`) → change the repo folder.
-- A repo's menu (`Enter`) → set its group, or hide it from the tool. To show a hidden repo again, remove
-  its `ignore = true` line from the config file.
+- Extras (`x`) → change the repo folder, or the auto-refresh interval (default 15 minutes, 0 turns it
+  off). Auto-refresh rescans like `r`; it does not fetch.
+- A repo's menu (`Enter`) → set its main branch or its group, or hide it from the tool. Extras → "Show a
+  hidden repo again" undoes the hiding.
 
 ## Groups
 

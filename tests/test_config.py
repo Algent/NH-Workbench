@@ -35,3 +35,12 @@ def test_save_setting_refuses_broken_file(tmp_path):
     with pytest.raises(config.ConfigError):
         config.save_setting(("root",), "x", path)
     assert path.read_text(encoding="utf-8") == "this is = = not toml"
+
+
+def test_refresh_minutes_default_and_bounds(tmp_path):
+    path = tmp_path / "config.toml"
+    assert config.load(tmp_path, path).refresh_minutes == 15
+    path.write_text("refresh_minutes = -5\n", encoding="utf-8")
+    assert config.load(tmp_path, path).refresh_minutes == 0
+    path.write_text("refresh_minutes = 60\n", encoding="utf-8")
+    assert config.load(tmp_path, path).refresh_minutes == 60

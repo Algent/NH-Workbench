@@ -28,6 +28,7 @@ class Config:
     root: Path
     org: str = "GTNewHorizons"
     concurrency: int = 8
+    refresh_minutes: int = 15  # the UI rescans this often while it is open; 0 turns it off
     prune: bool = True
     ide_command: str | None = None
     repos: dict[str, RepoConfig] = field(default_factory=dict)
@@ -80,6 +81,7 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             root=Path(root or data.get("root") or Path.home() / "IdeaProjects").expanduser(),
             org=str(data.get("org", "GTNewHorizons")),
             concurrency=max(1, int(data.get("concurrency", 8))),
+            refresh_minutes=max(0, int(data.get("refresh_minutes", 15))),
             prune=bool(data.get("prune", True)),
             ide_command=data.get("ide_command"),
             repos={k.lower(): RepoConfig(**v) for k, v in data.get("repos", {}).items()},

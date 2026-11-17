@@ -192,21 +192,25 @@ async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
     return payload["data"], None
 
 
-def _review_query(qualifier: str, after: str | None = None) -> str:
-    # No CI rollup and small pages: the team search times out on GitHub's side otherwise.
-    fields = "number state isDraft reviewDecision title url headRefOid updatedAt"
-    fields += " repository { nameWithOwner } author { login }"
+_SEARCH_FIELDS = (
+    "number state isDraft reviewDecision title url headRefOid updatedAt repository { nameWithOwner } author { login }"
+)
+_CI_FIELDS = " commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+
+
+def _review_query(qualifier: str, after: str | None = None, fields: str = _SEARCH_FIELDS) -> str:
+    # No CI rollup by default, and small pages: the team review search times out on GitHub's side otherwise.
     cursor = f", after: {json.dumps(after)}" if after else ""
     search = f'search(query: "is:pr is:open archived:false {qualifier}", type: ISSUE, first: 50{cursor})'
     nodes = f"nodes {{ ... on PullRequest {{ {fields} }} }}"
     return f"query {{ {search} {{ pageInfo {{ hasNextPage endCursor }} {nodes} }} }}"
 
 
-async def _search_all(qualifier: str, pages: int = 4) -> tuple[list[dict], str | None]:
+async def _search_all(qualifier: str, pages: int = 4, fields: str = _SEARCH_FIELDS) -> tuple[list[dict], str | None]:
     nodes: list[dict] = []
     after = None
     for _ in range(pages):
-        data, error = await _graphql(_review_query(qualifier, after))
+        data, error = await _graphql(_review_query(qualifier, after, fields))
         if data is None:
             return nodes, error
         nodes += data["search"].get("nodes") or []
@@ -237,8 +241,19 @@ def parse_reviews(data: dict) -> list[ReviewItem]:
                 direct=node["url"] in direct,
             ),
         )
-    newest_first = sorted(items.values(), key=lambda i: i.updated.timestamp() if i.updated else 0, reverse=True)
-    return sorted(newest_first, key=lambda i: not i.direct)
+    return sorted(_newest_first(items.values()), key=lambda i: not i.direct)
+
+
+def _newest_first(items: Iterable[ReviewItem]) -> list[ReviewItem]:
+    return sorted(items, key=lambda i: i.updated.timestamp() if i.updated else 0, reverse=True)
+
+
+async def fetch_mine() -> tuple[list[ReviewItem], str | None]:
+    """Your own open PRs across GitHub, newest first, with their CI state."""
+    nodes, error = await _search_all("author:@me", fields=_SEARCH_FIELDS + _CI_FIELDS)
+    if error and not nodes:
+        return [], error
+    return _newest_first(parse_reviews({"direct": {"nodes": nodes}})), error
 
 
 async def fetch_reviews(team: bool = False) -> tuple[list[ReviewItem], str | None]:

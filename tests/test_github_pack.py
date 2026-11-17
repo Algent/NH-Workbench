@@ -413,3 +413,21 @@ def test_slim_assets_keeps_jar_locations_for_external_mods_only():
     ext, org = pack._slim_assets(data)["mods"]
     assert ext["versions"] == [{"version_tag": "1", "filename": "a.jar", "download_url": "u"}]
     assert "versions" not in org
+
+
+async def test_fetch_mine_asks_for_ci_and_sorts_newest_first(monkeypatch):
+    queries = []
+
+    async def fake_graphql(query, attempts=2):
+        queries.append(query)
+        nodes = [
+            node(1, updatedAt="2026-11-01T10:00:00Z", repository={"nameWithOwner": "o/a"}, author={"login": "me"}),
+            node(2, updatedAt="2026-11-10T10:00:00Z", repository={"nameWithOwner": "o/b"}, author={"login": "me"}),
+        ]
+        return {"search": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}, None
+
+    monkeypatch.setattr(github, "_graphql", fake_graphql)
+    items, error = await github.fetch_mine()
+    assert error is None and [i.pr.number for i in items] == [2, 1]
+    assert "author:@me" in queries[0] and "statusCheckRollup" in queries[0]
+    assert "statusCheckRollup" not in github._review_query("review-requested:@me")

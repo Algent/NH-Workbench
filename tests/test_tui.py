@@ -27,6 +27,12 @@ def offline(monkeypatch):
 
         return [item(1, True)] + ([item(2, False)] if team else []), None
 
+    async def fake_mine():
+        url = "https://example.invalid/pull/7"
+        pr = PrInfo(7, "OPEN", False, "REVIEW_REQUIRED", "FAILURE", "", url, "My change")
+        return [ReviewItem("o/m", pr, "me", None, True)], None
+
+    monkeypatch.setattr(github, "fetch_mine", fake_mine)
     monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(github, "fetch_prs", no_prs)
     monkeypatch.setattr(pack, "load", fake_pack)
@@ -172,7 +178,13 @@ async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch,
         await pilot.press("enter", "h")
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
-        await pilot.press("y")
+        await pilot.press("enter")  # the focused button is No: Enter alone never confirms
+        await settle(app, pilot)
+        assert not isinstance(app.screen, ConfirmScreen) and not config.load(sandbox.root, cfg_file).repo("repo").ignore
+
+        await pilot.press("enter", "h")
+        await pilot.pause()
+        await pilot.click("#yes")
         await settle(app, pilot)
         assert [st.name for st in app.states.values()] == ["second"]
         assert config.load(sandbox.root, cfg_file).repo("repo").ignore
@@ -268,3 +280,105 @@ async def test_footer_follows_the_view(sandbox, offline):
         app.query_one(Tabs).active = "view-reviews"
         await settle(app, pilot)
         assert "Team reviews" in shown() and not {"Fetch all", "Clone"} & shown()
+
+
+async def test_my_prs_tab(sandbox, offline, monkeypatch):
+    from rich.console import Console
+
+    from gtnh_devenv_tools import tui
+
+    opened = []
+    monkeypatch.setattr(tui.webbrowser, "open", opened.append)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        tabs = app.query_one(Tabs)
+        assert str(tabs.query_one("#view-mine").label) == "My PRs 1"
+        tabs.active = "view-mine"
+        await settle(app, pilot)
+        table = app.query_one("#mine", DataTable)
+        assert table.row_count == 1 and table.display
+        row = [str(cell) for cell in table.get_row_at(0)]
+        assert row[0] == "m" and "#7 open" in row[1] and "CI fail" in row[1] and row[3] == "—"
+        console = Console(width=200)
+        with console.capture() as captured:
+            console.print(app.query_one("#detail").content)
+        assert "branch not checked out here" in captured.get()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert opened == ["https://example.invalid/pull/7"]
+
+
+async def test_main_branch_and_auto_refresh_settings(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import config
+    from gtnh_devenv_tools.tui import PromptScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    sandbox.git(sandbox.work, "branch", "1.7.10/develop")
+
+    app = RepoApp(sandbox.cfg, root_override=sandbox.root)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter", "b")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)
+        app.screen.query_one(Input).value = "1.7.10/develop"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        st = app.states[str(sandbox.work)]
+        assert st.tracked == "1.7.10/develop" and st.off_main
+
+        await pilot.press("enter", "b")  # empty goes back to the automatic choice
+        await pilot.pause()
+        app.screen.query_one(Input).value = ""
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.states[str(sandbox.work)].tracked == "master"
+
+        await pilot.press("x", "a")
+        await pilot.pause()
+        app.screen.query_one(Input).value = "soon"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.cfg.refresh_minutes == 15  # rejected, default kept
+        await pilot.press("x", "a")
+        await pilot.pause()
+        app.screen.query_one(Input).value = "30"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.cfg.refresh_minutes == 30 and "refresh_minutes = 30" in cfg_file.read_text(encoding="utf-8")
+
+
+async def test_auto_refresh_waits_for_interval_and_quiet_moment(sandbox, offline):
+    from gtnh_devenv_tools.tui import ConfirmScreen
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert offline == [False] and app.cfg.refresh_minutes == 15
+
+        app.auto_refresh()  # interval not reached
+        await settle(app, pilot)
+        assert offline == [False]
+
+        app.last_loaded -= 16 * 60
+        app.push_screen(ConfirmScreen("Busy?", ""))
+        await pilot.pause()
+        app.auto_refresh()  # a dialog is open: wait
+        await settle(app, pilot)
+        assert offline == [False]
+        await pilot.press("n")
+        await pilot.pause()
+
+        app.auto_refresh()
+        await settle(app, pilot)
+        assert offline == [False, False]
+
+        app.cfg.refresh_minutes = 0
+        app.last_loaded -= 999 * 60
+        app.auto_refresh()  # turned off
+        await settle(app, pilot)
+        assert offline == [False, False]

@@ -220,6 +220,17 @@ def review_row(item: ReviewItem, width: int = 70) -> list[Text]:
 
 
 REVIEW_COLUMNS = ("For", "Repo", "PR", "Author", "Updated", "Title")
+MINE_COLUMNS = ("Repo", "PR", "Updated", "Local branch", "Title")
+
+
+def mine_row(item: ReviewItem, local: str = "", width: int = 70) -> list[Text]:
+    return [
+        Text(item.repo.partition("/")[2] or item.repo, "bold"),
+        pr_text(item.pr),
+        Text(ago(item.updated), "dim"),
+        Text(local, "yellow") if local else Text("—", "dim"),
+        Text(clip(item.pr.title, width)),
+    ]
 
 
 def reviews_table(items: Iterable[ReviewItem], width: int = 70) -> Table:
