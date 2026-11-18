@@ -148,7 +148,7 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 | `refresh_minutes` | `15` | The UI rescans this often (no fetch); `0` turns it off |
 | `concurrency` | `8` | Repos handled at the same time |
 | `prune` | `true` | Drop stale remote-tracking refs on fetch |
-| `ide_command` | found automatically | IntelliJ launcher |
+| `ide_command` | found automatically | IntelliJ launcher; `false` hides the IDE actions |
 
 Per repo, under `[repos.<folder name>]`: `tracked_branch` (what counts as main), `group`, `ignore` (hide it),
 `keep_branches`. All of these can also be set from the repo menu.
@@ -157,7 +157,8 @@ Per repo, under `[repos.<folder name>]`: `tracked_branch` (what counts as main),
 example `IdeaProjects/_External/ForgeEssentials`) takes the subfolder's name as its group.
 
 **IntelliJ** is found through `ide_command`, else a JetBrains Toolbox script (`idea`), else `idea` on PATH.
-When none works, `o` asks for the path and saves it.
+When none works, `o` asks for the path and saves it. Not using IntelliJ? Answer `off` there (or in Extras)
+and the IDE actions disappear.
 
 **Pack mods outside the org**: their source repo and branch are known for most of them; add or override
 one under `[pack.sources."<mod name>"]`.

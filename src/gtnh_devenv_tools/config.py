@@ -37,6 +37,7 @@ class Config:
     refresh_minutes: int = 15  # the UI rescans this often while it is open; 0 turns it off
     prune: bool = True
     ide_command: str | None = None
+    ide_off: bool = False  # ide_command = false: no IDE actions at all
     repos: dict[str, RepoConfig] = field(default_factory=dict)
     # external pack mod name (lower case) -> {repo, branch, closed}
     sources: dict[str, dict] = field(default_factory=dict)
@@ -94,7 +95,8 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             concurrency=max(1, int(data.get("concurrency", 8))),
             refresh_minutes=max(0, int(data.get("refresh_minutes", 15))),
             prune=bool(data.get("prune", True)),
-            ide_command=data.get("ide_command"),
+            ide_command=ide if isinstance(ide := data.get("ide_command"), str) and ide else None,
+            ide_off=ide is False,
             repos={k.lower(): _repo_config(v) for k, v in data.get("repos", {}).items()},
             sources=sources,
         )
@@ -140,6 +142,8 @@ def _toolbox_scripts() -> Path:
 
 def find_ide(cfg: Config, scripts: Path | None = None) -> str | None:
     """IntelliJ launcher: ide_command from the config, a Toolbox script, then whatever is on PATH."""
+    if cfg.ide_off:
+        return None
     if cfg.ide_command:
         return cfg.ide_command
     scripts = scripts or _toolbox_scripts()

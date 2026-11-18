@@ -227,7 +227,7 @@ class PromptScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
+def repo_actions(st: RepoState, ide_off: bool = False) -> list[tuple[str, str, str, str | None]]:
     """(hotkey, id, label, reason it is unavailable) for the single-repo menu."""
     main = st.tracked or "main"
     merged = sum(1 for b in st.extra_branches if b.name != st.head and not b.keep and b.pr and b.pr.state == "MERGED")
@@ -246,7 +246,7 @@ def repo_actions(st: RepoState) -> list[tuple[str, str, str, str | None]]:
         ("m", "main", f"Switch to {main} and pull", no_switch),
         ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
         ("k", "keep", f"Protect branches from cleanup ({kept})", None),
-        ("o", "ide", "Open in IntelliJ", None),
+        ("o", "ide", "Open in IntelliJ", "turned off in Extras" if ide_off else None),
         ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
         ("b", "main_branch", f"Set main branch (now {main})", None),
@@ -291,8 +291,8 @@ class MenuScreen(ModalScreen[str | None]):
 
 
 class RepoMenu(MenuScreen):
-    def __init__(self, st: RepoState) -> None:
-        super().__init__(Text.assemble((st.name, "bold"), "  ", render.branch_text(st)), repo_actions(st))
+    def __init__(self, st: RepoState, ide_off: bool = False) -> None:
+        super().__init__(Text.assemble((st.name, "bold"), "  ", render.branch_text(st)), repo_actions(st, ide_off))
         self._st = st
 
 
@@ -303,9 +303,10 @@ class ExtrasMenu(MenuScreen):
             lines.append(render.pack_header(info))
         closed = sum(1 for entry in info.entries if entry.closed) if info else 0
         every = f"every {cfg.refresh_minutes} min" if cfg.refresh_minutes else "off"
+        ide_now = "off" if cfg.ide_off else cfg.ide_command or "found automatically"
         actions = [
             ("a", "auto", f"Auto-refresh interval (now {every})", None),
-            ("i", "ide", f"IntelliJ launcher (now {cfg.ide_command or 'found automatically'})", None),
+            ("i", "ide", f"IntelliJ launcher (now {ide_now})", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
@@ -703,7 +704,7 @@ class RepoApp(App[None]):
 
     @work(group="dialog")
     async def _repo_menu(self, st: RepoState) -> None:
-        choice = await self.push_screen_wait(RepoMenu(st))
+        choice = await self.push_screen_wait(RepoMenu(st, self.cfg.ide_off))
         one = [st.path]
         if choice == "fetch":
             await self._batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)
@@ -789,7 +790,7 @@ class RepoApp(App[None]):
         if action == "reload_org":
             return self.view == "org"
         if action == "open_ide":
-            return self.view not in PR_VIEWS or self._selected_repo() is not None
+            return not self.cfg.ide_off and (self.view not in PR_VIEWS or self._selected_repo() is not None)
         return True
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -873,7 +874,7 @@ class RepoApp(App[None]):
 
     def action_open_ide(self) -> None:
         st = self._selected_repo()
-        if st:
+        if st and not self.cfg.ide_off:
             self._open_ide(st)
 
     @work(group="ide")
@@ -892,21 +893,32 @@ class RepoApp(App[None]):
         self.notify(f"Opening {st.name}")
 
     async def _ask_ide(self, why: str = "") -> str | None:
-        """Ask for the IntelliJ launcher and save it as ide_command. Returns it, or None when cancelled or cleared."""
-        hint = f"{why} Path to idea64.exe or an idea script, or a command on PATH. Empty: find it automatically."
-        current = self.cfg.ide_command or ""
+        """Ask for the IntelliJ launcher and save it as ide_command. Returns it, or None when cancelled or cleared.
+
+        "off" saves ide_command = false, which hides the IDE actions for people who do not use IntelliJ.
+        """
+        hint = (
+            f"{why} Path to idea64.exe or an idea script, or a command on PATH."
+            " Empty: find it automatically. off: no IDE actions."
+        )
+        current = "off" if self.cfg.ide_off else self.cfg.ide_command or ""
         answer = await self.push_screen_wait(PromptScreen("IntelliJ launcher", current, hint.strip()))
         if answer is None:
             return None
-        if answer and not config.runnable(answer):
-            self.notify(f"Not found: {answer}", severity="error")
+        off = answer.lower() == "off"
+        if answer and not off and not config.runnable(answer):
+            self.notify(f"Not found: {answer}. Type off if you do not use IntelliJ.", severity="error")
             return None
         try:
-            path = config.save_setting(("ide_command",), answer or None)
+            path = config.save_setting(("ide_command",), False if off else answer or None)
         except config.ConfigError as e:
             self.notify(str(e), severity="error")
             return None
-        self.cfg.ide_command = answer or None
+        self.cfg.ide_off, self.cfg.ide_command = off, None if off else answer or None
+        self.refresh_bindings()
+        if off:
+            self.notify("IDE actions turned off. Extras (x) turns them back on.")
+            return None
         self.notify(f"Saved to {path}")
         return answer or None
 

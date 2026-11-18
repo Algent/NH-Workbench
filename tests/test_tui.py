@@ -517,3 +517,56 @@ async def test_open_ide_asks_for_launcher_when_none_found(sandbox, offline, monk
         await pilot.press("o")  # known now: no question
         await settle(app, pilot)
         assert len(launched) == 2 and not isinstance(app.screen, PromptScreen)
+
+
+async def test_ide_can_be_turned_off(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import config, proc
+    from gtnh_devenv_tools.tui import PromptScreen, RepoMenu
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    monkeypatch.setattr(config, "_toolbox_scripts", lambda: tmp_path / "none")
+    monkeypatch.setattr(config.shutil, "which", lambda name: None)
+    launched = []
+    monkeypatch.setattr(proc, "launch", lambda *args: launched.append(args))
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+
+        def footer() -> set[str]:
+            return {b.binding.description for b in app.screen.active_bindings.values() if b.enabled}
+
+        assert "IDE" in footer()
+        await pilot.press("o")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)
+        app.screen.query_one(Input).value = "off"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.cfg.ide_off and "IDE" not in footer() and launched == []
+        loaded = config.load(sandbox.root, cfg_file)
+        assert loaded.ide_off and loaded.ide_command is None and config.find_ide(loaded) is None
+
+        await pilot.press("o")  # does nothing now, asks nothing
+        await pilot.pause()
+        assert not isinstance(app.screen, PromptScreen)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, RepoMenu)
+        await pilot.press("o")  # greyed out in the menu
+        await pilot.pause()
+        assert isinstance(app.screen, RepoMenu)
+        await pilot.press("q")
+        await pilot.pause()
+
+        await pilot.press("x", "i")  # back on: empty means find it automatically
+        await pilot.pause()
+        assert app.screen.query_one(Input).value == "off"
+        app.screen.query_one(Input).value = ""
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert not app.cfg.ide_off and "IDE" in footer()
+        assert "ide_command" not in cfg_file.read_text(encoding="utf-8")

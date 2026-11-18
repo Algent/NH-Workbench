@@ -6,7 +6,7 @@
 # refresh_minutes = 15                 # the UI rescans this often (no fetch), 0 turns it off
 # concurrency = 8                      # repos handled at the same time
 # prune = true                         # drop stale remote-tracking refs on fetch
-# ide_command = "C:/path/to/idea64.exe"
+# ide_command = "C:/path/to/idea64.exe"  # false: no IDE actions at all
 
 # Per repo, keyed by folder name.
 [repos.ForgeEssentials]
