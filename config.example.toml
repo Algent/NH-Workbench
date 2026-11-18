@@ -1,4 +1,5 @@
-# Copy to %APPDATA%\gtnh-devenv-tools\config.toml (everything is optional).
+# Copy to the config path from the README (Windows: %APPDATA%\gtnh-devenv-tools\config.toml,
+# Linux: ~/.config/gtnh-devenv-tools/config.toml). Everything is optional.
 
 # root = "C:/Users/you/IdeaProjects"   # folder holding the checkouts
 # org = "GTNewHorizons"                # repos of this org form the "gtnh" group, the rest is "other"

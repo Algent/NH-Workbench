@@ -128,12 +128,22 @@ def save_setting(keys: tuple[str, ...], value: str | bool | int | list | None, p
     return path
 
 
-def find_ide(cfg: Config) -> str | None:
+def _toolbox_scripts() -> Path:
+    """Where JetBrains Toolbox puts its launcher scripts (it calls them "shell scripts")."""
+    return Path(platformdirs.user_data_dir("JetBrains", appauthor=False, roaming=False)) / "Toolbox" / "scripts"
+
+
+def find_ide(cfg: Config, scripts: Path | None = None) -> str | None:
+    """IntelliJ launcher: ide_command from the config, a Toolbox script, then whatever is on PATH."""
     if cfg.ide_command:
         return cfg.ide_command
-    scripts = Path(os.environ.get("LOCALAPPDATA", "")) / "JetBrains" / "Toolbox" / "scripts"
+    scripts = scripts or _toolbox_scripts()
     if scripts.is_dir():
-        found = sorted(scripts.glob("idea*.cmd"))
+        wanted = {".cmd"} if os.name == "nt" else {"", ".sh"}
+        found = sorted(p for p in scripts.glob("idea*") if p.is_file() and p.suffix.lower() in wanted)
         if found:
             return str(found[0])
-    return shutil.which("idea64") or shutil.which("idea")
+    names = ("idea64", "idea")
+    if os.name != "nt":
+        names = ("idea", "idea.sh", "intellij-idea-ultimate", "intellij-idea-community")  # last two: snap packages
+    return next((found for name in names if (found := shutil.which(name))), None)

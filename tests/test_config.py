@@ -53,3 +53,19 @@ def test_keep_branches_list_or_single_name(tmp_path):
     cfg = config.load(tmp_path, path)
     assert cfg.repo("forgemultipart").keep_branches == ("algent/java", "old")
     assert cfg.repo("other").keep_branches == ("solo",)
+
+
+def test_find_ide_prefers_config_then_toolbox_script(tmp_path):
+    import os
+
+    cfg = config.Config(root=tmp_path)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "pycharm.cmd").write_text("")
+    (scripts / "pycharm").write_text("")
+    name = "idea1.cmd" if os.name == "nt" else "idea"
+    (scripts / name).write_text("")
+    (scripts / ("idea" if os.name == "nt" else "idea.cmd")).write_text("")  # the other system's script
+    assert config.find_ide(cfg, scripts) == str(scripts / name)
+    cfg.ide_command = "my-ide"
+    assert config.find_ide(cfg, scripts) == "my-ide"

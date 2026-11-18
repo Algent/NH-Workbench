@@ -462,7 +462,7 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
         assert org_searches == [sandbox.cfg.org]
         table = app.query_one("#org", DataTable)
         rows = {str(table.get_row_at(i)[2]).split()[0]: str(table.get_row_at(i)[0]) for i in range(table.row_count)}
-        assert rows == {"#1": "asked", "#7": "mine", "#21": "reviewed"}  # the draft is hidden
+        assert rows == {"#1": "requested", "#7": "author", "#21": "reviewed"}  # the draft is hidden
         assert str(tabs.query_one("#view-org").label) == "All PRs 3" and "no drafts" in app.sub_title
 
         await pilot.press("t")

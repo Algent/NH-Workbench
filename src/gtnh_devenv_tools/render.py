@@ -249,12 +249,12 @@ def mine_row(item: ReviewItem, local: str = "", width: int = 70) -> list[Text]:
     ]
 
 
-ORG_COLUMNS = ("Review", "Repo", "PR", "Size", "Author", "Updated", "Title")
-_MARKS = {"mine": "bold yellow", "asked": "bold green", "reviewed": "cyan"}
+ORG_COLUMNS = ("Involved", "Repo", "PR", "Size", "Author", "Updated", "Title")
+_MARKS = {"author": "bold yellow", "requested": "bold green", "reviewed": "cyan"}
 
 
 def org_row(item: ReviewItem, mark: str = "", width: int = 70) -> list[Text]:
-    """A PR of the org; mark says how it concerns you: mine, asked (your review is requested), reviewed."""
+    """A PR of the org; mark says how you are involved: author, requested (your review), reviewed."""
     return [
         Text(mark, _MARKS.get(mark, "dim")),
         Text(item.repo.partition("/")[2] or item.repo, "bold"),

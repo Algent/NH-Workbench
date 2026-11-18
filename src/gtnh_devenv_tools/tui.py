@@ -127,7 +127,7 @@ def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
 
 def org_detail(item: ReviewItem, mark: str, local: RepoState | None) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
-    concern = {"mine": "your PR", "asked": "your review is requested", "reviewed": "you reviewed it"}
+    concern = {"author": "your PR", "requested": "your review is requested", "reviewed": "you reviewed it"}
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
     if mark:
         where = Text.assemble((concern[mark], "bold"), "   ", where)
@@ -465,9 +465,9 @@ class RepoApp(App[None]):
     def _org_mark(self, item: ReviewItem) -> str:
         url = item.pr.url
         if any(i.pr.url == url for i in self.mine):
-            return "mine"
+            return "author"
         if any(i.pr.url == url for i in self.reviews):
-            return "asked"
+            return "requested"
         return "reviewed" if self.org and url in self.org.reviewed else ""
 
     async def _load_pack(self, force: bool = False) -> None:
