@@ -1,10 +1,13 @@
 import asyncio
 import json
 import re
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
+from .config import cache_dir
 from .models import Branch, PrInfo, Remote, RepoState, ReviewItem
 from .proc import run
 
@@ -199,6 +202,8 @@ _SEARCH_FIELDS = (
     " repository { nameWithOwner } author { login }"
 )
 _CI_FIELDS = " commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+# The review decision is what makes big searches time out on GitHub's side, so the org-wide one goes without.
+_ORG_FIELDS = _SEARCH_FIELDS.replace(" reviewDecision", "")
 
 
 def _review_query(qualifier: str, after: str | None = None, fields: str = _SEARCH_FIELDS) -> str:
@@ -269,6 +274,69 @@ async def fetch_reviews(team: bool = False) -> tuple[list[ReviewItem], str | Non
     # A failed team search still returns the direct requests.
     through_team, error = await _search_all("review-requested:@me")
     return parse_reviews({"direct": {"nodes": direct}, "team": {"nodes": through_team}}), error
+
+
+ORG_MAX_AGE = 30 * 60  # seconds before opening the All PRs tab searches again
+
+
+@dataclass
+class OrgPrs:
+    items: list[ReviewItem]
+    reviewed: set[str] = field(default_factory=set)  # URLs of the PRs you reviewed
+    fetched: float = 0.0  # time.time() of the search
+    error: str | None = None
+
+
+def _org_file() -> Path:
+    return cache_dir() / "org-prs.json"
+
+
+def _org_items(nodes: list[dict]) -> list[ReviewItem]:
+    return _newest_first(parse_reviews({"direct": {"nodes": nodes}}))
+
+
+def cached_org(org: str) -> OrgPrs | None:
+    """The last org search saved on disk, if it was for this org."""
+    try:
+        data = json.loads(_org_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("org") != org:
+        return None
+    return OrgPrs(_org_items(data.get("nodes") or []), set(data.get("reviewed") or []), float(data.get("fetched") or 0))
+
+
+def _created_ranges(today: date, edges: tuple[int, ...] = (7, 14, 30, 60, 120)) -> list[str]:
+    """Search qualifiers splitting PRs by creation date (days ago), without gaps or overlaps."""
+    days = [today - timedelta(d) for d in edges]
+    ranges = [f"created:>={days[0]}"]
+    ranges += [f"created:{start}..{end - timedelta(1)}" for start, end in zip(days[1:], days, strict=False)]
+    return ranges + [f"created:<{days[-1]}"]
+
+
+async def fetch_org(org: str) -> OrgPrs:
+    """Every open PR in the org, and which of them you reviewed. Saved on disk.
+
+    Paging through one big search takes a minute, so it runs as one search per creation-date range, in parallel.
+    """
+    searches = [_search_all(f"org:{org} {r}", pages=20, fields=_ORG_FIELDS) for r in _created_ranges(date.today())]
+    *parts, (reviewed, _) = await asyncio.gather(
+        *searches, _search_all(f"org:{org} reviewed-by:@me", pages=4, fields="url")
+    )
+    by_url = {n["url"]: n for found, _ in parts for n in found if n and n.get("url")}
+    nodes = list(by_url.values())
+    error = next((e for _, e in parts if e), None)
+    urls = {n["url"] for n in reviewed if n and n.get("url")}
+    result = OrgPrs(_org_items(nodes), urls, time.time(), error)
+    if nodes and not error:
+        try:
+            path = _org_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"org": org, "fetched": result.fetched, "nodes": nodes, "reviewed": sorted(urls)}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            pass  # the list still shows, it just is not kept for the next start
+    return result
 
 
 def attach(states: Iterable[RepoState], data: PrData) -> None:

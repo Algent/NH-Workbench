@@ -2,7 +2,7 @@ import asyncio
 import time
 import webbrowser
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Group, RenderableType
@@ -30,6 +30,7 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "other": ("Other", lambda st: st.group != "gtnh"),
     "mine": ("My PRs", None),
     "reviews": ("Reviews", None),
+    "org": ("All PRs", None),
     "pack": ("Pack", None),
 }
 SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
@@ -48,8 +49,9 @@ PR_SORTS: dict[str, tuple[str, Callable[[ReviewItem], object] | None]] = {
 }
 PR_HEADER_SORT = {"Updated": "updated", "Size": "small", "Repo": "repo"}
 REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup"}  # hidden on the Reviews and Pack tabs
-TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine"}  # views with their own table; the rest share #repos
-PR_VIEWS = ("reviews", "mine")  # views listing pull requests rather than repos
+# views with their own table; the rest share #repos
+TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine", "org": "#org"}
+PR_VIEWS = ("reviews", "mine", "org")  # views listing pull requests rather than repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
@@ -120,6 +122,16 @@ def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
     hint = Text(f"{item.pr.url}   Enter or w: open in the browser   t: show or hide team requests", "dim")
+    return Group(head, Text(item.pr.title), where, hint)
+
+
+def org_detail(item: ReviewItem, mark: str, local: RepoState | None) -> RenderableType:
+    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
+    concern = {"mine": "your PR", "asked": "your review is requested", "reviewed": "you reviewed it"}
+    where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
+    if mark:
+        where = Text.assemble((concern[mark], "bold"), "   ", where)
+    hint = Text(f"{item.pr.url}   Enter or w: open   t: show or hide drafts   r: search again", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
@@ -313,6 +325,7 @@ class RepoApp(App[None]):
         Binding("F", "fetch(True)", "Fetch one", show=False),
         Binding("P", "pull(True)", "Pull one", show=False),
         Binding("r", "rescan", "Rescan"),
+        Binding("r", "reload_org", "Search again"),
         Binding("slash", "filter", "Filter"),
         Binding("o", "open_ide", "IDE"),
         Binding("w", "open_web", "Web"),
@@ -321,6 +334,7 @@ class RepoApp(App[None]):
         Binding("c", "clone", "Clone"),
         Binding("s", "sort", "Sort"),
         Binding("t", "toggle_team", "Team reviews"),
+        Binding("t", "toggle_drafts", "Drafts"),
         Binding("x", "extras", "Extras"),
         Binding("C", "open_folder('config')", "Config dir", show=False),
         Binding("L", "open_folder('logs')", "Logs dir", show=False),
@@ -343,6 +357,8 @@ class RepoApp(App[None]):
         self.pack_info: PackInfo | None = None
         self.reviews: list[ReviewItem] = []
         self.mine: list[ReviewItem] = []
+        self.org: github.OrgPrs | None = None  # loaded the first time the All PRs tab opens
+        self.org_drafts = False
         self.last_loaded = time.monotonic()
         self.view = "all"
         self.needle = ""
@@ -357,6 +373,7 @@ class RepoApp(App[None]):
         yield DataTable(id="pack", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="mine", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="org", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
         yield Footer()
 
@@ -367,6 +384,7 @@ class RepoApp(App[None]):
             ("#pack", PACK_COLUMNS),
             ("#reviews", render.REVIEW_COLUMNS),
             ("#mine", render.MINE_COLUMNS),
+            ("#org", render.ORG_COLUMNS),
         )
         for table_id, columns in layout:
             table = self.query_one(table_id, DataTable)
@@ -422,6 +440,35 @@ class RepoApp(App[None]):
         if items or not error:
             self.reviews = items
             self._refresh()
+
+    def _open_org(self) -> None:
+        """Show the saved org search at once; search again only when it is missing or old."""
+        if self.org is None:
+            self.org = github.cached_org(self.cfg.org)
+        if self.org is None or time.time() - self.org.fetched > github.ORG_MAX_AGE:
+            self.reload_org()
+
+    @work(group="org", exclusive=True)
+    async def reload_org(self) -> None:
+        self.notify(f"Searching all open PRs of {self.cfg.org}, this takes a while...")
+        found = await github.fetch_org(self.cfg.org)
+        if found.error:
+            self.notify(f"Org PRs: {found.error}", severity="warning")
+        if found.items or not found.error:
+            self.org = found
+            self._refresh()
+
+    def _org_shown(self) -> list[ReviewItem]:
+        items = self.org.items if self.org else []
+        return items if self.org_drafts else [i for i in items if not i.pr.draft]
+
+    def _org_mark(self, item: ReviewItem) -> str:
+        url = item.pr.url
+        if any(i.pr.url == url for i in self.mine):
+            return "mine"
+        if any(i.pr.url == url for i in self.reviews):
+            return "asked"
+        return "reviewed" if self.org and url in self.org.reviewed else ""
 
     async def _load_pack(self, force: bool = False) -> None:
         try:
@@ -513,7 +560,7 @@ class RepoApp(App[None]):
         if self.view not in PR_VIEWS:
             return None
         key = self._cursor_key()
-        items = self.reviews if self.view == "reviews" else self.mine
+        items = {"reviews": self.reviews, "mine": self.mine, "org": self.org.items if self.org else []}[self.view]
         return next((i for i in items if i.pr.url == key), None)
 
     def _local_branch(self, item: ReviewItem) -> tuple[RepoState, str] | None:
@@ -562,10 +609,11 @@ class RepoApp(App[None]):
             "pack": len(self.entries),
             "reviews": sum(1 for item in self.reviews if item.direct),
             "mine": len(self.mine),
+            "org": len(self._org_shown()) if self.org else None,  # not searched yet
         }
         for key, (label, wanted) in VIEWS.items():
             count = special[key] if wanted is None else sum(1 for st in states if wanted(st))
-            self.query_one(f"#view-{key}", Tab).label = f"{label} {count}"
+            self.query_one(f"#view-{key}", Tab).label = label if count is None else f"{label} {count}"
 
         if self.view == "reviews":
             shown = self._pr_items(self.reviews)
@@ -577,6 +625,10 @@ class RepoApp(App[None]):
                 local = self._local_branch(item)
                 rows.append((item.pr.url, render.mine_row(item, local[1] if local else "")))
             self._fill(self.query_one("#mine", DataTable), rows)
+        elif self.view == "org":
+            shown = self._pr_items(self._org_shown())
+            rows = [(i.pr.url, render.org_row(i, self._org_mark(i))) for i in shown]
+            self._fill(self.query_one("#org", DataTable), rows)
         elif self.view == "pack":
             shown = [e for e in self.entries if self.needle in e.name.lower()]
             self._fill(self.query_one("#pack", DataTable), [(e.name, render.pack_row(e)) for e in shown])
@@ -587,6 +639,10 @@ class RepoApp(App[None]):
         if not self.busy:
             if self.view in PR_VIEWS:
                 order = "" if self.pr_sort == "updated" else f"  ·  PRs sorted by {PR_SORTS[self.pr_sort][0]}"
+                if self.view == "org" and self.org:
+                    when = datetime.fromtimestamp(self.org.fetched, UTC) if self.org.fetched else None
+                    drafts = "with drafts" if self.org_drafts else "no drafts"
+                    order += f"  ·  {self.cfg.org} PRs as of {render.ago(when) or 'now'} ago, {drafts}"
             else:
                 order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
             self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
@@ -608,6 +664,8 @@ class RepoApp(App[None]):
         entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
         if review and self.view == "mine":
             detail.update(mine_detail(review, self._local_branch(review)))
+        elif review and self.view == "org":
+            detail.update(org_detail(review, self._org_mark(review), st))
         elif review:
             detail.update(review_detail(review, st))
         elif entry and self.pack_info:
@@ -709,6 +767,8 @@ class RepoApp(App[None]):
         if not isinstance(self.focused, Input):
             self._table().focus()
         self.refresh_bindings()
+        if self.view == "org":
+            self._open_org()
         self._refresh()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -721,6 +781,12 @@ class RepoApp(App[None]):
             return self.view == "pack"
         if action == "toggle_team":
             return self.view == "reviews"
+        if action == "toggle_drafts":
+            return self.view == "org"
+        if action == "rescan":
+            return self.view != "org"
+        if action == "reload_org":
+            return self.view == "org"
         if action == "open_ide":
             return self.view not in PR_VIEWS or self._selected_repo() is not None
         return True
@@ -778,6 +844,15 @@ class RepoApp(App[None]):
         if self.team_reviews:
             self.notify("Loading team review requests, this takes a few seconds...")
         await self._load_reviews()
+
+    def action_toggle_drafts(self) -> None:
+        if not self._modal() and self.view == "org":
+            self.org_drafts = not self.org_drafts
+            self._refresh()
+
+    def action_reload_org(self) -> None:
+        if not self._modal() and self.view == "org":
+            self.reload_org()
 
     def action_fetch(self, one: bool = False) -> None:
         self._operate("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)

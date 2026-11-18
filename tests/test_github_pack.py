@@ -446,3 +446,37 @@ def test_to_pr_reads_size():
     assert (pr.additions, pr.deletions, pr.size) == (342, 2, 344)
     assert render.size_text(pr).plain == "+342 -2"
     assert "additions deletions" in github._review_query("author:@me")
+
+
+async def test_fetch_org_saves_and_reads_back(monkeypatch, tmp_path):
+    asked = []
+
+    async def fake_search(qualifier, pages=4, fields=github._SEARCH_FIELDS):
+        asked.append(qualifier)
+        if "reviewed-by" in qualifier:
+            return [{"url": "https://example.invalid/2"}], None
+        if ">=" in qualifier:
+            return [node(1, updatedAt="2026-11-01T10:00:00Z"), node(2, isDraft=True)], None
+        return ([node(2, isDraft=True)] if "<" in qualifier else []), None  # same PR seen twice counts once
+
+    monkeypatch.setattr(github, "_search_all", fake_search)
+    monkeypatch.setattr(github, "_org_file", lambda: tmp_path / "org-prs.json")
+    assert github.cached_org("GTNewHorizons") is None
+
+    found = await github.fetch_org("GTNewHorizons")
+    assert len(asked) == 7 and "org:GTNewHorizons reviewed-by:@me" in asked
+    assert [i.pr.number for i in found.items] == [1, 2] and found.reviewed == {"https://example.invalid/2"}
+
+    again = github.cached_org("GTNewHorizons")
+    assert again and [i.pr.draft for i in again.items] == [False, True] and again.fetched == found.fetched
+    assert github.cached_org("SomeOtherOrg") is None
+
+
+def test_created_ranges_cover_everything_once():
+    from datetime import date
+
+    assert github._created_ranges(date(2026, 11, 18), (7, 30)) == [
+        "created:>=2026-11-11",
+        "created:2026-10-19..2026-11-10",
+        "created:<2026-10-19",
+    ]

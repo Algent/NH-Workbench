@@ -2,7 +2,7 @@
     height: 3;
 }
 
-#repos, #pack, #reviews, #mine {
+#repos, #pack, #reviews, #mine, #org {
     height: 1fr;
 }
 

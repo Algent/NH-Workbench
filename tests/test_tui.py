@@ -1,9 +1,13 @@
+import time
+
 import pytest
 from textual.widgets import DataTable, Tabs
 
 from gtnh_devenv_tools import github, pack
 from gtnh_devenv_tools.models import PackEntry, PackInfo, PrInfo, ReviewItem
 from gtnh_devenv_tools.tui import RepoApp
+
+org_searches: list[str] = []
 
 
 @pytest.fixture
@@ -32,6 +36,20 @@ def offline(monkeypatch):
         pr = PrInfo(7, "OPEN", False, "REVIEW_REQUIRED", "FAILURE", "", url, "My change")
         return [ReviewItem("o/m", pr, "me", None, True)], None
 
+    async def fake_org(org):
+        org_searches.append(org)
+
+        def item(number: int, draft: bool = False) -> ReviewItem:
+            url = f"https://example.invalid/pull/{number}"
+            pr = PrInfo(number, "OPEN", draft, None, None, "", url, f"PR {number}")
+            return ReviewItem("o/m", pr, "bob", None, True)
+
+        items = [item(1), item(7), item(20, draft=True), item(21)]
+        return github.OrgPrs(items, {"https://example.invalid/pull/21"}, time.time())
+
+    org_searches.clear()
+    monkeypatch.setattr(github, "fetch_org", fake_org)
+    monkeypatch.setattr(github, "cached_org", lambda org: None)
     monkeypatch.setattr(github, "fetch_mine", fake_mine)
     monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(github, "fetch_prs", no_prs)
@@ -40,6 +58,7 @@ def offline(monkeypatch):
 
 
 async def settle(app, pilot):
+    await pilot.pause()  # let messages like a tab change land before waiting on the work they start
     await app.workers.wait_for_complete()
     await pilot.pause()
 
@@ -429,3 +448,34 @@ async def test_pr_size_sort_and_filter(sandbox, offline):
         await pilot.press(*"<100")
         await settle(app, pilot)
         assert numbers() == ["#2"]
+
+
+async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        tabs = app.query_one(Tabs)
+        assert org_searches == [] and str(tabs.query_one("#view-org").label) == "All PRs"
+
+        tabs.active = "view-org"
+        await settle(app, pilot)
+        assert org_searches == [sandbox.cfg.org]
+        table = app.query_one("#org", DataTable)
+        rows = {str(table.get_row_at(i)[2]).split()[0]: str(table.get_row_at(i)[0]) for i in range(table.row_count)}
+        assert rows == {"#1": "asked", "#7": "mine", "#21": "reviewed"}  # the draft is hidden
+        assert str(tabs.query_one("#view-org").label) == "All PRs 3" and "no drafts" in app.sub_title
+
+        await pilot.press("t")
+        await settle(app, pilot)
+        assert table.row_count == 4
+
+        scans = len(offline)
+        await pilot.press("r")  # searches the org again instead of rescanning the repos
+        await settle(app, pilot)
+        assert org_searches == [sandbox.cfg.org] * 2 and len(offline) == scans
+
+        tabs.active = "view-all"
+        await settle(app, pilot)
+        tabs.active = "view-org"  # still fresh: no new search
+        await settle(app, pilot)
+        assert len(org_searches) == 2

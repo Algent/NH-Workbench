@@ -66,7 +66,12 @@ each one comes from when it is checked out here.
 The Reviews view lists open PRs that ask for your review personally. `t` there also loads the ones that
 reach you through a team (slower), and `t` again hides them.
 
-Both PR views show each PR's size (`+added -removed` lines). `s` there sorts by last update, smallest
+The All PRs view lists every open PR of the org (`org` in the config), marked when it is yours, asks
+for your review, or you reviewed it. It searches GitHub only when the tab is opened and the last search
+is over 30 minutes old (about 20 seconds); otherwise it shows the copy saved in the cache folder.
+Auto-refresh leaves it alone. `r` there searches again, `t` shows or hides drafts.
+
+The PR views show each PR's size (`+added -removed` lines). `s` there sorts by last update, smallest
 first, largest first or repo (a click on the Size header too), and a filter like `<200` keeps PRs under
 200 changed lines.
 

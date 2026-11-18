@@ -249,6 +249,23 @@ def mine_row(item: ReviewItem, local: str = "", width: int = 70) -> list[Text]:
     ]
 
 
+ORG_COLUMNS = ("State", "Repo", "PR", "Size", "Author", "Updated", "Title")
+_MARKS = {"mine": "bold yellow", "asked": "bold green", "reviewed": "cyan"}
+
+
+def org_row(item: ReviewItem, mark: str = "", width: int = 70) -> list[Text]:
+    """A PR of the org; mark says how it concerns you: mine, asked (your review is requested), reviewed."""
+    return [
+        Text(mark, _MARKS.get(mark, "dim")),
+        Text(item.repo.partition("/")[2] or item.repo, "bold"),
+        pr_text(item.pr),
+        size_text(item.pr),
+        Text(item.author),
+        Text(ago(item.updated), "dim"),
+        Text(clip(item.pr.title, width)),
+    ]
+
+
 def reviews_table(items: Iterable[ReviewItem], width: int = 70) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in REVIEW_COLUMNS:
