@@ -74,6 +74,8 @@ def pack_line(st: RepoState, info: PackInfo) -> Text:
         else:
             style = "cyan" if st.release_ahead else "dim"
             text.append(f"   {branch}: {st.release_ahead} commits since {st.release}", style)
+    if st.release_delta:
+        text.append(f"   {st.tracked}: Δ{st.release_delta} since {st.release}", render.delta_style(st.release_delta))
     return text
 
 
@@ -83,6 +85,8 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     )
     head.append(f"  {st.path}", "dim").append("  Enter: actions", "dim italic")
     lines: list[RenderableType] = [head]
+    if st.subject or st.date:
+        lines.append(Text.assemble(("last commit  ", "dim"), (render.ago(st.date), "dim"), f"  {st.subject}"))
     if st.worktree_of:
         lines.append(Text(f"working tree of {st.worktree_of}", "dim"))
     for tree in st.worktrees:
@@ -461,6 +465,7 @@ class RepoApp(App[None]):
                 if old:  # keep the pack columns steady until they are recomputed after the batch
                     st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
                     st.daily_ahead, st.release_commits = old.daily_ahead, old.release_commits
+                    st.release_delta = old.release_delta
                 self.states[str(st.path)] = st
                 self._update_row(st)
                 self.sub_title = f"{label} {done}/{len(paths)}"

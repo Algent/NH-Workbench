@@ -135,7 +135,14 @@ def release_text(st: RepoState) -> Text:
     text = version_text(st.release) if st.in_pack else Text("")
     if st.release_ahead:
         text.append(f" +{st.release_ahead}", "bold cyan")
+    if st.release_delta:
+        text.append(f" Δ{st.release_delta}", delta_style(st.release_delta))
     return text
+
+
+def delta_style(n: int) -> str:
+    """Main's distance from the release: the further, the harder a backport."""
+    return "red" if n >= 100 else "yellow" if n >= 20 else "dim"
 
 
 def repo_table(states: Iterable[RepoState], release: str | None = None) -> Table:

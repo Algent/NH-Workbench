@@ -91,6 +91,7 @@ class RepoState:
     release_ahead: int | None = None  # commits on the release branch since the released version
     release_commits: list[str] = field(default_factory=list)  # their subjects, newest first
     daily_ahead: int | None = None  # commits on main that the daily's version does not have yet
+    release_delta: int | None = None  # commits on main since the released version
     worktrees: list[Worktree] = field(default_factory=list)  # the repo's other working trees
     worktree_of: Path | None = None  # main working tree, when this folder is a linked one
 

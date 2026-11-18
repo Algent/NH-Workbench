@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from gtnh_devenv_tools import git, ops
+from gtnh_devenv_tools import git, ops, render
 from gtnh_devenv_tools.config import Config, RepoConfig
 from gtnh_devenv_tools.models import PrInfo, RepoState
 
@@ -253,6 +253,12 @@ async def test_release_branch_progress(sandbox):
     st.daily = "1.2.0"
     await ops.pack_progress([st])
     assert st.daily_ahead == 2 and st.behind == 2  # counted on origin/master, the checkout itself is behind
+    assert st.release_delta is None
+
+    st.release = "1.2.0"
+    await ops.pack_progress([st])
+    assert st.release_delta == 2  # main moved two commits past the released tag
+    assert "Δ2" in render.release_text(st).plain
 
 
 async def test_delete_branch_checks_tip(sandbox):

@@ -100,15 +100,20 @@ async def pack_progress(states: Iterable[RepoState], release_branch: str = "", l
 
     daily_ahead: commits on main that the version in the daily lacks (merged, not in a daily yet).
     release_ahead / release_commits: what the release branch gained since the released version.
+    release_delta: commits on main since the released version (how far a backport has to reach).
     """
 
     async def one(st: RepoState) -> None:
-        st.daily_ahead = st.release_ahead = None
+        st.daily_ahead = st.release_ahead = st.release_delta = None
         st.release_commits = []
-        if st.daily and st.tracked:
-            main = st.branch(st.tracked)
-            upstream = main.upstream if main and main.upstream and not main.gone else f"origin/{st.tracked}"
+        if not st.tracked:
+            return
+        main = st.branch(st.tracked)
+        upstream = main.upstream if main and main.upstream and not main.gone else f"origin/{st.tracked}"
+        if st.daily:
             st.daily_ahead = await git.commits_not_in(st.path, f"refs/tags/{st.daily}", f"refs/remotes/{upstream}")
+        if st.release:
+            st.release_delta = await git.commits_not_in(st.path, f"refs/tags/{st.release}", f"refs/remotes/{upstream}")
         if st.release and release_branch in st.release_branches:
             tip = f"refs/remotes/origin/{release_branch}"
             subjects = await git.subjects_between(st.path, f"refs/tags/{st.release}", tip)
