@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .config import cache_dir
-from .models import Branch, PrInfo, Remote, RepoState, ReviewItem
+from .models import Branch, PrHead, PrInfo, Remote, RepoState, ReviewItem
 from .proc import run
 
 _PR_NUMBER = re.compile(r"(?:^|[/_-])pr[-_]?(\d+)$", re.IGNORECASE)
@@ -195,6 +195,22 @@ async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
         errors = payload.get("errors") or [{}]
         return None, errors[0].get("message") or payload.get("message") or res.message
     return payload["data"], None
+
+
+async def pr_head(base: str, number: int) -> tuple[PrHead | None, str | None]:
+    """Where the commits of base#number live, to check it out."""
+    owner, _, name = base.partition("/")
+    query = (
+        f"query {{ repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{"
+        f" pullRequest(number: {number}) {{ headRefName headRepository {{ nameWithOwner url }} }} }} }}"
+    )
+    data, error = await _graphql(query)
+    node = ((data or {}).get("repository") or {}).get("pullRequest")
+    if not node:
+        return None, error or f"{base}#{number} not found"
+    repo = node.get("headRepository") or {}
+    url = f"{repo['url']}.git" if repo.get("url") else ""
+    return PrHead(number, base, node.get("headRefName") or "", repo.get("nameWithOwner"), url), None
 
 
 _SEARCH_FIELDS = (

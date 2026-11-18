@@ -2,7 +2,7 @@ from pathlib import Path
 
 from gtnh_devenv_tools import git, ops, render
 from gtnh_devenv_tools.config import Config, RepoConfig
-from gtnh_devenv_tools.models import PrInfo, RepoState
+from gtnh_devenv_tools.models import PrHead, PrInfo, RepoState
 
 
 def test_parse_status():
@@ -350,3 +350,58 @@ def test_parse_worktrees_ignores_stale_entries(tmp_path):
         f"worktree {(tmp_path / 'gone').as_posix()}\nHEAD d4\ndetached\nprunable gitdir file points nowhere\n"
     )
     assert git.parse_worktrees(text, main) == ([], None)
+
+
+def make_fork(sandbox, branch: str = "feature") -> tuple[Path, str]:
+    """A fork of origin on disk with one extra branch; returns its path and the branch tip."""
+    fork = sandbox.root.parent / "fork.git"
+    sandbox.git(sandbox.root.parent, "clone", "--bare", str(sandbox.origin), str(fork))
+    sandbox.git(sandbox.seed, "checkout", "-b", branch)
+    tip = sandbox.commit(sandbox.seed, "fork-work")
+    sandbox.git(sandbox.seed, "push", str(fork), branch)
+    sandbox.git(sandbox.seed, "checkout", "master")
+    return fork, tip
+
+
+async def test_checkout_fork_pr_as_pr_branch_tracking_the_fork(sandbox):
+    fork, tip = make_fork(sandbox)
+    head = PrHead(7, "org/repo", "feature", "someone/repo", str(fork))
+    st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
+    assert st.note.kind == "updated", st.note.text
+    assert st.head == "PR-7" and st.head_sha == tip
+    assert st.current.upstream == "someone/feature" and "someone" in st.remotes
+    # The cleanup drops the fork remote along with the branch.
+    assert [r.name for _, r in ops.orphaned_remotes([(st, st.current)])] == ["someone"]
+
+    sandbox.git(sandbox.seed, "checkout", "feature")
+    newer = sandbox.commit(sandbox.seed, "more-fork-work")
+    sandbox.git(sandbox.seed, "push", str(fork), "feature")
+    sandbox.git(sandbox.work, "switch", "master")
+    st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
+    assert st.note.kind == "updated" and st.head == "PR-7" and st.head_sha == newer
+    assert [b.name for b in st.branches] == ["PR-7", "master"]
+
+
+async def test_checkout_origin_pr_keeps_its_name(sandbox):
+    sandbox.git(sandbox.seed, "checkout", "-b", "algent/thing")
+    tip = sandbox.commit(sandbox.seed, "thing")
+    sandbox.git(sandbox.seed, "push", "origin", "algent/thing")
+    head = PrHead(3, "org/repo", "algent/thing", "org/repo", str(sandbox.origin))
+    st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
+    assert st.head == "algent/thing" and st.head_sha == tip and st.current.upstream == "origin/algent/thing"
+    assert list(st.remotes) == ["origin"]
+
+
+async def test_checkout_pr_of_deleted_fork_and_dirty_repo(sandbox):
+    sandbox.git(sandbox.seed, "checkout", "-b", "gone")
+    tip = sandbox.commit(sandbox.seed, "orphan")
+    sandbox.git(sandbox.seed, "push", "origin", "gone:refs/pull/9/head")
+    head = PrHead(9, "org/repo", "gone", None)
+
+    (sandbox.work / "first.txt").write_text("changed", encoding="utf-8")
+    st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
+    assert st.note.kind == "failed" and st.head == "master"
+    sandbox.git(sandbox.work, "checkout", "--", "first.txt")
+
+    st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
+    assert st.note.kind == "updated" and st.head == "PR-9" and st.head_sha == tip and st.current.upstream is None

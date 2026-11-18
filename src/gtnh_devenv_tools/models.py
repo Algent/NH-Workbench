@@ -34,6 +34,21 @@ class PrInfo:
 
 
 @dataclass(frozen=True)
+class PrHead:
+    """Where a pull request's commits live."""
+
+    number: int
+    base: str  # owner/name the PR targets
+    ref: str  # head branch name
+    slug: str | None  # owner/name of the head repo, None when it was deleted
+    url: str = ""  # clone URL of the head repo
+
+    @property
+    def owner(self) -> str:
+        return (self.slug or "").partition("/")[0]
+
+
+@dataclass(frozen=True)
 class ReviewItem:
     repo: str  # owner/name
     pr: PrInfo

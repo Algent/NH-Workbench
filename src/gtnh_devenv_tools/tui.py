@@ -334,6 +334,7 @@ class RepoApp(App[None]):
         Binding("m", "to_main", "To main"),
         Binding("d", "cleanup", "Cleanup"),
         Binding("c", "clone", "Clone"),
+        Binding("c", "checkout", "Check out"),
         Binding("s", "sort", "Sort"),
         Binding("t", "toggle_team", "Team reviews"),
         Binding("t", "toggle_drafts", "Drafts"),
@@ -784,6 +785,8 @@ class RepoApp(App[None]):
             return self.view != "pack"
         if action == "clone":
             return self.view == "pack"
+        if action == "checkout":
+            return self.view in PR_VIEWS
         if action == "toggle_team":
             return self.view == "reviews"
         if action == "toggle_drafts":
@@ -1070,6 +1073,33 @@ class RepoApp(App[None]):
             return
         if await self._batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
             self.notify("Switched. Press d to delete the merged branches.")
+
+    @work(group="checkout")
+    async def action_checkout(self) -> None:
+        item, st = self._selected_review(), self._selected_repo()
+        if self._modal() or not item:
+            return
+        if not st:
+            self.notify(f"{item.repo} is not checked out here", severity="warning")
+            return
+        if st.dirty:
+            self.notify(f"{st.name} has uncommitted changes", severity="error")
+            return
+        self.notify(f"Checking out #{item.pr.number} in {st.name}...")
+        head, error = await github.pr_head(item.repo, item.pr.number)
+        if not head:
+            self.notify(f"#{item.pr.number}: {error}", severity="error")
+            return
+        if not await self._batch("Checking out", lambda p: ops.checkout_pr(self.cfg, st, head), [st.path]):
+            return
+        new = self.states.get(str(st.path))
+        if new and new.note:
+            if new.note.kind != "failed" and new.head:
+                # Link the PR right away instead of waiting for the next PR reload.
+                self.prs.prs[(new.name, new.head)] = item.pr
+                github.attach([new], self.prs)
+                self._refresh()
+            self.notify(f"{st.name}: {new.note.text}", severity="error" if new.note.kind == "failed" else "information")
 
     @work(group="clone")
     async def action_clone(self) -> None:

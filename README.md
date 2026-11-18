@@ -57,7 +57,7 @@ commits waiting on the release branch.
 | `d` | Delete merged branches |
 | `o` / `w` | Open in IntelliJ / open the PR or GitHub page |
 | `t` | Reviews: show team requests. All PRs: show drafts |
-| `c` | Clone the selected mod (Pack tab) |
+| `c` | Pack tab: clone the selected mod. PR tabs: check out the PR in its local repo |
 | `x` | Extras |
 | `q` | Quit (also closes menus) |
 
@@ -99,6 +99,11 @@ Global options: `--root PATH`, `-v` (log every command run).
 Branches in a repo's `keep_branches` are never offered, and show `(kept)`. Each deletion is listed with the
 command that restores it, and logged to `deleted-branches.log` in the cache folder. A fork remote that no
 branch uses any more is removed too.
+
+**PR checkout** (`c` on a PR tab) refuses a repo with uncommitted changes. A PR from the org repo checks out
+its own branch name. A PR from a fork becomes `PR-<number>`, tracking the fork's branch through a remote named
+after its owner (added when missing). It then shows behind or gone like any other branch, and the cleanup
+deletes it, and that remote, once merged. Pressing `c` again switches back to the branch and fast-forwards it.
 
 **Worktrees** under the root are listed with a `↳` and the repo they belong to. A branch checked out in
 another working tree is never moved, switched to or deleted from elsewhere.

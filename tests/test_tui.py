@@ -596,3 +596,27 @@ async def test_missing_root_is_asked_for(sandbox, offline, monkeypatch, tmp_path
         await settle(app, pilot)
         assert app.cfg.root == sandbox.root and str(sandbox.work) in app.states
         assert config.load(path=cfg_file).root == sandbox.root
+
+
+async def test_check_out_pr_from_reviews(sandbox, offline, monkeypatch):
+    from test_git import make_fork
+
+    from gtnh_devenv_tools.models import PrHead
+
+    fork, tip = make_fork(sandbox)
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/m.git")  # matches the fake PR's repo
+
+    async def fake_head(base, number):
+        return PrHead(number, base, "feature", "someone/m", str(fork)), None
+
+    monkeypatch.setattr(github, "pr_head", fake_head)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        app.query_one(Tabs).active = "view-reviews"
+        await settle(app, pilot)
+        await pilot.press("c")
+        await settle(app, pilot)
+        st = app.states[str(sandbox.work)]
+        assert st.head == "PR-1" and st.head_sha == tip and st.current.upstream == "someone/feature"
+        assert st.current.pr and st.current.pr.number == 1

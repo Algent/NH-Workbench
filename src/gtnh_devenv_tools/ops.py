@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import git
 from .config import Config
-from .models import Branch, Outcome, Remote, RepoState
+from .models import Branch, Outcome, PrHead, Remote, RepoState
 
 
 def _subdirs(folder: Path) -> list[Path]:
@@ -147,6 +147,83 @@ async def to_main(cfg: Config, st: RepoState) -> RepoState:
     if new.note and new.note.kind != "failed":
         new.note = Outcome("updated", f"on {st.tracked}, {new.note.text}", new.note.commits)
     return new
+
+
+def _remote_for(st: RepoState, slug: str | None, url: str = "") -> Remote | None:
+    for r in st.remotes.values():
+        if (slug and (r.slug or "").lower() == slug.lower()) or (url and git.remote_key(r.url) == git.remote_key(url)):
+            return r
+    if slug and st.origin and (st.canonical or "").lower() == slug.lower():
+        return st.origin
+    return None
+
+
+async def checkout_pr(cfg: Config, st: RepoState, head: PrHead) -> RepoState:
+    """Switch to a PR's branch, creating it when needed.
+
+    A branch from origin keeps its name; one from a fork becomes PR-<n>, tracking the fork's branch through a
+    remote named after its owner, so it shows behind/gone like any other and the cleanup can drop both later.
+    """
+
+    async def finish(kind: str, text: str) -> RepoState:
+        new = await scan_repo(cfg, st.path)
+        new.note = Outcome(kind, text)
+        return new
+
+    if st.dirty:
+        return await finish("failed", "uncommitted changes, PR not checked out")
+    pr_name = f"PR-{head.number}"
+    if not head.slug:  # head repo deleted: GitHub still serves the commits on the base repo
+        base = _remote_for(st, head.base) or st.origin
+        if not st.branch(pr_name):
+            res = await git.git(st.path, "fetch", "--no-tags", base.name, f"refs/pull/{head.number}/head:{pr_name}")
+            if not res.ok:
+                return await finish("failed", f"fetch failed: {res.message}")
+        failed = await _switch_to(st, pr_name)
+        return await finish("failed", failed) if failed else await finish("updated", f"on {pr_name}, fork deleted")
+
+    remote = _remote_for(st, head.slug, head.url)
+    added = None
+    if not remote:
+        added = head.owner if head.owner not in st.remotes else head.slug.replace("/", "-")
+        res = await git.git(st.path, "remote", "add", added, head.url)
+        if not res.ok:
+            return await finish("failed", f"could not add remote {added}: {res.message}")
+        remote = git.parse_remote(added, head.url)
+    upstream = f"{remote.name}/{head.ref}"
+    res = await git.git(
+        st.path, "fetch", "--no-tags", remote.name, f"+refs/heads/{head.ref}:refs/remotes/{upstream}", timeout=600
+    )
+    if not res.ok:
+        if added:
+            await git.remove_remote(st.path, added)
+        return await finish("failed", f"fetch failed: {res.message}")
+    note = f", new remote {added}" if added else ""
+
+    existing = next((b for b in st.branches if b.upstream == upstream), None)
+    if existing:
+        if failed := await _switch_to(st, existing.name):
+            return await finish("failed", failed)
+        await git.git(st.path, "merge", "--ff-only", "-q", upstream)  # fine if diverged: shown as such
+        return await finish("updated", f"on {existing.name}{note}")
+    name = head.ref if st.origin and remote.name == st.origin.name and not st.branch(head.ref) else pr_name
+    if st.branch(name):
+        return await finish("failed", f"branch {name} already exists, tracking {st.branch(name).upstream or 'nothing'}")
+    res = await git.git(st.path, "switch", "--no-track", "-c", name, upstream, timeout=300)
+    if not res.ok:
+        return await finish("failed", f"switch failed: {res.message}")
+    await git.git(st.path, "config", f"branch.{name}.remote", remote.name)
+    await git.git(st.path, "config", f"branch.{name}.merge", f"refs/heads/{head.ref}")
+    return await finish("updated", f"on {name}, tracking {upstream}{note}")
+
+
+async def _switch_to(st: RepoState, name: str) -> str | None:
+    """Check out an existing branch. Returns why it failed, or None."""
+    if elsewhere := st.checked_out_elsewhere(name):
+        return f"{name} is checked out in {elsewhere.path}"
+    if st.head != name and not (res := await git.switch(st.path, name)).ok:
+        return f"switch failed: {res.message}"
+    return None
 
 
 async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[RepoState, Branch]], list[tuple]]:
