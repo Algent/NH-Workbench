@@ -439,3 +439,10 @@ async def test_fetch_mine_asks_for_ci_and_sorts_newest_first(monkeypatch):
     assert error is None and [i.pr.number for i in items] == [2, 1]
     assert "author:@me" in queries[0] and "statusCheckRollup" in queries[0]
     assert "statusCheckRollup" not in github._review_query("review-requested:@me")
+
+
+def test_to_pr_reads_size():
+    pr = github.to_pr(node(3, additions=342, deletions=2))
+    assert (pr.additions, pr.deletions, pr.size) == (342, 2, 344)
+    assert render.size_text(pr).plain == "+342 -2"
+    assert "additions deletions" in github._review_query("author:@me")

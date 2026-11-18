@@ -39,7 +39,15 @@ SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
     "branch": ("off main first", lambda st: (not st.off_main, (st.head or "").lower())),
 }
 HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
-REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup", "sort"}  # hidden on the Reviews and Pack tabs
+# The PR lists keep their own order: "updated" is the order they arrive in (for you first, then newest).
+PR_SORTS: dict[str, tuple[str, Callable[[ReviewItem], object] | None]] = {
+    "updated": ("last update", None),
+    "small": ("smallest first", lambda i: i.pr.size),
+    "large": ("largest first", lambda i: -i.pr.size),
+    "repo": ("repo", lambda i: i.repo.lower()),
+}
+PR_HEADER_SORT = {"Updated": "updated", "Size": "small", "Repo": "repo"}
+REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup"}  # hidden on the Reviews and Pack tabs
 TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine"}  # views with their own table; the rest share #repos
 PR_VIEWS = ("reviews", "mine")  # views listing pull requests rather than repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
@@ -327,6 +335,7 @@ class RepoApp(App[None]):
         self.cfg = cfg
         self.root_override = root_override  # --root on the command line wins over the config file
         self.sort = "name"
+        self.pr_sort = "updated"
         self.team_reviews = False
         self.states: dict[str, RepoState] = {}
         self.prs = github.PrData()
@@ -342,7 +351,8 @@ class RepoApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Tabs(*(Tab(label, id=f"view-{key}") for key, (label, _) in VIEWS.items()))
-        yield Input(placeholder="Filter by name: Enter keeps it, Enter on empty (or Esc) removes it", id="filter")
+        hint = "Filter by name (on PR tabs <200 keeps PRs under 200 changed lines): Enter keeps it, Esc removes it"
+        yield Input(placeholder=hint, id="filter")
         yield DataTable(id="repos", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="pack", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True)
@@ -558,10 +568,10 @@ class RepoApp(App[None]):
             self.query_one(f"#view-{key}", Tab).label = f"{label} {count}"
 
         if self.view == "reviews":
-            shown = [i for i in self.reviews if self.needle in f"{i.repo} {i.pr.title} {i.author}".lower()]
+            shown = self._pr_items(self.reviews)
             self._fill(self.query_one("#reviews", DataTable), [(i.pr.url, render.review_row(i)) for i in shown])
         elif self.view == "mine":
-            shown = [i for i in self.mine if self.needle in f"{i.repo} {i.pr.title}".lower()]
+            shown = self._pr_items(self.mine)
             rows = []
             for item in shown:
                 local = self._local_branch(item)
@@ -575,9 +585,23 @@ class RepoApp(App[None]):
             shown = [st for st in states if wanted(st) and self.needle in st.name.lower()]
             self._fill(self.query_one("#repos", DataTable), [(str(st.path), repo_cells(st)) for st in shown])
         if not self.busy:
-            order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
+            if self.view in PR_VIEWS:
+                order = "" if self.pr_sort == "updated" else f"  ·  PRs sorted by {PR_SORTS[self.pr_sort][0]}"
+            else:
+                order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
             self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
         self._update_detail()
+
+    def _pr_items(self, items: list[ReviewItem]) -> list[ReviewItem]:
+        """PRs matching the filter, in the chosen order. A filter like <200 keeps PRs under 200 changed lines."""
+        needle = self.needle
+        if needle.startswith("<") and needle[1:].strip().isdigit():
+            limit = int(needle[1:])
+            shown = [i for i in items if i.pr.size < limit]
+        else:
+            shown = [i for i in items if needle in f"{i.repo} {i.pr.title} {i.author}".lower()]
+        key = PR_SORTS[self.pr_sort][1]
+        return sorted(shown, key=key) if key else shown
 
     def _update_detail(self) -> None:
         detail = self.query_one("#detail", Static)
@@ -600,9 +624,14 @@ class RepoApp(App[None]):
             self._update_detail()
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
-        wanted = HEADER_SORT.get(event.column_key.value or "")
-        if wanted and event.data_table.id == "repos":
-            self.sort = wanted
+        column = event.column_key.value or ""
+        if event.data_table.id == "repos" and column in HEADER_SORT:
+            self.sort = HEADER_SORT[column]
+            self._refresh()
+        elif event.data_table.id in PR_VIEWS and column in PR_HEADER_SORT:
+            wanted = PR_HEADER_SORT[column]
+            # Clicking Size twice flips between smallest and largest first.
+            self.pr_sort = "large" if wanted == "small" and self.pr_sort == "small" else wanted
             self._refresh()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -686,6 +715,8 @@ class RepoApp(App[None]):
         """Keep the footer to what works in the current view."""
         if action in REPO_ONLY_ACTIONS:
             return self.view not in TABLES
+        if action == "sort":
+            return self.view != "pack"
         if action == "clone":
             return self.view == "pack"
         if action == "toggle_team":
@@ -729,10 +760,14 @@ class RepoApp(App[None]):
         self.load_everything()
 
     def action_sort(self) -> None:
-        if self._modal() or self.view in TABLES:
+        if self._modal() or self.view == "pack":
             return
-        keys = list(SORTS)
-        self.sort = keys[(keys.index(self.sort) + 1) % len(keys)]
+        if self.view in PR_VIEWS:
+            keys = list(PR_SORTS)
+            self.pr_sort = keys[(keys.index(self.pr_sort) + 1) % len(keys)]
+        else:
+            keys = list(SORTS)
+            self.sort = keys[(keys.index(self.sort) + 1) % len(keys)]
         self._refresh()
 
     @work(group="reviews", exclusive=True)

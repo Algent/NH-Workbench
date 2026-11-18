@@ -217,25 +217,32 @@ def branches_table(states: Iterable[RepoState], width: int = 60) -> Table:
     return table
 
 
+def size_text(pr: PrInfo) -> Text:
+    """Lines added and removed, like GitHub shows them."""
+    return Text.assemble((f"+{pr.additions}", "green"), " ", (f"-{pr.deletions}", "red"))
+
+
 def review_row(item: ReviewItem, width: int = 70) -> list[Text]:
     return [
         Text("you", "bold green") if item.direct else Text("team", "dim"),
         Text(item.repo.partition("/")[2] or item.repo, "bold"),
         pr_text(item.pr),
+        size_text(item.pr),
         Text(item.author),
         Text(ago(item.updated), "dim"),
         Text(clip(item.pr.title, width)),
     ]
 
 
-REVIEW_COLUMNS = ("For", "Repo", "PR", "Author", "Updated", "Title")
-MINE_COLUMNS = ("Repo", "PR", "Updated", "Local branch", "Title")
+REVIEW_COLUMNS = ("For", "Repo", "PR", "Size", "Author", "Updated", "Title")
+MINE_COLUMNS = ("Repo", "PR", "Size", "Updated", "Local branch", "Title")
 
 
 def mine_row(item: ReviewItem, local: str = "", width: int = 70) -> list[Text]:
     return [
         Text(item.repo.partition("/")[2] or item.repo, "bold"),
         pr_text(item.pr),
+        size_text(item.pr),
         Text(ago(item.updated), "dim"),
         Text(local, "yellow") if local else Text("—", "dim"),
         Text(clip(item.pr.title, width)),

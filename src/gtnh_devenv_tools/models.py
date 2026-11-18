@@ -25,6 +25,12 @@ class PrInfo:
     head_sha: str
     url: str
     title: str
+    additions: int = 0
+    deletions: int = 0
+
+    @property
+    def size(self) -> int:
+        return self.additions + self.deletions
 
 
 @dataclass(frozen=True)

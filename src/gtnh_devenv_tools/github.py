@@ -103,6 +103,8 @@ def to_pr(node: dict) -> PrInfo:
         head_sha=node.get("headRefOid") or "",
         url=node.get("url") or "",
         title=node.get("title") or "",
+        additions=node.get("additions") or 0,
+        deletions=node.get("deletions") or 0,
     )
 
 
@@ -193,7 +195,8 @@ async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
 
 
 _SEARCH_FIELDS = (
-    "number state isDraft reviewDecision title url headRefOid updatedAt repository { nameWithOwner } author { login }"
+    "number state isDraft reviewDecision title url headRefOid updatedAt additions deletions"
+    " repository { nameWithOwner } author { login }"
 )
 _CI_FIELDS = " commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
 

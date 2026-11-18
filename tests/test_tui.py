@@ -22,7 +22,7 @@ def offline(monkeypatch):
     async def fake_reviews(team=False):
         def item(number: int, direct: bool) -> ReviewItem:
             url = f"https://example.invalid/pull/{number}"
-            pr = PrInfo(number, "OPEN", False, None, None, "", url, f"PR {number}")
+            pr = PrInfo(number, "OPEN", False, None, None, "", url, f"PR {number}", 500 if direct else 10, 1)
             return ReviewItem("o/m", pr, "ann", None, direct)
 
         return [item(1, True)] + ([item(2, False)] if team else []), None
@@ -299,7 +299,7 @@ async def test_my_prs_tab(sandbox, offline, monkeypatch):
         table = app.query_one("#mine", DataTable)
         assert table.row_count == 1 and table.display
         row = [str(cell) for cell in table.get_row_at(0)]
-        assert row[0] == "m" and "#7 open" in row[1] and "CI fail" in row[1] and row[3] == "—"
+        assert row[0] == "m" and "#7 open" in row[1] and "CI fail" in row[1] and row[4] == "—"
         console = Console(width=200)
         with console.capture() as captured:
             console.print(app.query_one("#detail").content)
@@ -402,3 +402,30 @@ async def test_auto_refresh_waits_for_interval_and_quiet_moment(sandbox, offline
         app.auto_refresh()  # turned off
         await settle(app, pilot)
         assert offline == [False, False]
+
+
+async def test_pr_size_sort_and_filter(sandbox, offline):
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        app.query_one(Tabs).active = "view-reviews"
+        await settle(app, pilot)
+        await pilot.press("t")
+        await settle(app, pilot)
+        table = app.query_one("#reviews", DataTable)
+
+        def numbers() -> list[str]:
+            return [str(table.get_row_at(i)[2]).split()[0] for i in range(table.row_count)]
+
+        assert numbers() == ["#1", "#2"] and str(table.get_row_at(0)[3]) == "+500 -1"
+        await pilot.press("s")  # smallest first
+        await settle(app, pilot)
+        assert numbers() == ["#2", "#1"] and "smallest first" in app.sub_title
+        await pilot.press("s")
+        await settle(app, pilot)
+        assert numbers() == ["#1", "#2"]
+
+        await pilot.press("slash")
+        await pilot.press(*"<100")
+        await settle(app, pilot)
+        assert numbers() == ["#2"]

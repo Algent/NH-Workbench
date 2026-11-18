@@ -66,6 +66,10 @@ each one comes from when it is checked out here.
 The Reviews view lists open PRs that ask for your review personally. `t` there also loads the ones that
 reach you through a team (slower), and `t` again hides them.
 
+Both PR views show each PR's size (`+added -removed` lines). `s` there sorts by last update, smallest
+first, largest first or repo (a click on the Size header too), and a filter like `<200` keeps PRs under
+200 changed lines.
+
 ## Settings from the UI
 
 These write to the config file and keep its comments:
