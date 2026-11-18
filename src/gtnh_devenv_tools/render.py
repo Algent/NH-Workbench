@@ -249,7 +249,7 @@ def mine_row(item: ReviewItem, local: str = "", width: int = 70) -> list[Text]:
     ]
 
 
-ORG_COLUMNS = ("State", "Repo", "PR", "Size", "Author", "Updated", "Title")
+ORG_COLUMNS = ("Review", "Repo", "PR", "Size", "Author", "Updated", "Title")
 _MARKS = {"mine": "bold yellow", "asked": "bold green", "reviewed": "cyan"}
 
 
