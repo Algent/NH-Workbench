@@ -140,6 +140,25 @@ def _toolbox_scripts() -> Path:
     return Path(platformdirs.user_data_dir("JetBrains", appauthor=False, roaming=False)) / "Toolbox" / "scripts"
 
 
+# Folders people commonly keep their checkouts in, relative to the home folder.
+_ROOT_GUESSES = (
+    "IdeaProjects Projects projects dev Dev git Git src code repos workspace Documents/GitHub source/repos"
+).split()
+
+
+def suggest_root(home: Path | None = None) -> Path | None:
+    """A likely checkout folder: the first common one holding a git repo, else the first that exists."""
+    home = home or Path.home()
+    existing = [home / name for name in _ROOT_GUESSES if (home / name).is_dir()]
+    for folder in existing:
+        try:
+            if any((child / ".git").exists() for child in folder.iterdir()):
+                return folder
+        except OSError:
+            continue
+    return existing[0] if existing else None
+
+
 def find_ide(cfg: Config, scripts: Path | None = None) -> str | None:
     """IntelliJ launcher: ide_command from the config, a Toolbox script, then whatever is on PATH."""
     if cfg.ide_off:

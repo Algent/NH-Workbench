@@ -69,3 +69,11 @@ def test_find_ide_prefers_config_then_toolbox_script(tmp_path):
     assert config.find_ide(cfg, scripts) == str(scripts / name)
     cfg.ide_command = "my-ide"
     assert config.find_ide(cfg, scripts) == "my-ide"
+
+
+def test_suggest_root_prefers_a_folder_with_repos(tmp_path):
+    assert config.suggest_root(tmp_path) is None
+    (tmp_path / "Projects").mkdir()
+    assert config.suggest_root(tmp_path) == tmp_path / "Projects"
+    (tmp_path / "git" / "SomeMod" / ".git").mkdir(parents=True)
+    assert config.suggest_root(tmp_path) == tmp_path / "git"

@@ -9,7 +9,10 @@ from .models import Branch, Outcome, Remote, RepoState
 
 
 def _subdirs(folder: Path) -> list[Path]:
-    return [p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    try:
+        return [p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    except OSError:  # missing or unreadable: nothing to list
+        return []
 
 
 def discover(cfg: Config) -> list[Path]:

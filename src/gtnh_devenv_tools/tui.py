@@ -397,7 +397,10 @@ class RepoApp(App[None]):
             self.query_one(table_id).display = False
         self.query_one("#repos").focus()
         self.sub_title = str(self.cfg.root)
-        self.load_everything()
+        if self.cfg.root.is_dir():
+            self.load_everything()
+        else:
+            self._first_root()
         # Checked every minute, so a new interval set from Extras applies without a restart.
         self.set_interval(60, self.auto_refresh)
 
@@ -971,15 +974,30 @@ class RepoApp(App[None]):
                 return
             self._save_setting(("refresh_minutes",), int(value))
         elif choice == "root":
-            hint = "Folder that holds your checkouts."
-            folder = await self.push_screen_wait(PromptScreen("Repo folder", str(self.cfg.root), hint))
+            await self._ask_root(str(self.cfg.root))
+
+    @work(group="dialog")
+    async def _first_root(self) -> None:
+        """The folder with the checkouts does not exist (first start on another setup): ask for it."""
+        guess = config.suggest_root()
+        why = f'"{self.cfg.root}" does not exist.'
+        if not await self._ask_root(str(guess or self.cfg.root), why):
+            self.notify("No repo folder yet: Extras (x) → Change the repo folder", severity="warning", timeout=10)
+
+    async def _ask_root(self, current: str, why: str = "") -> bool:
+        """Ask for the folder with the checkouts until it exists, then save it. False when cancelled."""
+        hint = f"{why} Folder that holds your checkouts (one repo per subfolder).".strip()
+        while True:
+            folder = await self.push_screen_wait(PromptScreen("Repo folder", current, hint))
             if not folder:
-                return
-            if not Path(folder).expanduser().is_dir():
-                self.notify(f"Not a folder: {folder}", severity="error")
-                return
-            self.root_override = None
-            self._save_setting(("root",), folder)
+                return False
+            if Path(folder).expanduser().is_dir():
+                break
+            self.notify(f"Not a folder: {folder}", severity="error")
+            current = folder
+        self.root_override = None
+        self._save_setting(("root",), folder)
+        return True
 
     def action_open_folder(self, which: str) -> None:
         folder = config.config_path().parent if which == "config" else config.cache_dir()

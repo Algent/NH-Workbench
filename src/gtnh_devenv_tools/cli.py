@@ -32,8 +32,12 @@ def main(
     except config.ConfigError as e:
         err.print(f"[bold red]{e}")
         raise typer.Exit(2) from e
-    if not cfg.root.is_dir():
-        err.print(f'[bold red]Root folder not found: "{cfg.root}"')
+    # The UI asks for the folder itself; commands need it up front.
+    if not cfg.root.is_dir() and ctx.invoked_subcommand is not None:
+        err.print(f'[bold red]Folder with your checkouts not found: "{cfg.root}"')
+        err.print(
+            f'Pass --root PATH, set root in "{config.config_path()}", or start gtnh-dev without a command to pick it.'
+        )
         raise typer.Exit(2)
     ctx.obj = cfg
 

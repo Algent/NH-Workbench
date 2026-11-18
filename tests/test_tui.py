@@ -570,3 +570,29 @@ async def test_ide_can_be_turned_off(sandbox, offline, monkeypatch, tmp_path):
         await settle(app, pilot)
         assert not app.cfg.ide_off and "IDE" in footer()
         assert "ide_command" not in cfg_file.read_text(encoding="utf-8")
+
+
+async def test_missing_root_is_asked_for(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import config
+    from gtnh_devenv_tools.tui import PromptScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    monkeypatch.setattr(config, "suggest_root", lambda home=None: None)
+    cfg = config.Config(root=tmp_path / "nowhere")
+
+    app = RepoApp(cfg, root_override=cfg.root)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen) and app.states == {}
+        app.screen.query_one(Input).value = str(tmp_path / "still-nowhere")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)  # asked again
+        app.screen.query_one(Input).value = str(sandbox.root)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.cfg.root == sandbox.root and str(sandbox.work) in app.states
+        assert config.load(path=cfg_file).root == sandbox.root
