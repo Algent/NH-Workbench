@@ -10,16 +10,26 @@ from .models import Branch, Outcome, PrHead, Remote, RepoState
 
 def _subdirs(folder: Path) -> list[Path]:
     try:
-        return [p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        return [p for p in folder.iterdir() if p.is_dir()]
     except OSError:  # missing or unreadable: nothing to list
         return []
 
 
+def _is_repo(path: Path) -> bool:
+    return (path / ".git").exists()
+
+
 def discover(cfg: Config) -> list[Path]:
-    """Repos directly under the root, plus one level down inside plain folders (which act as groups)."""
+    """Repos directly under the root, plus one level down inside plain folders (which act as groups).
+
+    Dot folders count only when they are repos themselves (like .github); they are never searched as groups.
+    """
     found = []
     for child in _subdirs(cfg.root):
-        found += [child] if (child / ".git").exists() else [p for p in _subdirs(child) if (p / ".git").exists()]
+        if _is_repo(child):
+            found.append(child)
+        elif not child.name.startswith("."):
+            found += [p for p in _subdirs(child) if _is_repo(p)]
     return sorted((p for p in found if not cfg.repo(p.name).ignore), key=lambda p: p.name.lower())
 
 

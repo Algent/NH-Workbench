@@ -274,9 +274,13 @@ def test_discover_groups(sandbox):
     nested.parent.mkdir()
     sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(nested))
     (sandbox.root / "not-a-repo").mkdir()
-    assert [p.name for p in ops.discover(sandbox.cfg)] == ["ref", "repo"]
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(sandbox.root / ".github"))
+    hidden = sandbox.root / ".idea" / "inside"  # a dot folder that is no repo is not a group either
+    hidden.parent.mkdir()
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(hidden))
+    assert [p.name for p in ops.discover(sandbox.cfg)] == [".github", "ref", "repo"]
     cfg = Config(root=sandbox.root, repos={"ref": RepoConfig(ignore=True)})
-    assert [p.name for p in ops.discover(cfg)] == ["repo"]
+    assert [p.name for p in ops.discover(cfg)] == [".github", "repo"]
 
 
 async def test_group_from_subfolder_and_config(sandbox):
