@@ -1,10 +1,20 @@
 # gtnh-devenv-tools
 
-Keeps track of a folder full of GTNH mod checkouts: what is off its main branch, what is behind,
-which local branches still have an open PR, and which pack mods are checked out.
+Keeps a folder full of GTNH mod checkouts under control:
 
-Needs `git`, and the `gh` CLI (logged in) for PR status. Reads `IdeaProjects` in your home folder by default.
+- which repos are off their main branch, behind, or dirty, at a glance
+- fetch everything, and fast-forward main where it is safe, even while you are on a feature branch
+- local branches with their PR, and cleanup of the merged ones
+- your PRs, your review requests, and every open PR of the org, sortable by size
+- where each repo stands in the pack: daily and release versions, what still needs a backport
+- clone missing pack mods, download the closed-source jars
+
 Works on Windows, Linux and macOS.
+
+## Getting started
+
+Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.github.com/) logged in
+(without it, everything but the PR information still works).
 
 ```
 uv sync
@@ -12,121 +22,145 @@ uv run gtnh-dev              # terminal UI
 uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 ```
 
-`gtnh-dev.cmd` (Windows) or `gtnh-dev.sh` (Linux, macOS) starts the terminal UI from anywhere: double-click
-it, or point a shortcut at it.
+`gtnh-dev.cmd` (Windows) and `gtnh-dev.sh` (Linux, macOS) start the terminal UI from anywhere: run them
+directly or point a shortcut at them. Command-line arguments are passed through.
 
-## Where files go
+Checkouts are read from `IdeaProjects` in your home folder; change it with `--root`, `root` in the config,
+or Extras in the UI.
 
-| | Windows | Linux | macOS |
-|---|---|---|---|
-| Config | `%APPDATA%\gtnh-devenv-tools\config.toml` | `~/.config/gtnh-devenv-tools/config.toml` | `~/Library/Application Support/gtnh-devenv-tools/config.toml` |
-| Cache, logs | `%LOCALAPPDATA%\gtnh-devenv-tools\Cache` | `~/.cache/gtnh-devenv-tools` | `~/Library/Caches/gtnh-devenv-tools` |
+## Terminal UI
 
-Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set. Extras (`x`) shows the config path and opens
-both folders.
+### Tabs
 
-IntelliJ is found through `ide_command` in the config, else a JetBrains Toolbox script (`idea`), else `idea`
-on PATH. When none of these works, `o` asks for the path and saves it; Extras → "IntelliJ launcher" changes it.
+| Tab | Shows |
+|---|---|
+| All, Off main, Behind, Dirty, Branches, Other | Repos, one line each, filtered |
+| My PRs | Your open PRs across GitHub, with review and CI state and the local branch they come from |
+| Reviews | Open PRs asking for your review personally (`t` adds the ones that reach you through a team) |
+| All PRs | Every open PR of the org, marked when you wrote it, are asked to review it, or reviewed it |
+| Pack | Every mod of the current daily and the latest release, and whether it is checked out |
 
-## Commands
+The panel at the bottom gives details on the selected line: branches and their PRs, the last commit,
+commits waiting on the release branch.
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `Enter`, click | Repo tabs: menu for that repo. PR tabs: open the PR |
+| `Tab` / `Shift+Tab` | Next / previous tab |
+| `/` | Filter by name. On PR tabs, `<200` keeps PRs under 200 changed lines |
+| `s`, click on a header | Sort. PR tabs: last update, smallest, largest, repo |
+| `f` / `p` | Fetch all / pull all where safe (`F` / `P`: selected repo only) |
+| `r` | Rescan (on All PRs: search GitHub again) |
+| `m` | Switch repos parked on a merged PR branch back to main |
+| `d` | Delete merged branches |
+| `o` / `w` | Open in IntelliJ / open the PR or GitHub page |
+| `t` | Reviews: show team requests. All PRs: show drafts |
+| `c` | Clone the selected mod (Pack tab) |
+| `x` | Extras |
+| `q` | Quit (also closes menus) |
+
+**Repo menu** (`Enter`): fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or
+in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
+
+**Extras** (`x`): auto-refresh interval, IntelliJ launcher, refresh pack data, change the repo folder,
+show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
+jars.
+
+Settings changed from the UI are written to the config file, keeping its comments.
+
+## Command line
 
 | Command | What it does |
 |---|---|
-| `gtnh-dev` | Terminal UI |
 | `gtnh-dev status [--off-main] [--behind] [--dirty] [--group G] [--fetch] [--pack]` | One line per repo |
 | `gtnh-dev fetch` | Fetch every repo, move nothing |
 | `gtnh-dev pull [--dry-run]` | Fetch, then fast-forward main where safe |
 | `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
 | `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
 | `gtnh-dev reviews [--team]` | Open PRs waiting on your review |
-| `gtnh-dev pack [--missing] [--refresh]` | Mods of the current daily and the latest release, and whether they are cloned |
+| `gtnh-dev pack [--missing] [--refresh]` | Pack mods and whether they are checked out |
 | `gtnh-dev clone NAME...` | Clone pack mods into the root |
+| `gtnh-dev jars` | Download the jars of closed-source pack mods |
 
-Global options: `--root PATH`, `-v`.
+Global options: `--root PATH`, `-v` (log every command run).
 
-## What "pull" does
+## What the tool will and won't do
 
-Only fast-forwards, never merges, rebases or forces.
+**Pull** only fast-forwards: it never merges, rebases or forces.
 
-- On main, no tracked changes, no local commits: fast-forward to its upstream.
+- On main, clean, no local commits: fast-forward to its upstream.
 - On main but dirty, ahead, diverged or mid-merge/rebase: skipped and flagged.
-- On another branch: the local main is fast-forwarded in the background, your branch and files are untouched.
-- Feature branches are never moved.
+- On another branch: the local main is fast-forwarded in the background; your branch and files are untouched.
+- Feature branches are never moved. `--dry-run` shows what would move and touches nothing.
 
-`--dry-run` reports what would move as of the last fetch and touches nothing.
+**Branch cleanup** deletes a branch only when its PR is merged and every local commit is part of that PR.
+Branches in a repo's `keep_branches` are never offered, and show `(kept)`. Each deletion is listed with the
+command that restores it, and logged to `deleted-branches.log` in the cache folder. A fork remote that no
+branch uses any more is removed too.
 
-## Terminal UI keys
+**Worktrees** under the root are listed with a `↳` and the repo they belong to. A branch checked out in
+another working tree is never moved, switched to or deleted from elsewhere.
 
-`Enter` or a click on the highlighted row: actions for that one repo (fetch, pull, switch to main, delete merged branches, open) ·
-`Tab` next view · `/` filter · `s` or a click on a column header: sort · `f` fetch all · `p` pull safe · `F` / `P` same for the selected repo ·
-`r` rescan · `o` open in IntelliJ · `w` open PR or web page ·
-`m` switch repos on a merged branch back to main · `d` delete merged branches ·
-`c` clone (Pack view) · `x` extras (refresh pack data, open the config or logs folder) · `q` quit
+**Forks**: a checkout whose `origin` is a fork kept only to push branches is matched to the pack through its
+other remote, and PRs are looked up in both repos.
+
+Nothing is ever pushed.
 
 ## Pack data
 
-Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --refresh` or `x` in the UI
-forces it): the daily manifest, the manifest of the latest stable release, and the number of the last
-successful daily build. The Pack view lists every mod of either, with its version in each.
+Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --refresh` or Extras forces
+it): the daily manifest, the latest stable release, and the number of the last successful daily build.
 
-Repos get a Daily and a Release column (`status --pack` on the command line), both as of your last fetch:
+The Daily and Release columns (`status --pack` on the command line) count commits as of your last fetch:
 
-- `+N` after the daily version: main has N commits the daily's version lacks (merged, not in a daily yet).
-- `+N` after the released version: the repo's `release/<major>.<minor>.x` branch has N commits since that
-  version's tag. The UI's detail pane lists them.
+- `1.9.0 +3` in Daily: main has 3 commits the daily's version lacks (merged, not in a daily yet).
+- `1.8.18 +2` in Release: the `release/<major>.<minor>.x` branch has 2 commits since that version's tag.
+- `Δ17` in Release: main has 17 commits since that tag; the higher, the harder a backport.
 
-The My PRs view lists your own open PRs across GitHub with review and CI state, and the local branch
-each one comes from when it is checked out here.
+Closed-source mods: `gtnh-dev jars` (or Extras) downloads their jars into `_GTNH_Closed_Source` under the
+root, where DreamAssemblerXXL expects them. Jars already there are left alone.
 
-The Reviews view lists open PRs that ask for your review personally. `t` there also loads the ones that
-reach you through a team (slower), and `t` again hides them.
+## GitHub data
 
-The All PRs view lists every open PR of the org (`org` in the config), marked when it is yours, asks
-for your review, or you reviewed it. It searches GitHub only when the tab is opened and the last search
-is over 30 minutes old (about 20 seconds); otherwise it shows the copy saved in the cache folder.
-Auto-refresh leaves it alone. `r` there searches again, `t` shows or hides drafts.
+PR information comes from GitHub through `gh`. The repo tabs and My PRs reload on every rescan, Reviews
+too (team requests only on demand, they are slow to search).
 
-The PR views show each PR's size (`+added -removed` lines). `s` there sorts by last update, smallest
-first, largest first or repo (a click on the Size header too), and a filter like `<200` keeps PRs under
-200 changed lines.
+All PRs searches GitHub only when the tab is opened and its last search is over 30 minutes old; it takes
+about 20 seconds, and otherwise shows the copy saved in the cache folder. Auto-refresh leaves it alone.
 
-## Settings from the UI
+## Configuration
 
-These write to the config file and keep its comments:
+Everything is optional; see `config.example.toml`.
 
-- Extras (`x`) → change the repo folder, or the auto-refresh interval (default 15 minutes, 0 turns it
-  off). Auto-refresh rescans like `r`; it does not fetch.
-- A repo's menu (`Enter`) → set its main branch or its group, or hide it from the tool. Extras → "Show a
-  hidden repo again" undoes the hiding.
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Config | `%APPDATA%\gtnh-devenv-tools\config.toml` | `~/.config/gtnh-devenv-tools/config.toml` | `~/Library/Application Support/gtnh-devenv-tools/config.toml` |
+| Cache, logs | `%LOCALAPPDATA%\gtnh-devenv-tools\Cache` | `~/.cache/gtnh-devenv-tools` | `~/Library/Caches/gtnh-devenv-tools` |
 
-## Groups
+Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 
-Repos are grouped automatically: `gtnh` when `origin` is in the GTNewHorizons org, `other` otherwise.
-A repo inside a subfolder of the root (for example `IdeaProjects/_External/ForgeEssentials`) takes the
-subfolder name as its group. `group`, `tracked_branch` and `ignore` can be set per repo in the config,
-see `config.example.toml`.
+| Setting | Default | |
+|---|---|---|
+| `root` | `~/IdeaProjects` | Folder holding the checkouts |
+| `org` | `GTNewHorizons` | Its repos form the `gtnh` group; All PRs lists its PRs |
+| `refresh_minutes` | `15` | The UI rescans this often (no fetch); `0` turns it off |
+| `concurrency` | `8` | Repos handled at the same time |
+| `prune` | `true` | Drop stale remote-tracking refs on fetch |
+| `ide_command` | found automatically | IntelliJ launcher |
 
-## Closed-source mods
+Per repo, under `[repos.<folder name>]`: `tracked_branch` (what counts as main), `group`, `ignore` (hide it),
+`keep_branches`. All of these can also be set from the repo menu.
 
-`gtnh-dev jars` (or Extras → "Download closed-source jars") fetches the jar of every pack mod without
-public source into `_GTNH_Closed_Source` under the root, from where DreamAssemblerXXL gets it. Jars
-already there are left alone.
+**Groups**: `gtnh` when `origin` is in the org, `other` otherwise. A repo in a subfolder of the root (for
+example `IdeaProjects/_External/ForgeEssentials`) takes the subfolder's name as its group.
 
-## Forks and worktrees
+**IntelliJ** is found through `ide_command`, else a JetBrains Toolbox script (`idea`), else `idea` on PATH.
+When none works, `o` asks for the path and saves it.
 
-- A checkout whose `origin` is a fork kept only to push branches (PRs go to another remote's repo) is
-  matched to the pack through that other remote, and PRs are looked up in both repos.
-- Git worktrees under the root are listed with a `↳` and the repo they belong to. A branch checked out
-  in another working tree is never moved, switched to or deleted from elsewhere; the tool says where
-  it lives instead.
-
-## Branch cleanup
-
-A branch is offered for deletion only when its PR is merged and every local commit is part of that PR.
-Branches listed in a repo's `keep_branches` (repo menu → "Protect branches from cleanup") are never
-offered, and show `(kept)` in branch lists. Extras → "Unprotect a kept branch" lifts it again.
-Deleted branches are listed with the command to restore them (the UI logs them to
-`deleted-branches.log` in the cache folder).
+**Pack mods outside the org**: their source repo and branch are known for most of them; add or override
+one under `[pack.sources."<mod name>"]`.
 
 ## Development
 
@@ -135,4 +169,4 @@ uv run pytest
 uv run ruff check
 ```
 
-GitHub Actions runs both on Linux and Windows for every push and pull request (`.github/workflows/ci.yml`).
+GitHub Actions runs both on Linux and Windows for every push and pull request.

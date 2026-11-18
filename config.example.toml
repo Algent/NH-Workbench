@@ -2,7 +2,8 @@
 # Linux: ~/.config/gtnh-devenv-tools/config.toml). Everything is optional.
 
 # root = "C:/Users/you/IdeaProjects"   # folder holding the checkouts
-# org = "GTNewHorizons"                # repos of this org form the "gtnh" group, the rest is "other"
+# org = "GTNewHorizons"                # its repos form the "gtnh" group; the All PRs tab lists its PRs
+# refresh_minutes = 15                 # the UI rescans this often (no fetch), 0 turns it off
 # concurrency = 8                      # repos handled at the same time
 # prune = true                         # drop stale remote-tracking refs on fetch
 # ide_command = "C:/path/to/idea64.exe"
