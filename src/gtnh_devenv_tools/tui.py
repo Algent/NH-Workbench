@@ -305,6 +305,7 @@ class ExtrasMenu(MenuScreen):
         every = f"every {cfg.refresh_minutes} min" if cfg.refresh_minutes else "off"
         actions = [
             ("a", "auto", f"Auto-refresh interval (now {every})", None),
+            ("i", "ide", f"IntelliJ launcher (now {cfg.ide_command or 'found automatically'})", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
@@ -875,13 +876,39 @@ class RepoApp(App[None]):
         if st:
             self._open_ide(st)
 
-    def _open_ide(self, st: RepoState) -> None:
+    @work(group="ide")
+    async def _open_ide(self, st: RepoState) -> None:
         ide = config.find_ide(self.cfg)
-        if not ide:
-            self.notify("No IDE launcher found, set ide_command in the config", severity="warning")
+        if not ide or not config.runnable(ide):
+            why = f"{ide} cannot be found." if ide else "No IntelliJ launcher found (Toolbox script or idea on PATH)."
+            ide = await self._ask_ide(why)
+            if not ide:
+                return
+        try:
+            proc.launch(ide, str(st.path))
+        except OSError as e:
+            self.notify(f"Could not start {ide}: {e}. Extras (x) can change it.", severity="error")
             return
-        proc.launch(ide, str(st.path))
         self.notify(f"Opening {st.name}")
+
+    async def _ask_ide(self, why: str = "") -> str | None:
+        """Ask for the IntelliJ launcher and save it as ide_command. Returns it, or None when cancelled or cleared."""
+        hint = f"{why} Path to idea64.exe or an idea script, or a command on PATH. Empty: find it automatically."
+        current = self.cfg.ide_command or ""
+        answer = await self.push_screen_wait(PromptScreen("IntelliJ launcher", current, hint.strip()))
+        if answer is None:
+            return None
+        if answer and not config.runnable(answer):
+            self.notify(f"Not found: {answer}", severity="error")
+            return None
+        try:
+            path = config.save_setting(("ide_command",), answer or None)
+        except config.ConfigError as e:
+            self.notify(str(e), severity="error")
+            return None
+        self.cfg.ide_command = answer or None
+        self.notify(f"Saved to {path}")
+        return answer or None
 
     @work(group="dialog")
     async def action_extras(self) -> None:
@@ -918,6 +945,8 @@ class RepoApp(App[None]):
                 repo, br = kept[int(picked) - 1]
                 rest = [b for b in self.cfg.repo(repo).keep_branches if b != br]
                 self._save_setting(("repos", repo, "keep_branches"), rest or None)
+        elif choice == "ide":
+            await self._ask_ide()
         elif choice == "auto":
             hint = "Minutes between automatic rescans, 0 to turn them off."
             value = await self.push_screen_wait(

@@ -128,6 +128,11 @@ def save_setting(keys: tuple[str, ...], value: str | bool | int | list | None, p
     return path
 
 
+def runnable(command: str) -> bool:
+    """A file that exists, or a command found on PATH."""
+    return Path(command).expanduser().is_file() or shutil.which(command) is not None
+
+
 def _toolbox_scripts() -> Path:
     """Where JetBrains Toolbox puts its launcher scripts (it calls them "shell scripts")."""
     return Path(platformdirs.user_data_dir("JetBrains", appauthor=False, roaming=False)) / "Toolbox" / "scripts"

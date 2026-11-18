@@ -26,7 +26,7 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set. Extras (`x`) show
 both folders.
 
 IntelliJ is found through `ide_command` in the config, else a JetBrains Toolbox script (`idea`), else `idea`
-on PATH.
+on PATH. When none of these works, `o` asks for the path and saves it; Extras → "IntelliJ launcher" changes it.
 
 ## Commands
 
@@ -134,3 +134,5 @@ Deleted branches are listed with the command to restore them (the UI logs them t
 uv run pytest
 uv run ruff check
 ```
+
+GitHub Actions runs both on Linux and Windows for every push and pull request (`.github/workflows/ci.yml`).

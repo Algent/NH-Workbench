@@ -479,3 +479,41 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
         tabs.active = "view-org"  # still fresh: no new search
         await settle(app, pilot)
         assert len(org_searches) == 2
+
+
+async def test_open_ide_asks_for_launcher_when_none_found(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import config, proc
+    from gtnh_devenv_tools.tui import PromptScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    monkeypatch.setattr(config, "find_ide", lambda cfg, scripts=None: cfg.ide_command)
+    launched = []
+    monkeypatch.setattr(proc, "launch", lambda *args: launched.append(args))
+    ide = tmp_path / "idea.sh"
+    ide.write_text("")
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("o")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)
+        app.screen.query_one(Input).value = str(tmp_path / "missing")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert launched == [] and not cfg_file.exists()  # a path that does not exist is refused
+
+        await pilot.press("o")
+        await pilot.pause()
+        app.screen.query_one(Input).value = str(ide)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert launched == [(str(ide), str(sandbox.work))] and app.cfg.ide_command == str(ide)
+        assert config.load(sandbox.root, cfg_file).ide_command == str(ide)
+
+        await pilot.press("o")  # known now: no question
+        await settle(app, pilot)
+        assert len(launched) == 2 and not isinstance(app.screen, PromptScreen)
