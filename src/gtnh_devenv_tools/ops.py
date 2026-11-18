@@ -150,8 +150,9 @@ async def to_main(cfg: Config, st: RepoState) -> RepoState:
 
 
 def _remote_for(st: RepoState, slug: str | None, url: str = "") -> Remote | None:
+    key = git.remote_key(url) or url
     for r in st.remotes.values():
-        if (slug and (r.slug or "").lower() == slug.lower()) or (url and git.remote_key(r.url) == git.remote_key(url)):
+        if (slug and (r.slug or "").lower() == slug.lower()) or (url and (git.remote_key(r.url) or r.url) == key):
             return r
     if slug and st.origin and (st.canonical or "").lower() == slug.lower():
         return st.origin
