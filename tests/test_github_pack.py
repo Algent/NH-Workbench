@@ -511,3 +511,68 @@ def test_to_pr_review_count():
     node = {"number": 1, "state": "OPEN"}
     assert github.to_pr(node).reviews is None
     assert github.to_pr({**node, "reviews": {"totalCount": 0}}).reviews == 0
+
+
+def test_clone_urls_and_ssh_errors():
+    from gtnh_devenv_tools import git
+    from gtnh_devenv_tools.proc import Result
+
+    assert git.clone_url("github.com", "o/m") == "git@github.com:o/m.git"
+    assert git.clone_url("github.com", "o/m", "https") == "https://github.com/o/m.git"
+    refused = Result(128, "", "git@github.com: Permission denied (publickey).\nfatal: Could not read")
+    assert "HTTPS" in git.clone_error(refused)
+    assert git.clone_error(Result(128, "", "fatal: repository not found")) == "fatal: repository not found"
+
+
+def test_missing_pack_jobs(tmp_path):
+    from gtnh_devenv_tools.models import PackEntry, RepoState
+
+    (tmp_path / "Taken").mkdir()
+    entries = [
+        PackEntry("A", "github", "1", repo="o/A"),
+        PackEntry("A-extra", "github", "1", repo="o/A"),  # same repo, cloned once
+        PackEntry("B", "external", "1", repo="x/B", host="gitlab.com", branch="1.7.10"),
+        PackEntry("Private", "github", "1", repo="o/P", private=True),
+        PackEntry("Here", "github", "1", repo="o/Here", local=RepoState(tmp_path / "Here", "Here")),
+        PackEntry("Taken", "github", "1", repo="o/Taken"),
+        PackEntry("Closed", "external", "1", closed=True),
+    ]
+    jobs = pack.missing_jobs(entries, tmp_path, "https")
+    assert [(j.url, j.dest.name, j.branch) for j in jobs] == [
+        ("https://github.com/o/A.git", "A", None),
+        ("https://gitlab.com/x/B.git", "B", "1.7.10"),
+    ]
+    assert pack.missing_jobs(entries[:1], tmp_path)[0].url == "git@github.com:o/A.git"
+
+
+async def test_org_repos_and_pr_head_use_the_protocol(monkeypatch):
+    pages = iter(
+        [
+            {
+                "organization": {
+                    "repositories": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c"},
+                        "nodes": [{"nameWithOwner": "o/a"}, {"nameWithOwner": "o/empty", "isEmpty": True}],
+                    }
+                }
+            },
+            {
+                "organization": {
+                    "repositories": {
+                        "pageInfo": {"hasNextPage": False},
+                        "nodes": [{"nameWithOwner": "o/old", "isArchived": True}],
+                    }
+                }
+            },
+            {"repository": {"pullRequest": {"headRefName": "fix", "headRepository": {"nameWithOwner": "u/a"}}}},
+        ]
+    )
+
+    async def fake_graphql(query, attempts=2):
+        return next(pages), None
+
+    monkeypatch.setattr(github, "_graphql", fake_graphql)
+    repos, error = await github.org_repos("o")
+    assert error is None and repos == [github.OrgRepo("o/a"), github.OrgRepo("o/old", archived=True)]
+    head, _ = await github.pr_head("o/a", 3, "ssh")
+    assert head.url == "git@github.com:u/a.git" and head.owner == "u"

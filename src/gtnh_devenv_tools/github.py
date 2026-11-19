@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from . import git
 from .config import cache_dir
 from .models import Branch, PrHead, PrInfo, Remote, RepoState, ReviewItem
 from .proc import run
@@ -198,7 +199,40 @@ async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
     return payload["data"], None
 
 
-async def pr_head(base: str, number: int) -> tuple[PrHead | None, str | None]:
+@dataclass(frozen=True)
+class OrgRepo:
+    slug: str  # owner/name
+    archived: bool = False
+    fork: bool = False
+
+
+async def org_repos(org: str) -> tuple[list[OrgRepo], str | None]:
+    """Every non-empty repo of the org."""
+    repos: list[OrgRepo] = []
+    after = None
+    for _ in range(30):  # 100 per page
+        cursor = f", after: {json.dumps(after)}" if after else ""
+        query = (
+            f"query {{ organization(login: {json.dumps(org)}) {{ repositories(first: 100{cursor}) {{"
+            " pageInfo { hasNextPage endCursor } nodes { nameWithOwner isArchived isFork isEmpty } } } }"
+        )
+        data, error = await _graphql(query)
+        if data is None:
+            return repos, error
+        page = ((data.get("organization") or {}).get("repositories")) or {}
+        repos += [
+            OrgRepo(n["nameWithOwner"], bool(n.get("isArchived")), bool(n.get("isFork")))
+            for n in page.get("nodes") or []
+            if n and not n.get("isEmpty")
+        ]
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        after = info.get("endCursor")
+    return repos, None
+
+
+async def pr_head(base: str, number: int, protocol: str = "https") -> tuple[PrHead | None, str | None]:
     """Where the commits of base#number live, to check it out."""
     owner, _, name = base.partition("/")
     query = (
@@ -210,8 +244,9 @@ async def pr_head(base: str, number: int) -> tuple[PrHead | None, str | None]:
     if not node:
         return None, error or f"{base}#{number} not found"
     repo = node.get("headRepository") or {}
-    url = f"{repo['url']}.git" if repo.get("url") else ""
-    return PrHead(number, base, node.get("headRefName") or "", repo.get("nameWithOwner"), url), None
+    slug = repo.get("nameWithOwner")
+    url = git.clone_url("github.com", slug, protocol) if slug else ""
+    return PrHead(number, base, node.get("headRefName") or "", slug, url), None
 
 
 _SEARCH_FIELDS = (

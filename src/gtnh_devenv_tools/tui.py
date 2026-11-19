@@ -19,7 +19,7 @@ from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
 from .config import Config
-from .models import PackEntry, PackInfo, RepoState, ReviewItem
+from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 
 VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "all": ("All", lambda st: True),
@@ -314,10 +314,13 @@ class ExtrasMenu(MenuScreen):
         closed = sum(1 for entry in info.entries if entry.closed) if info else 0
         every = f"every {cfg.refresh_minutes} min" if cfg.refresh_minutes else "off"
         ide_now = "off" if cfg.ide_off else cfg.ide_command or "found automatically"
+        other = "HTTPS" if cfg.clone_protocol == "ssh" else "SSH"
         actions = [
             ("a", "auto", f"Auto-refresh interval (now {every})", None),
             ("f", "refresh_fetch", f"Fetch during auto-refresh (now {'on' if cfg.refresh_fetch else 'off'})", None),
             ("i", "ide", f"IntelliJ launcher (now {ide_now})", None),
+            ("s", "protocol", f"Clone over {other} (now {cfg.clone_protocol.upper()})", None),
+            ("m", "clone_many", "Clone missing repos: pack mods, org repos", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
@@ -1016,6 +1019,12 @@ class RepoApp(App[None]):
                 self._save_setting(("repos", repo, "keep_branches"), rest or None)
         elif choice == "ide":
             await self._ask_ide()
+        elif choice == "protocol":
+            new = "https" if self.cfg.clone_protocol == "ssh" else "ssh"
+            if self._save_setting(("clone_protocol",), new, rescan=False, quiet=True):
+                self.notify(f"New clones and remotes use {new.upper()}; existing ones are left as they are")
+        elif choice == "clone_many":
+            await self._clone_many_menu()
         elif choice == "refresh_fetch":
             on = not self.cfg.refresh_fetch
             if self._save_setting(("refresh_fetch",), on or None, rescan=False, quiet=True):
@@ -1033,6 +1042,63 @@ class RepoApp(App[None]):
             self._save_setting(("refresh_minutes",), int(value))
         elif choice == "root":
             await self._ask_root(str(self.cfg.root))
+
+    async def _clone_many_menu(self) -> None:
+        protocol = self.cfg.clone_protocol
+        pack_jobs = pack.missing_jobs(self.entries, self.cfg.root, protocol)
+        org = self.cfg.org
+        actions = [
+            ("p", "pack", f"Pack mods not checked out ({len(pack_jobs)})", None if pack_jobs else "none missing"),
+            ("o", "org", f"{org} repos not checked out, archived ones left out (asks GitHub)", None),
+        ]
+        if not self.entries:
+            actions[0] = (*actions[0][:3], "pack data not loaded")
+        info = Text(f"Into {self.cfg.root} over {protocol.upper()}. Folders that already exist are skipped.", "dim")
+        choice = await self.push_screen_wait(MenuScreen(Text("Clone missing repos", "bold"), actions, info))
+        if not choice:
+            return
+        if choice == "pack":
+            jobs, what = pack_jobs, "pack mods"
+        else:
+            self.notify(f"Listing the repos of {org}...")
+            repos, error = await github.org_repos(org)
+            if error:
+                self.notify(f"{org} repos: {error}", severity="error")
+                if not repos:
+                    return
+            repos = [r for r in repos if not r.archived]
+            jobs, what = ops.org_jobs(repos, self.states.values(), self.cfg.root, protocol), f"{org} repos"
+        if not jobs:
+            self.notify(f"Every one of the {what} is checked out already")
+            return
+        body = Text("\n".join(j.name for j in jobs))
+        if await self.push_screen_wait(ConfirmScreen(f"Clone {len(jobs)} {what}?", body)):
+            self._clone_many(jobs)
+
+    @work(group="clone")
+    async def _clone_many(self, jobs: list[CloneJob]) -> None:
+        if self.busy:
+            self.notify(f"{self.busy} is still running", severity="warning")
+            return
+        self.busy = "Cloning"
+        done = 0
+
+        def on_done(job: CloneJob, why: str | None) -> None:
+            nonlocal done
+            done += 1
+            self.sub_title = f"Cloning {done}/{len(jobs)}"
+
+        try:
+            failed = await ops.clone_all(jobs, min(4, self.cfg.concurrency), on_done)
+        finally:
+            self.busy = ""
+        for job, why in failed[:5]:
+            self.notify(f"{job.name}: {why}", severity="error", timeout=10)
+        cloned = [j.dest for j in jobs if j.dest.is_dir() and j not in {f for f, _ in failed}]
+        if cloned:
+            await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), cloned)
+        more = f", {len(failed)} failed" if failed else ""
+        self.notify(f"Cloned {len(cloned)} repos{more}", severity="warning" if failed else "information")
 
     @work(group="dialog")
     async def _first_root(self) -> None:
@@ -1164,7 +1230,7 @@ class RepoApp(App[None]):
             self.notify(f"{st.name} has uncommitted changes", severity="error")
             return
         self.notify(f"Checking out #{item.pr.number} in {st.name}...")
-        head, error = await github.pr_head(item.repo, item.pr.number)
+        head, error = await github.pr_head(item.repo, item.pr.number, self.cfg.clone_protocol)
         if not head:
             self.notify(f"#{item.pr.number}: {error}", severity="error")
             return
@@ -1188,7 +1254,7 @@ class RepoApp(App[None]):
         if entry.local:
             return
         self.notify(f"Cloning {entry.repo or entry.name}...")
-        res = await pack.clone(entry, self.cfg.root)
+        res = await pack.clone(entry, self.cfg.root, self.cfg.clone_protocol)
         if not res.ok:
             self.notify(f"{entry.name}: {res.message}", severity="error")
             return

@@ -39,6 +39,8 @@ async def run(*args: str, cwd: Path | None = None, stdin: str | None = None, tim
             cwd=cwd,
             env=_ENV,
             creationflags=_FLAGS,
+            # No controlling terminal: ssh fails at once instead of prompting over the UI for a host key.
+            start_new_session=sys.platform != "win32",
             stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

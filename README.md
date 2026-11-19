@@ -65,7 +65,8 @@ commits waiting on the release branch.
 **Repo menu** (`Enter`): fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or
 in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
 
-**Extras** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), IntelliJ launcher, refresh pack data, change the repo folder,
+**Extras** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), clone over SSH or HTTPS,
+clone every missing pack mod or org repo (archived ones left out) after listing them, IntelliJ launcher, refresh pack data, change the repo folder,
 show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
 jars.
 
@@ -156,6 +157,7 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 | `root` | `~/IdeaProjects` | Folder holding the checkouts |
 | `org` | `GTNewHorizons` | Its repos form the `gtnh` group; All PRs lists its PRs |
 | `refresh_minutes` | `15` | The UI rescans this often; `0` turns it off |
+| `clone_protocol` | `ssh` | `ssh` or `https`, for clones and the fork remotes PR checkout adds. Existing remotes are left alone |
 | `refresh_fetch` | `false` | Auto-refresh fetches every repo instead of only rescanning |
 | `pr_filters` | none | All PRs filters, set with `v`: `local`, `pack`, `unreviewed`, `stale` |
 | `concurrency` | `8` | Repos handled at the same time |

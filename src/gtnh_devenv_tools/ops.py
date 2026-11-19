@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import git
 from .config import Config
-from .models import Branch, Outcome, PrHead, Remote, RepoState
+from .models import Branch, CloneJob, Outcome, PrHead, Remote, RepoState
 
 
 def _subdirs(folder: Path) -> list[Path]:
@@ -161,6 +161,35 @@ async def to_main(cfg: Config, st: RepoState) -> RepoState:
     if new.note and new.note.kind != "failed":
         new.note = Outcome("updated", f"on {st.tracked}, {new.note.text}", new.note.commits)
     return new
+
+
+def org_jobs(repos: Iterable, states: Iterable[RepoState], root: Path, protocol: str = "ssh") -> list[CloneJob]:
+    """Clone jobs for the given github.OrgRepo list, minus the ones checked out here or whose folder is taken."""
+    have = local_slugs(states)
+    jobs = [
+        CloneJob(r.slug, git.clone_url("github.com", r.slug, protocol), root / r.slug.partition("/")[2])
+        for r in repos
+        if r.slug.lower() not in have
+    ]
+    return [j for j in jobs if not j.dest.exists()]
+
+
+async def clone_all(
+    jobs: list[CloneJob], limit: int = 4, on_done: Callable[[CloneJob, str | None], None] | None = None
+) -> list[tuple[CloneJob, str]]:
+    """Clone every job, a few at a time. Returns the failed ones with why."""
+    failed: list[tuple[CloneJob, str]] = []
+
+    async def one(job: CloneJob) -> None:
+        res = await git.clone(job.url, job.dest, job.branch)
+        why = None if res.ok else git.clone_error(res)
+        if why:
+            failed.append((job, why))
+        if on_done:
+            on_done(job, why)
+
+    await run_all(jobs, one, limit)
+    return failed
 
 
 def local_slugs(states: Iterable[RepoState]) -> set[str]:

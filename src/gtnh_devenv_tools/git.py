@@ -279,6 +279,20 @@ async def remove_remote(path: Path, name: str) -> Result:
     return await git(path, "remote", "remove", name)
 
 
+def clone_url(host: str, slug: str, protocol: str = "ssh") -> str:
+    return f"git@{host}:{slug}.git" if protocol == "ssh" else f"https://{host}/{slug}.git"
+
+
+_SSH_REFUSED = ("Permission denied (publickey", "Host key verification failed", "Could not resolve hostname")
+
+
+def clone_error(res: Result) -> str:
+    """Why a clone failed, in one line; SSH refusals get a pointer to the HTTPS setting."""
+    if any(s in res.err for s in _SSH_REFUSED):
+        return "SSH refused (no key for GitHub, or unknown host key). Extras can switch cloning to HTTPS"
+    return res.message
+
+
 async def clone(url: str, dest: Path, branch: str | None = None) -> Result:
     args = ["--branch", branch] if branch else []
     return await run("git", "clone", *args, url, str(dest), timeout=3600)

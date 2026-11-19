@@ -423,3 +423,22 @@ async def test_cleanup_offers_the_checked_out_branch_only_when_parked(sandbox):
     dirty = await ops.scan_repo(sandbox.cfg, sandbox.work)
     dirty.current.pr = st.current.pr
     assert (await ops.cleanup_candidates([dirty], parked=True))[0] == []
+
+
+async def test_org_jobs_and_clone_all(sandbox):
+    from gtnh_devenv_tools.github import OrgRepo
+    from gtnh_devenv_tools.models import CloneJob
+
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/repo.git")
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    (sandbox.root / "taken").mkdir()
+    repos = [OrgRepo("o/repo"), OrgRepo("O/New"), OrgRepo("o/taken")]
+    jobs = ops.org_jobs(repos, [st], sandbox.root, "https")
+    assert [(j.name, j.url, j.dest) for j in jobs] == [("O/New", "https://github.com/O/New.git", sandbox.root / "New")]
+
+    good = CloneJob("o/good", str(sandbox.origin), sandbox.root / "good")
+    bad = CloneJob("o/bad", str(sandbox.origin) + "-missing", sandbox.root / "bad")
+    seen = []
+    failed = await ops.clone_all([good, bad], 2, lambda job, why: seen.append((job.name, why is None)))
+    assert sorted(seen) == [("o/bad", False), ("o/good", True)]
+    assert [job for job, _ in failed] == [bad] and (sandbox.root / "good" / ".git").exists()

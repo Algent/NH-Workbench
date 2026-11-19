@@ -607,7 +607,7 @@ async def test_check_out_pr_from_reviews(sandbox, offline, monkeypatch):
     fork, tip = make_fork(sandbox)
     sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/m.git")  # matches the fake PR's repo
 
-    async def fake_head(base, number):
+    async def fake_head(base, number, protocol="https"):
         return PrHead(number, base, "feature", "someone/m", str(fork)), None
 
     monkeypatch.setattr(github, "pr_head", fake_head)
@@ -743,3 +743,57 @@ async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
         app.auto_refresh()
         await settle(app, pilot)
         assert fetched == [sandbox.work]
+
+
+async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeypatch, tmp_path):
+    from gtnh_devenv_tools import config, git
+    from gtnh_devenv_tools.tui import ConfirmScreen, MenuScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    config.save_setting(("root",), str(sandbox.root), cfg_file)
+    urls = []
+
+    async def fake_clone(url, dest, branch=None):
+        urls.append(url)
+        return await real_clone(str(sandbox.origin), dest)
+
+    real_clone = git.clone
+    monkeypatch.setattr(git, "clone", fake_clone)
+
+    async def fake_org_repos(org):
+        return [
+            github.OrgRepo("o/new"),
+            github.OrgRepo("o/old", archived=True),
+            github.OrgRepo("o/fork", fork=True),
+        ], None
+
+    monkeypatch.setattr(github, "org_repos", fake_org_repos)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.cfg.clone_protocol == "ssh"
+        await pilot.press("x", "s")
+        await settle(app, pilot)
+        assert config.load(sandbox.root, cfg_file).clone_protocol == "https"
+
+        await pilot.press("x", "m")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuScreen)
+        await pilot.press("p")  # the fake pack has one missing mod, o/m
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert urls == ["https://github.com/o/m.git"] and str(sandbox.root / "m") in app.states
+
+        await pilot.press("x", "m", "o")  # not archived, forks included (most GTNH mods are forks)
+        for _ in range(50):  # the list comes from a (fake) GitHub call first
+            await pilot.pause()
+            if isinstance(app.screen, ConfirmScreen):
+                break
+        assert isinstance(app.screen, ConfirmScreen) and "Clone 2 " in app.screen._title
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert sorted(urls[1:]) == ["https://github.com/o/fork.git", "https://github.com/o/new.git"]
+        assert (sandbox.root / "new" / ".git").exists() and str(sandbox.root / "fork") in app.states

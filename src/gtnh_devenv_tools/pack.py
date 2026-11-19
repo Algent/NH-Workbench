@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import APP_NAME, git
 from .config import Config, cache_dir
-from .models import PackEntry, PackInfo, RepoState
+from .models import CloneJob, PackEntry, PackInfo, RepoState
 from .proc import Result
 
 log = logging.getLogger(__name__)
@@ -264,13 +264,28 @@ def find(entries: Iterable[PackEntry], name: str) -> PackEntry | None:
     return next((e for e in entries if wanted in (e.name.lower(), (e.repo or "").lower().partition("/")[2])), None)
 
 
-async def clone(entry: PackEntry, root: Path) -> Result:
+def clone_job(entry: PackEntry, root: Path, protocol: str = "ssh") -> CloneJob | None:
     if not entry.repo:
+        return None
+    url = git.clone_url(entry.host, entry.repo, protocol)
+    return CloneJob(entry.repo, url, root / entry.repo.partition("/")[2], entry.branch)
+
+
+def missing_jobs(entries: Iterable[PackEntry], root: Path, protocol: str = "ssh") -> list[CloneJob]:
+    """Pack mods with a known, public source that are not checked out and whose folder is free."""
+    jobs = (clone_job(e, root, protocol) for e in entries if e.status == "missing" and not e.private)
+    by_dest = {j.dest: j for j in jobs if j and not j.dest.exists()}  # one repo can ship several mods
+    return list(by_dest.values())
+
+
+async def clone(entry: PackEntry, root: Path, protocol: str = "ssh") -> Result:
+    job = clone_job(entry, root, protocol)
+    if not job:
         return Result(1, "", "closed source" if entry.closed else "source repository unknown")
-    dest = root / entry.repo.partition("/")[2]
-    if dest.exists():
-        return Result(1, "", f"{dest} already exists")
-    return await git.clone(f"https://{entry.host}/{entry.repo}.git", dest, entry.branch)
+    if job.dest.exists():
+        return Result(1, "", f"{job.dest} already exists")
+    res = await git.clone(job.url, job.dest, job.branch)
+    return res if res.ok else Result(res.code, "", git.clone_error(res))
 
 
 def pack_slugs(entries: Iterable[PackEntry]) -> set[str]:

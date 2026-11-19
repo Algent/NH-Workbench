@@ -402,7 +402,7 @@ def clone(
                 failed += 1
                 continue
             with err.status(f"Cloning {entry.repo or entry.name}..."):
-                res = await pack.clone(entry, cfg.root)
+                res = await pack.clone(entry, cfg.root, cfg.clone_protocol)
             if res.ok:
                 out.print(f"[green]cloned[/] {entry.repo}")
             else:

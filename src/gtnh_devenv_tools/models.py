@@ -50,6 +50,14 @@ class PrHead:
 
 
 @dataclass(frozen=True)
+class CloneJob:
+    name: str  # owner/name, for messages
+    url: str
+    dest: Path
+    branch: str | None = None
+
+
+@dataclass(frozen=True)
 class ReviewItem:
     repo: str  # owner/name
     pr: PrInfo
