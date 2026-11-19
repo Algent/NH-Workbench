@@ -729,7 +729,7 @@ async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
-        app.last_loaded = 0
+        app.last_loaded = float("-inf")  # monotonic time starts at boot: CI machines are young
         app.auto_refresh()
         await settle(app, pilot)
         assert fetched == []  # off by default: only a rescan
@@ -739,7 +739,7 @@ async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
         await settle(app, pilot)
         assert app.cfg.refresh_fetch and len(offline) == scans  # saving the option does not rescan
         assert config.load(sandbox.root, cfg_file).refresh_fetch
-        app.last_loaded = 0
+        app.last_loaded = float("-inf")  # monotonic time starts at boot: CI machines are young
         app.auto_refresh()
         await settle(app, pilot)
         assert fetched == [sandbox.work]
