@@ -620,3 +620,47 @@ async def test_check_out_pr_from_reviews(sandbox, offline, monkeypatch):
         st = app.states[str(sandbox.work)]
         assert st.head == "PR-1" and st.head_sha == tip and st.current.upstream == "someone/feature"
         assert st.current.pr and st.current.pr.number == 1
+
+
+async def test_cleanup_switches_parked_repos_to_main_first(sandbox, offline, monkeypatch, tmp_path):
+    from gtnh_devenv_tools import config
+    from gtnh_devenv_tools.tui import ConfirmScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    for name in ("algent/one", "algent/two"):
+        sandbox.git(sandbox.work, "checkout", "-q", "-b", name, "master")
+        sandbox.commit(sandbox.work, name.replace("/", "-"))
+    tips = {name: sandbox.sha(sandbox.work, name) for name in ("algent/one", "algent/two")}
+
+    async def merged(states):
+        data = github.PrData()
+        for number, (name, tip) in enumerate(tips.items(), 1):
+            data.prs[("repo", name)] = PrInfo(number, "MERGED", False, None, None, tip, "", "")
+        return data
+
+    monkeypatch.setattr(github, "fetch_prs", merged)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        async def confirm_dialog() -> None:
+            await pilot.press("d")
+            for _ in range(100):  # the dialog's worker waits on the dialog, so settle() would hang
+                await pilot.pause(0.05)
+                if isinstance(app.screen, ConfirmScreen):
+                    return
+            raise AssertionError("no cleanup dialog")
+
+        await confirm_dialog()  # unticked: the checked-out branch stays, and that choice is remembered
+        await pilot.press("s", "y")
+        await settle(app, pilot)
+        st = app.states[str(sandbox.work)]
+        assert st.head == "algent/two" and [b.name for b in st.branches] == ["algent/two", "master"]
+        assert config.load(sandbox.root, cfg_file).cleanup_to_main is False
+
+        await confirm_dialog()  # ticked again: switch to main, then delete
+        await pilot.press("s", "y")
+        await settle(app, pilot)
+        st = app.states[str(sandbox.work)]
+        assert st.head == "master" and [b.name for b in st.branches] == ["master"]
+        assert config.load(sandbox.root, cfg_file).cleanup_to_main is True

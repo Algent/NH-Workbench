@@ -38,6 +38,7 @@ class Config:
     prune: bool = True
     ide_command: str | None = None
     ide_off: bool = False  # ide_command = false: no IDE actions at all
+    cleanup_to_main: bool = True  # cleanup offers branches still checked out, switching to main first
     repos: dict[str, RepoConfig] = field(default_factory=dict)
     # external pack mod name (lower case) -> {repo, branch, closed}
     sources: dict[str, dict] = field(default_factory=dict)
@@ -97,6 +98,7 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             prune=bool(data.get("prune", True)),
             ide_command=ide if isinstance(ide := data.get("ide_command"), str) and ide else None,
             ide_off=ide is False,
+            cleanup_to_main=bool(data.get("cleanup_to_main", True)),
             repos={k.lower(): _repo_config(v) for k, v in data.get("repos", {}).items()},
             sources=sources,
         )

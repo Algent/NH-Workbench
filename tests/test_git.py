@@ -409,3 +409,17 @@ async def test_checkout_pr_of_deleted_fork_and_dirty_repo(sandbox):
 
     st = await ops.checkout_pr(sandbox.cfg, await ops.scan_repo(sandbox.cfg, sandbox.work), head)
     assert st.note.kind == "updated" and st.head == "PR-9" and st.head_sha == tip and st.current.upstream is None
+
+
+async def test_cleanup_offers_the_checked_out_branch_only_when_parked(sandbox):
+    sandbox.git(sandbox.work, "checkout", "-b", "algent/done")
+    tip = sandbox.commit(sandbox.work, "feature-work")
+    st = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    st.current.pr = PrInfo(1, "MERGED", False, None, None, tip, "", "")
+    assert (await ops.cleanup_candidates([st]))[0] == []
+    assert (await ops.cleanup_candidates([st], parked=True))[0] == [(st, st.current)]
+
+    (sandbox.work / "first.txt").write_text("uncommitted", encoding="utf-8")
+    dirty = await ops.scan_repo(sandbox.cfg, sandbox.work)
+    dirty.current.pr = st.current.pr
+    assert (await ops.cleanup_candidates([dirty], parked=True))[0] == []

@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 
 from . import config, github, ops, pack, proc, render
@@ -174,18 +174,26 @@ def dialog_head(title: RenderableType) -> Horizontal:
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,q,escape", "answer(False)", "No")]
+    """Yes or no, with an optional checkbox (toggled with s) read back from .checked."""
+
+    BINDINGS = [
+        Binding("y", "answer(True)", "Yes"),
+        Binding("n,q,escape", "answer(False)", "No"),
+        Binding("s", "toggle_option", show=False),
+    ]
     AUTO_FOCUS = "#no"  # Enter on its own must never confirm
 
-    def __init__(self, title: str, body: RenderableType) -> None:
+    def __init__(self, title: str, body: RenderableType, option: str | None = None, checked: bool = True) -> None:
         super().__init__()
-        self._title, self._body = title, body
+        self._title, self._body, self._option, self.checked = title, body, option, checked
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield dialog_head(self._title)
             with VerticalScroll(id="dialog-body"):
                 yield Static(self._body)
+            if self._option:
+                yield Checkbox(f"{self._option} (s)", self.checked, id="option")
             with Horizontal(id="dialog-buttons"):
                 yield Button("Yes (y)", id="yes", variant="warning")
                 yield Button("No (n)", id="no", variant="primary")
@@ -196,6 +204,13 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def action_answer(self, value: bool) -> None:
         self.dismiss(value)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        self.checked = event.value
+
+    def action_toggle_option(self) -> None:
+        if self._option:
+            self.query_one("#option", Checkbox).toggle()
 
 
 class PromptScreen(ModalScreen[str | None]):
@@ -1032,20 +1047,43 @@ class RepoApp(App[None]):
     async def _cleanup(self, states: list[RepoState]) -> None:
         if self.busy:
             return
-        safe, unpushed = await ops.cleanup_candidates(states)
+        safe, unpushed = await ops.cleanup_candidates(states, parked=True)
         if not safe:
             kept = f" ({len(unpushed)} merged ones kept: local commits not in their PR)" if unpushed else ""
             self.notify(f"No merged branches to clean up{kept}")
             return
+        parked = {st.path: st for st, br in safe if br.name == st.head}  # checked out: needs a switch to main
         body = Text("\n").join(
-            Text.assemble((st.name, "bold"), f"  {br.name}", (f"  PR #{br.pr.number}", "dim")) for st, br in safe
+            Text.assemble(
+                (st.name, "bold"),
+                f"  {br.name}",
+                (f"  PR #{br.pr.number}", "dim"),
+                (f"  checked out, switches to {st.tracked} first" if st.path in parked else "", "yellow"),
+            )
+            for st, br in safe
         )
         for st, remote in ops.orphaned_remotes(safe):
             body.append("\n").append_text(
                 Text.assemble((st.name, "bold"), f"  remote {remote.name}", ("  no longer tracked", "dim"))
             )
-        if not await self.push_screen_wait(ConfirmScreen(f"Delete {len(safe)} merged local branches?", body)):
+        option = f"Switch {len(parked)} repos to main first (unticked: keep their branch)" if parked else None
+        screen = ConfirmScreen(f"Delete {len(safe)} merged local branches?", body, option, self.cfg.cleanup_to_main)
+        if not await self.push_screen_wait(screen):
             return
+        if parked:
+            if screen.checked != self.cfg.cleanup_to_main:
+                self.cfg.cleanup_to_main = screen.checked
+                try:
+                    config.save_setting(("cleanup_to_main",), screen.checked)
+                except config.ConfigError as e:
+                    self.notify(str(e), severity="error")
+            if screen.checked:
+                await self._batch("Switching", lambda p: ops.to_main(self.cfg, parked[p]), list(parked))
+            # Whatever is still checked out (unticked, or the switch failed) stays.
+            safe = [(st, br) for st, br in safe if self.states.get(str(st.path), st).head != br.name]
+            if not safe:
+                self.notify("Nothing deleted: the merged branches are still checked out")
+                return
         report = await ops.cleanup(safe)
         log_file = config.cache_dir() / "deleted-branches.log"
         if report.restore:

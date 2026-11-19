@@ -96,7 +96,9 @@ Global options: `--root PATH`, `-v` (log every command run).
 - Feature branches are never moved. `--dry-run` shows what would move and touches nothing.
 
 **Branch cleanup** deletes a branch only when its PR is merged and every local commit is part of that PR.
-Branches in a repo's `keep_branches` are never offered, and show `(kept)`. Each deletion is listed with the
+Branches in a repo's `keep_branches` are never offered, and show `(kept)`. In the UI, a merged branch that
+is still checked out is offered too when the repo is clean: a checkbox (`s`) switches those repos to main
+first, or leaves their branch alone; the choice is remembered. Each deletion is listed with the
 command that restores it, and logged to `deleted-branches.log` in the cache folder. A fork remote that no
 branch uses any more is removed too.
 
@@ -154,6 +156,7 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 | `concurrency` | `8` | Repos handled at the same time |
 | `prune` | `true` | Drop stale remote-tracking refs on fetch |
 | `ide_command` | found automatically | IntelliJ launcher; `false` hides the IDE actions |
+| `cleanup_to_main` | `true` | Cleanup's "switch to main first" checkbox starts ticked |
 
 Per repo, under `[repos.<folder name>]`: `tracked_branch` (what counts as main), `group`, `ignore` (hide it),
 `keep_branches`. All of these can also be set from the repo menu.

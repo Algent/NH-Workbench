@@ -237,16 +237,22 @@ async def _switch_to(st: RepoState, name: str) -> str | None:
     return None
 
 
-async def cleanup_candidates(states: Iterable[RepoState]) -> tuple[list[tuple[RepoState, Branch]], list[tuple]]:
+async def cleanup_candidates(
+    states: Iterable[RepoState], parked: bool = False
+) -> tuple[list[tuple[RepoState, Branch]], list[tuple]]:
     """Split merged-PR branches into safe to delete and kept ones.
 
+    With parked, the checked-out branch counts too when the repo can switch back to main first (see to_main).
     Kept entries are (repo, branch, n): n local commits are not in the PR, or None if that could not be checked.
     """
+    states = list(states)
+    switchable = {st.path for st in to_main_candidates(states)} if parked else set()
     safe, kept = [], []
     for st in states:
         for br in st.branches:
             pr = br.pr
-            in_use = br.name in (st.head, st.tracked) or st.checked_out_elsewhere(br.name)
+            current = br.name == st.head and st.path not in switchable
+            in_use = current or br.name == st.tracked or st.checked_out_elsewhere(br.name)
             if in_use or br.keep or not pr or pr.state != "MERGED":
                 continue
             extra = 0
