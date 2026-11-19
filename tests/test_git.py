@@ -442,3 +442,22 @@ async def test_org_jobs_and_clone_all(sandbox):
     failed = await ops.clone_all([good, bad], 2, lambda job, why: seen.append((job.name, why is None)))
     assert sorted(seen) == [("o/bad", False), ("o/good", True)]
     assert [job for job, _ in failed] == [bad] and (sandbox.root / "good" / ".git").exists()
+
+
+async def test_built_jars_of_org_repos(sandbox):
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/GTNewHorizons/repo.git")
+    other = sandbox.root / "other"
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(other))
+    for repo in (sandbox.work, other):
+        libs = repo / "build" / "libs"
+        libs.mkdir(parents=True)
+        for name in ("mod-1.0.jar", "mod-1.0-dev.jar", "notes.txt"):
+            (libs / name).write_text("x" * 10, encoding="utf-8")
+    states = [await ops.scan_repo(sandbox.cfg, p) for p in (sandbox.work, other)]
+
+    found = ops.built_jars(states, "gtnewhorizons")
+    assert [(st.name, [p.name for p in jars]) for st, jars in found] == [("repo", ["mod-1.0-dev.jar", "mod-1.0.jar"])]
+    freed, failed = ops.delete_files([p for _, jars in found for p in jars])
+    assert freed == 20 and failed == []
+    assert sorted(p.name for p in (sandbox.work / "build" / "libs").iterdir()) == ["notes.txt"]
+    assert len(list((other / "build" / "libs").iterdir())) == 3  # not an org repo: untouched

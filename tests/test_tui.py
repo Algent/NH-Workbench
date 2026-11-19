@@ -797,3 +797,26 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
         await settle(app, pilot)
         assert sorted(urls[1:]) == ["https://github.com/o/fork.git", "https://github.com/o/new.git"]
         assert (sandbox.root / "new" / ".git").exists() and str(sandbox.root / "fork") in app.states
+
+
+async def test_extras_deletes_built_jars(sandbox, offline):
+    from gtnh_devenv_tools.tui import ConfirmScreen
+
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/GTNewHorizons/repo.git")
+    libs = sandbox.work / "build" / "libs"
+    libs.mkdir(parents=True)
+    (libs / "mod.jar").write_text("jar", encoding="utf-8")
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("x", "b")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen) and "Delete 1 built jars" in app.screen._title
+        await pilot.press("n")  # keeps them
+        await pilot.pause()
+        assert (libs / "mod.jar").exists()
+        await pilot.press("x", "b")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+        assert not (libs / "mod.jar").exists() and libs.is_dir()

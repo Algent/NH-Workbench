@@ -283,6 +283,10 @@ def pr_table(columns: Iterable[str], rows: Iterable[list[Text]]) -> Table:
     return table
 
 
+def megabytes(size: int) -> str:
+    return f"{size / 1_000_000:.1f} MB"
+
+
 def reviews_table(items: Iterable[ReviewItem], width: int = 70) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
     for column in REVIEW_COLUMNS:

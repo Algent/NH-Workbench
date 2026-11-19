@@ -328,6 +328,7 @@ class ExtrasMenu(MenuScreen):
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
             ("j", "jars", f"Download closed-source jars ({closed})", None if closed else "pack data not loaded"),
+            ("b", "purge_jars", f"Delete built jars (build/libs) of {cfg.org} repos", None),
         ]
         super().__init__(Text("Extras", "bold"), actions, Group(*lines))
 
@@ -993,6 +994,8 @@ class RepoApp(App[None]):
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
+        elif choice == "purge_jars":
+            await self._purge_jars()
         elif choice == "jars":
             folder = self.cfg.root / pack.JAR_FOLDER
             self.notify("Downloading closed-source jars...")
@@ -1042,6 +1045,27 @@ class RepoApp(App[None]):
             self._save_setting(("refresh_minutes",), int(value))
         elif choice == "root":
             await self._ask_root(str(self.cfg.root))
+
+    async def _purge_jars(self) -> None:
+        found = ops.built_jars(self.states.values(), self.cfg.org)
+        if not found:
+            self.notify(f"No built jars in build/libs of {self.cfg.org} repos")
+            return
+        files = [p for _, jars in found for p in jars]
+        total = sum(ops.file_size(p) for p in files)
+        lines = [
+            Text.assemble((st.name, "bold"), f"  {len(jars)} jars, {render.megabytes(sum(map(ops.file_size, jars)))}")
+            for st, jars in found
+        ]
+        lines.append(Text("\nDeleted for good, not to the recycle bin. The next build makes them again.", "dim"))
+        title = f"Delete {len(files)} built jars ({render.megabytes(total)}) in {len(found)} repos?"
+        if not await self.push_screen_wait(ConfirmScreen(title, Text("\n").join(lines))):
+            return
+        freed, failed = await asyncio.to_thread(ops.delete_files, files)
+        for line in failed[:5]:
+            self.notify(line, severity="error", timeout=10)
+        more = f", {len(failed)} could not be deleted (in use?)" if failed else ""
+        self.notify(f"Freed {render.megabytes(freed)}{more}", severity="warning" if failed else "information")
 
     async def _clone_many_menu(self) -> None:
         protocol = self.cfg.clone_protocol

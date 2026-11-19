@@ -68,7 +68,7 @@ in the file manager, set the main branch or group, protect branches from cleanup
 **Extras** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), clone over SSH or HTTPS,
 clone every missing pack mod or org repo (archived ones left out) after listing them, IntelliJ launcher, refresh pack data, change the repo folder,
 show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
-jars.
+jars, delete the jars Gradle left in `build/libs` of the org's repos (with the list and total size first).
 
 Settings changed from the UI are written to the config file, keeping its comments.
 
@@ -115,6 +115,9 @@ another working tree is never moved, switched to or deleted from elsewhere.
 
 **Forks**: a checkout whose `origin` is a fork kept only to push branches is matched to the pack through its
 other remote, and PRs are looked up in both repos.
+
+**Built jars**: only `*.jar` files directly in `build/libs` of checkouts with a remote in the org are deleted,
+for good (not to the recycle bin); the next build makes them again.
 
 Nothing is ever pushed.
 

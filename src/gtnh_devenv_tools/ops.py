@@ -192,6 +192,53 @@ async def clone_all(
     return failed
 
 
+def in_org(st: RepoState, org: str) -> bool:
+    """The repo belongs to the org through any remote (a fork checkout counts too)."""
+    org = org.lower()
+    return (st.slug or "").lower().startswith(org + "/") or any(
+        (r.owner or "").lower() == org for r in st.remotes.values()
+    )
+
+
+def built_jars(states: Iterable[RepoState], org: str) -> list[tuple[RepoState, list[Path]]]:
+    """Jars Gradle left in build/libs of the org's checkouts (worktrees included), per repo."""
+    found = []
+    for st in sorted(states, key=by_repo):
+        if st.error or not in_org(st, org):
+            continue
+        try:
+            jars = sorted(
+                p for p in (st.path / "build" / "libs").iterdir() if p.suffix.lower() == ".jar" and p.is_file()
+            )
+        except OSError:
+            continue
+        if jars:
+            found.append((st, jars))
+    return found
+
+
+def file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def delete_files(paths: Iterable[Path]) -> tuple[int, list[str]]:
+    """Delete each file. Returns the bytes freed and why some could not go (a running game may hold one)."""
+    freed, failed = 0, []
+    for path in paths:
+        size = file_size(path)
+        try:
+            path.unlink()
+            freed += size
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            failed.append(f"{path.name}: {e.strerror or e}")
+    return freed, failed
+
+
 def local_slugs(states: Iterable[RepoState]) -> set[str]:
     """Lower-case owner/name of every GitHub repo checked out here, through any remote."""
     slugs = {(st.canonical or "").lower() for st in states}
