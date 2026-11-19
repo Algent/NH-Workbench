@@ -271,3 +271,10 @@ async def clone(entry: PackEntry, root: Path) -> Result:
     if dest.exists():
         return Result(1, "", f"{dest} already exists")
     return await git.clone(f"https://{entry.host}/{entry.repo}.git", dest, entry.branch)
+
+
+def pack_slugs(entries: Iterable[PackEntry]) -> set[str]:
+    """Lower-case owner/name of the pack's source repos, with the current name of renamed ones checked out here."""
+    slugs = {e.repo.lower() for e in entries if e.repo}
+    slugs |= {e.local.slug.lower() for e in entries if e.local and e.local.slug}
+    return slugs

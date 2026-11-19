@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 
 from rich.table import Table
@@ -264,6 +264,23 @@ def org_row(item: ReviewItem, mark: str = "", width: int = 70) -> list[Text]:
         Text(ago(item.updated), "dim"),
         Text(clip(item.pr.title, width)),
     ]
+
+
+PR_SORTS: dict[str, tuple[str, Callable[[ReviewItem], object] | None]] = {
+    "updated": ("last update", None),  # the order GitHub returns: newest update first
+    "small": ("smallest first", lambda i: i.pr.size),
+    "large": ("largest first", lambda i: -i.pr.size),
+    "repo": ("repo", lambda i: i.repo.lower()),
+}
+
+
+def pr_table(columns: Iterable[str], rows: Iterable[list[Text]]) -> Table:
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for column in columns:
+        table.add_column(column, no_wrap=True)
+    for row in rows:
+        table.add_row(*row)
+    return table
 
 
 def reviews_table(items: Iterable[ReviewItem], width: int = 70) -> Table:

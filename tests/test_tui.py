@@ -1,4 +1,5 @@
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from textual.widgets import DataTable, Tabs
@@ -39,12 +40,12 @@ def offline(monkeypatch):
     async def fake_org(org):
         org_searches.append(org)
 
-        def item(number: int, draft: bool = False) -> ReviewItem:
+        def item(number: int, draft: bool = False, repo: str = "o/m", reviews: int = 0, days: int = 1) -> ReviewItem:
             url = f"https://example.invalid/pull/{number}"
-            pr = PrInfo(number, "OPEN", draft, None, None, "", url, f"PR {number}")
-            return ReviewItem("o/m", pr, "bob", None, True)
+            pr = PrInfo(number, "OPEN", draft, None, None, "", url, f"PR {number}", reviews=reviews)
+            return ReviewItem(repo, pr, "bob", datetime.now(UTC) - timedelta(days=days), True)
 
-        items = [item(1), item(7), item(20, draft=True), item(21)]
+        items = [item(1), item(7), item(20, draft=True), item(21, repo="o/other", reviews=2, days=90)]
         return github.OrgPrs(items, {"https://example.invalid/pull/21"}, time.time())
 
     org_searches.clear()
@@ -643,6 +644,7 @@ async def test_cleanup_switches_parked_repos_to_main_first(sandbox, offline, mon
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
+
         async def confirm_dialog() -> None:
             await pilot.press("d")
             for _ in range(100):  # the dialog's worker waits on the dialog, so settle() would hang
@@ -664,3 +666,80 @@ async def test_cleanup_switches_parked_repos_to_main_first(sandbox, offline, mon
         st = app.states[str(sandbox.work)]
         assert st.head == "master" and [b.name for b in st.branches] == ["master"]
         assert config.load(sandbox.root, cfg_file).cleanup_to_main is True
+
+
+async def test_all_prs_filters_use_the_loaded_list(sandbox, offline, monkeypatch, tmp_path):
+    from gtnh_devenv_tools import config
+    from gtnh_devenv_tools.tui import MenuScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    config.save_setting(("root",), str(sandbox.root), cfg_file)  # settings reload the config from disk
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/m.git")
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        app.query_one(Tabs).active = "view-org"
+        await settle(app, pilot)
+        table = app.query_one("#org", DataTable)
+        scans = len(offline)
+
+        def shown() -> set[str]:
+            return {str(table.get_row_at(i)[2]).split()[0] for i in range(table.row_count)}
+
+        async def toggle(*keys: str) -> None:
+            await pilot.press("v")
+            await pilot.pause()
+            for key in keys:
+                assert isinstance(app.screen, MenuScreen)
+                await pilot.press(key)
+                await pilot.pause()
+            await pilot.press("q")
+            await settle(app, pilot)
+
+        assert shown() == {"#1", "#7", "#21"}
+        await toggle("u")
+        assert shown() == {"#1", "#7"} and "only no reviews yet" in app.sub_title
+        assert config.load(sandbox.root, cfg_file).pr_filters == ("unreviewed",)
+        await toggle("u", "s")
+        assert shown() == {"#21"}
+        await toggle("n", "l")
+        assert shown() == {"#1", "#7"}
+        await toggle("l", "p")
+        assert shown() == {"#1", "#7"}  # o/m is a pack mod, o/other is not
+        await toggle("n")
+        assert shown() == {"#1", "#7", "#21"} and "pr_filters" not in cfg_file.read_text(encoding="utf-8")
+        assert org_searches == [sandbox.cfg.org] and len(offline) == scans  # nothing searched or rescanned again
+
+
+async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
+    from gtnh_devenv_tools import config, ops
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    config.save_setting(("root",), str(sandbox.root), cfg_file)  # settings reload the config from disk
+    fetched = []
+    real_fetch = ops.fetch_repo
+
+    async def counting_fetch(cfg, path):
+        fetched.append(path)
+        return await real_fetch(cfg, path)
+
+    monkeypatch.setattr(ops, "fetch_repo", counting_fetch)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        app.last_loaded = 0
+        app.auto_refresh()
+        await settle(app, pilot)
+        assert fetched == []  # off by default: only a rescan
+
+        scans = len(offline)
+        await pilot.press("x", "f")
+        await settle(app, pilot)
+        assert app.cfg.refresh_fetch and len(offline) == scans  # saving the option does not rescan
+        assert config.load(sandbox.root, cfg_file).refresh_fetch
+        app.last_loaded = 0
+        app.auto_refresh()
+        await settle(app, pilot)
+        assert fetched == [sandbox.work]

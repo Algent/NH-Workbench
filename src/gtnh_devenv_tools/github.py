@@ -4,7 +4,7 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from .config import cache_dir
@@ -108,6 +108,7 @@ def to_pr(node: dict) -> PrInfo:
         title=node.get("title") or "",
         additions=node.get("additions") or 0,
         deletions=node.get("deletions") or 0,
+        reviews=(node["reviews"] or {}).get("totalCount") if "reviews" in node else None,
     )
 
 
@@ -219,7 +220,7 @@ _SEARCH_FIELDS = (
 )
 _CI_FIELDS = " commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
 # The review decision is what makes big searches time out on GitHub's side, so the org-wide one goes without.
-_ORG_FIELDS = _SEARCH_FIELDS.replace(" reviewDecision", "")
+_ORG_FIELDS = _SEARCH_FIELDS.replace(" reviewDecision", "") + " reviews { totalCount }"
 
 
 def _review_query(qualifier: str, after: str | None = None, fields: str = _SEARCH_FIELDS) -> str:
@@ -305,6 +306,38 @@ class OrgPrs:
 
 def _org_file() -> Path:
     return cache_dir() / "org-prs.json"
+
+
+STALE_DAYS = 30
+# Narrowing the org list down, all of them on data already loaded.
+PR_FILTERS = {
+    "local": "in repos checked out here",
+    "pack": "in pack mods",
+    "unreviewed": "no reviews yet",
+    "stale": f"no update for {STALE_DAYS}+ days",
+}
+
+
+def filter_prs(
+    items: Iterable[ReviewItem], wanted: Iterable[str], local: set[str], pack: set[str], now: datetime | None = None
+) -> list[ReviewItem]:
+    """Items passing every wanted filter. local and pack hold lower-case owner/name of repos.
+
+    PRs from an older search without review counts pass the unreviewed filter.
+    """
+    wanted = set(wanted)
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=STALE_DAYS)
+
+    def keep(item: ReviewItem) -> bool:
+        repo = item.repo.lower()
+        return (
+            ("local" not in wanted or repo in local)
+            and ("pack" not in wanted or repo in pack)
+            and ("unreviewed" not in wanted or not item.pr.reviews)
+            and ("stale" not in wanted or (item.updated is not None and item.updated < cutoff))
+        )
+
+    return [i for i in items if keep(i)]
 
 
 def _org_items(nodes: list[dict]) -> list[ReviewItem]:

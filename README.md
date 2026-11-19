@@ -57,6 +57,7 @@ commits waiting on the release branch.
 | `d` | Delete merged branches |
 | `o` / `w` | Open in IntelliJ / open the PR or GitHub page |
 | `t` | Reviews: show team requests. All PRs: show drafts |
+| `v` | All PRs: show only PRs in repos checked out here, in pack mods, without any review, or not updated for 30+ days |
 | `c` | Pack tab: clone the selected mod. PR tabs: check out the PR in its local repo |
 | `x` | Extras |
 | `q` | Quit (also closes menus) |
@@ -64,7 +65,7 @@ commits waiting on the release branch.
 **Repo menu** (`Enter`): fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or
 in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
 
-**Extras** (`x`): auto-refresh interval, IntelliJ launcher, refresh pack data, change the repo folder,
+**Extras** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), IntelliJ launcher, refresh pack data, change the repo folder,
 show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
 jars.
 
@@ -80,6 +81,7 @@ Settings changed from the UI are written to the config file, keeping its comment
 | `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
 | `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
 | `gtnh-dev reviews [--team]` | Open PRs waiting on your review |
+| `gtnh-dev prs [--mine \| --org] [--sort small\|large\|repo] [--max-size N] [--local] [--pack] [--unreviewed] [--stale]` | Review requests, your PRs or the org's, sorted and filtered like the UI (`--help` for more) |
 | `gtnh-dev pack [--missing] [--refresh]` | Pack mods and whether they are checked out |
 | `gtnh-dev clone NAME...` | Clone pack mods into the root |
 | `gtnh-dev jars` | Download the jars of closed-source pack mods |
@@ -136,6 +138,7 @@ too (team requests only on demand, they are slow to search).
 
 All PRs searches GitHub only when the tab is opened and its last search is over 30 minutes old; it takes
 about 20 seconds, and otherwise shows the copy saved in the cache folder. Auto-refresh leaves it alone.
+Its filters (`v`) and `gtnh-dev prs --org` work on that saved copy, so changing them searches nothing.
 
 ## Configuration
 
@@ -152,7 +155,9 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 |---|---|---|
 | `root` | `~/IdeaProjects` | Folder holding the checkouts |
 | `org` | `GTNewHorizons` | Its repos form the `gtnh` group; All PRs lists its PRs |
-| `refresh_minutes` | `15` | The UI rescans this often (no fetch); `0` turns it off |
+| `refresh_minutes` | `15` | The UI rescans this often; `0` turns it off |
+| `refresh_fetch` | `false` | Auto-refresh fetches every repo instead of only rescanning |
+| `pr_filters` | none | All PRs filters, set with `v`: `local`, `pack`, `unreviewed`, `stale` |
 | `concurrency` | `8` | Repos handled at the same time |
 | `prune` | `true` | Drop stale remote-tracking refs on fetch |
 | `ide_command` | found automatically | IntelliJ launcher; `false` hides the IDE actions |
@@ -176,6 +181,7 @@ one under `[pack.sources."<mod name>"]`.
 ```
 uv run pytest
 uv run ruff check
+uv run ruff format --check
 ```
 
-GitHub Actions runs both on Linux and Windows for every push and pull request.
+GitHub Actions runs all three on Linux, Windows and macOS for every push and pull request.

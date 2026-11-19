@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
@@ -95,6 +96,86 @@ def reviews(
     out.print(render.reviews_table([i for i in items if team or i.direct], width=max(30, out.width - 90)))
     more = f"{len(items) - direct} more through teams" if team else "--team also lists requests through teams"
     out.print(f"\n[dim]{direct} asked of you · {more}")
+
+
+@app.command()
+def prs(
+    ctx: typer.Context,
+    mine: Annotated[bool, typer.Option("--mine", help="Your own open PRs.")] = False,
+    org: Annotated[bool, typer.Option("--org", help="Every open PR of the org (saved for 30 minutes).")] = False,
+    team: Annotated[bool, typer.Option("--team", help="Review requests: also the ones through a team.")] = False,
+    max_size: Annotated[int, typer.Option("--max-size", help="Only PRs under this many changed lines.")] = 0,
+    sort: Annotated[str, typer.Option("--sort", help="updated, small, large or repo.")] = "updated",
+    local: Annotated[bool, typer.Option("--local", help="Only repos checked out here.")] = False,
+    in_pack: Annotated[bool, typer.Option("--pack", help="Only pack mods.")] = False,
+    unreviewed: Annotated[bool, typer.Option("--unreviewed", help="Only PRs without any review.")] = False,
+    stale: Annotated[
+        bool, typer.Option("--stale", help=f"Only PRs not updated for {github.STALE_DAYS}+ days.")
+    ] = False,
+    drafts: Annotated[bool, typer.Option("--drafts", help="With --org: include drafts.")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="With --org: search again even if recent.")] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Show at most this many, 0 for all.")] = 0,
+) -> None:
+    """Open pull requests: review requests by default, or yours, or the whole org's; sorted and filtered."""
+    cfg: Config = ctx.obj
+    if mine and org:
+        err.print("[bold red]Pick one of --mine and --org")
+        raise typer.Exit(2)
+    if sort not in render.PR_SORTS:
+        err.print(f"[bold red]Unknown sort {sort!r}, use one of: {', '.join(render.PR_SORTS)}")
+        raise typer.Exit(2)
+    reviewed: set[str] = set()
+    if org:
+        found = None if refresh else github.cached_org(cfg.org)
+        if found is None or time.time() - found.fetched > github.ORG_MAX_AGE:
+            with err.status(f"Searching all open PRs of {cfg.org}, about 20 seconds..."):
+                found = asyncio.run(github.fetch_org(cfg.org))
+        items, error, reviewed = found.items, found.error, found.reviewed
+        if not drafts:
+            items = [i for i in items if not i.pr.draft]
+    elif mine:
+        with err.status("Asking GitHub for your PRs..."):
+            items, error = asyncio.run(github.fetch_mine())
+    else:
+        with err.status("Asking GitHub for review requests..."):
+            items, error = asyncio.run(github.fetch_reviews(team))
+    if error and not items:
+        err.print(f"[bold red]PRs unavailable: {error}")
+        raise typer.Exit(1)
+    if error:
+        err.print(f"[yellow]List may be incomplete: {error}")
+
+    wanted = [f for f, on in (("local", local), ("pack", in_pack), ("unreviewed", unreviewed), ("stale", stale)) if on]
+    slugs, pack_slugs = set(), set()
+    if local or in_pack:
+        states = asyncio.run(_each(cfg, "Scanning", lambda p: ops.scan_repo(cfg, p))) if local else []
+        slugs = ops.local_slugs(states)
+        if in_pack:
+            with err.status("Loading pack data..."):
+                info = asyncio.run(pack.load(cfg))
+            pack.link_local(info.entries, states)
+            pack_slugs = pack.pack_slugs(info.entries)
+    if wanted:
+        if unreviewed and any(i.pr.reviews is None for i in items):
+            err.print("[yellow]Some PRs have no review count yet (older saved search): --refresh gets them")
+        items = github.filter_prs(items, wanted, slugs, pack_slugs)
+    if max_size:
+        items = [i for i in items if i.pr.size < max_size]
+    key = render.PR_SORTS[sort][1]
+    items = sorted(items, key=key) if key else items
+    total = len(items)
+    items = items[:limit] if limit else items
+
+    width = max(30, out.width - 90)
+    if org:
+        rows = (render.org_row(i, "reviewed" if i.pr.url in reviewed else "", width) for i in items)
+        out.print(render.pr_table(render.ORG_COLUMNS, rows))
+    elif mine:
+        out.print(render.pr_table(render.MINE_COLUMNS, (render.mine_row(i, width=width) for i in items)))
+    else:
+        out.print(render.reviews_table(items, width))
+    shown = f"{len(items)} of {total}" if len(items) < total else str(total)
+    out.print(f"\n[dim]{shown} PRs")
 
 
 async def _with_prs(states: list[RepoState]) -> None:

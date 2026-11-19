@@ -27,6 +27,7 @@ class PrInfo:
     title: str
     additions: int = 0
     deletions: int = 0
+    reviews: int | None = None  # reviews left so far, None when not asked for
 
     @property
     def size(self) -> int:

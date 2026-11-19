@@ -36,6 +36,8 @@ class Config:
     concurrency: int = 8
     refresh_minutes: int = 15  # the UI rescans this often while it is open; 0 turns it off
     prune: bool = True
+    refresh_fetch: bool = False  # auto-refresh fetches instead of only rescanning
+    pr_filters: tuple[str, ...] = ()  # filters on the All PRs tab, see github.PR_FILTERS
     ide_command: str | None = None
     ide_off: bool = False  # ide_command = false: no IDE actions at all
     cleanup_to_main: bool = True  # cleanup offers branches still checked out, switching to main first
@@ -96,6 +98,8 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             concurrency=max(1, int(data.get("concurrency", 8))),
             refresh_minutes=max(0, int(data.get("refresh_minutes", 15))),
             prune=bool(data.get("prune", True)),
+            refresh_fetch=bool(data.get("refresh_fetch", False)),
+            pr_filters=tuple(str(f) for f in data.get("pr_filters", ())),
             ide_command=ide if isinstance(ide := data.get("ide_command"), str) and ide else None,
             ide_off=ide is False,
             cleanup_to_main=bool(data.get("cleanup_to_main", True)),

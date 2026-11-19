@@ -141,7 +141,11 @@ def to_main_candidates(states: Iterable[RepoState]) -> list[RepoState]:
     return [
         st
         for st in states
-        if st.off_main and not st.dirty and st.current and st.current.pr and st.current.pr.state == "MERGED"
+        if st.off_main
+        and not st.dirty
+        and st.current
+        and st.current.pr
+        and st.current.pr.state == "MERGED"
         and not st.checked_out_elsewhere(st.tracked)
     ]
 
@@ -157,6 +161,13 @@ async def to_main(cfg: Config, st: RepoState) -> RepoState:
     if new.note and new.note.kind != "failed":
         new.note = Outcome("updated", f"on {st.tracked}, {new.note.text}", new.note.commits)
     return new
+
+
+def local_slugs(states: Iterable[RepoState]) -> set[str]:
+    """Lower-case owner/name of every GitHub repo checked out here, through any remote."""
+    slugs = {(st.canonical or "").lower() for st in states}
+    slugs |= {r.slug.lower() for st in states for r in st.remotes.values() if r.slug}
+    return slugs - {""}
 
 
 def _remote_for(st: RepoState, slug: str | None, url: str = "") -> Remote | None:

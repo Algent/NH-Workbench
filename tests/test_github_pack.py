@@ -480,3 +480,34 @@ def test_created_ranges_cover_everything_once():
         "created:2026-10-19..2026-11-10",
         "created:<2026-10-19",
     ]
+
+
+def test_filter_prs():
+    from datetime import UTC, datetime, timedelta
+
+    from gtnh_devenv_tools.models import PrInfo, ReviewItem
+
+    now = datetime(2026, 11, 19, tzinfo=UTC)
+
+    def item(repo: str, reviews: int | None, days: int) -> ReviewItem:
+        pr = PrInfo(1, "OPEN", False, None, None, "", f"u/{repo}/{days}", "t", reviews=reviews)
+        return ReviewItem(repo, pr, "a", now - timedelta(days=days), True)
+
+    items = [item("O/Here", 0, 1), item("o/pack", 3, 40), item("o/else", None, 31)]
+    local, in_pack = {"o/here"}, {"o/pack", "o/here"}
+
+    def repos(*wanted: str) -> list[str]:
+        return [i.repo for i in github.filter_prs(items, wanted, local, in_pack, now)]
+
+    assert repos() == ["O/Here", "o/pack", "o/else"]
+    assert repos("local") == ["O/Here"]
+    assert repos("pack") == ["O/Here", "o/pack"]
+    assert repos("unreviewed") == ["O/Here", "o/else"]  # no count yet: kept
+    assert repos("stale") == ["o/pack", "o/else"]
+    assert repos("stale", "pack") == ["o/pack"]
+
+
+def test_to_pr_review_count():
+    node = {"number": 1, "state": "OPEN"}
+    assert github.to_pr(node).reviews is None
+    assert github.to_pr({**node, "reviews": {"totalCount": 0}}).reviews == 0

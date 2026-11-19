@@ -41,12 +41,7 @@ SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
 }
 HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
 # The PR lists keep their own order: "updated" is the order they arrive in (for you first, then newest).
-PR_SORTS: dict[str, tuple[str, Callable[[ReviewItem], object] | None]] = {
-    "updated": ("last update", None),
-    "small": ("smallest first", lambda i: i.pr.size),
-    "large": ("largest first", lambda i: -i.pr.size),
-    "repo": ("repo", lambda i: i.repo.lower()),
-}
+PR_SORTS = render.PR_SORTS
 PR_HEADER_SORT = {"Updated": "updated", "Size": "small", "Repo": "repo"}
 REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup"}  # hidden on the Reviews and Pack tabs
 # views with their own table; the rest share #repos
@@ -131,7 +126,7 @@ def org_detail(item: ReviewItem, mark: str, local: RepoState | None) -> Renderab
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
     if mark:
         where = Text.assemble((concern[mark], "bold"), "   ", where)
-    hint = Text(f"{item.pr.url}   Enter or w: open   t: show or hide drafts   r: search again", "dim")
+    hint = Text(f"{item.pr.url}   Enter or w: open   c: check out   t: drafts   v: show only   r: search again", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
@@ -321,6 +316,7 @@ class ExtrasMenu(MenuScreen):
         ide_now = "off" if cfg.ide_off else cfg.ide_command or "found automatically"
         actions = [
             ("a", "auto", f"Auto-refresh interval (now {every})", None),
+            ("f", "refresh_fetch", f"Fetch during auto-refresh (now {'on' if cfg.refresh_fetch else 'off'})", None),
             ("i", "ide", f"IntelliJ launcher (now {ide_now})", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
@@ -353,6 +349,7 @@ class RepoApp(App[None]):
         Binding("s", "sort", "Sort"),
         Binding("t", "toggle_team", "Team reviews"),
         Binding("t", "toggle_drafts", "Drafts"),
+        Binding("v", "pr_filters", "Show only"),
         Binding("x", "extras", "Extras"),
         Binding("C", "open_folder('config')", "Config dir", show=False),
         Binding("L", "open_folder('logs')", "Logs dir", show=False),
@@ -426,14 +423,18 @@ class RepoApp(App[None]):
         if not minutes or self.busy or self._modal():
             return
         if time.monotonic() - self.last_loaded >= minutes * 60:
-            self.load_everything()
+            self.load_everything(fetch=self.cfg.refresh_fetch)
 
     # --- data -----------------------------------------------------------------
 
     @work(exclusive=True, group="load")
-    async def load_everything(self) -> None:
+    async def load_everything(self, fetch: bool = False) -> None:
         self.last_loaded = time.monotonic()
-        if not await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), reset=True):
+        if fetch:
+            loaded = await self._batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), reset=True)
+        else:
+            loaded = await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), reset=True)
+        if not loaded:
             return
         # Independent sources: none of them should hold the others up.
         await asyncio.gather(self._load_prs(), self._load_reviews(quiet=True), self._load_mine(), self._load_pack())
@@ -481,7 +482,12 @@ class RepoApp(App[None]):
 
     def _org_shown(self) -> list[ReviewItem]:
         items = self.org.items if self.org else []
-        return items if self.org_drafts else [i for i in items if not i.pr.draft]
+        if not self.org_drafts:
+            items = [i for i in items if not i.pr.draft]
+        if not self.cfg.pr_filters:
+            return items
+        local = ops.local_slugs(self.states.values())
+        return github.filter_prs(items, self.cfg.pr_filters, local, pack.pack_slugs(self.entries))
 
     def _org_mark(self, item: ReviewItem) -> str:
         url = item.pr.url
@@ -664,6 +670,8 @@ class RepoApp(App[None]):
                     when = datetime.fromtimestamp(self.org.fetched, UTC) if self.org.fetched else None
                     drafts = "with drafts" if self.org_drafts else "no drafts"
                     order += f"  ·  {self.cfg.org} PRs as of {render.ago(when) or 'now'} ago, {drafts}"
+                    only = [github.PR_FILTERS[f] for f in self.cfg.pr_filters if f in github.PR_FILTERS]
+                    order += f", only {' and '.join(only)}" if only else ""
             else:
                 order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
             self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
@@ -769,16 +777,21 @@ class RepoApp(App[None]):
             if await self.push_screen_wait(ConfirmScreen(f"Hide {st.name} from the tool?", body)):
                 self._save_setting(("repos", st.name, "ignore"), True)
 
-    def _save_setting(self, keys: tuple[str, ...], value: str | bool | int | list | None) -> None:
-        """Write one value to the config file, then reload it and rescan."""
+    def _save_setting(
+        self, keys: tuple[str, ...], value: str | bool | int | list | None, rescan: bool = True, quiet: bool = False
+    ) -> bool:
+        """Write one value to the config file, then reload it and (unless told otherwise) rescan."""
         try:
             path = config.save_setting(keys, value)
             self.cfg = config.load(self.root_override)
         except config.ConfigError as e:
             self.notify(str(e), severity="error")
-            return
-        self.notify(f"Saved to {path}")
-        self.load_everything()
+            return False
+        if not quiet:
+            self.notify(f"Saved to {path}")
+        if rescan:
+            self.load_everything()
+        return True
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         self.view = (event.tab.id or "view-all").removeprefix("view-")
@@ -804,7 +817,7 @@ class RepoApp(App[None]):
             return self.view in PR_VIEWS
         if action == "toggle_team":
             return self.view == "reviews"
-        if action == "toggle_drafts":
+        if action in ("toggle_drafts", "pr_filters"):
             return self.view == "org"
         if action == "rescan":
             return self.view != "org"
@@ -867,6 +880,29 @@ class RepoApp(App[None]):
         if self.team_reviews:
             self.notify("Loading team review requests, this takes a few seconds...")
         await self._load_reviews()
+
+    @work(group="dialog")
+    async def action_pr_filters(self) -> None:
+        """Toggle the All PRs filters; they work on the loaded list, so nothing is searched again."""
+        if self._modal() or self.view != "org":
+            return
+        keys = dict(zip(github.PR_FILTERS, "lpus", strict=True))
+        while True:
+            wanted = set(self.cfg.pr_filters)
+            actions = [
+                (keys[f], f, f"[{'x' if f in wanted else ' '}] {label}", None) for f, label in github.PR_FILTERS.items()
+            ]
+            actions.append(("n", "none", "Show all", None if wanted else "nothing filtered"))
+            choice = await self.push_screen_wait(MenuScreen(Text("All PRs: show only", "bold"), actions))
+            if not choice:
+                return
+            wanted = set() if choice == "none" else wanted ^ {choice}
+            if choice == "unreviewed" and self.org and any(i.pr.reviews is None for i in self.org.items):
+                self.notify("Review counts come with the next search (r); until then no PR is left out for it")
+            chosen = [f for f in github.PR_FILTERS if f in wanted]
+            if not self._save_setting(("pr_filters",), chosen or None, rescan=False, quiet=True):
+                return
+            self._refresh()
 
     def action_toggle_drafts(self) -> None:
         if not self._modal() and self.view == "org":
@@ -980,6 +1016,10 @@ class RepoApp(App[None]):
                 self._save_setting(("repos", repo, "keep_branches"), rest or None)
         elif choice == "ide":
             await self._ask_ide()
+        elif choice == "refresh_fetch":
+            on = not self.cfg.refresh_fetch
+            if self._save_setting(("refresh_fetch",), on or None, rescan=False, quiet=True):
+                self.notify("Auto-refresh now fetches every repo" if on else "Auto-refresh now only rescans")
         elif choice == "auto":
             hint = "Minutes between automatic rescans, 0 to turn them off."
             value = await self.push_screen_wait(
