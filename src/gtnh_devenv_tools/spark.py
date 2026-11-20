@@ -567,8 +567,12 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
     return lines
 
 
-def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, own: bool = True) -> list[str]:
-    """The merged tree, branches under min_pct of the thread left out, single-child chains folded."""
+def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, up: bool = False) -> list[str]:
+    """The merged tree, branches under min_pct of the thread left out.
+
+    Going down, runs of frames that pass almost all their time to one child are folded onto one line. Going up
+    (callers), that run is the answer, so each caller gets its own line, marked with <, at the same depth.
+    """
     p = view.profile
     limit = view.whole * min_pct / 100
     lines: list[str] = []
@@ -582,15 +586,21 @@ def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, own: boo
             chain.append(kids[0])
         if len(lines) >= max_lines:
             return
-        names = [_short(n.key) for n in chain]
-        if len(names) > 3:
-            names = [names[0], f"... {len(names) - 2} frames ...", names[-1]]
         last = chain[-1]
-        rest = last.total - sum(c.total for c in last.children.values())
-        own_text = f"  (own {_pct(rest, view.whole).strip()})" if own and rest >= limit else ""
-        lines.append(
-            f"{_pct(last.total, view.whole)} {amount(p, last.total):>8}  {'  ' * depth}{' > '.join(names)}{own_text}"
-        )
+        indent = "  " * depth
+        if up:
+            for n, frame_node in enumerate(chain):
+                mark = "< " if n else ""
+                line = f"{_pct(frame_node.total, view.whole)} {amount(p, frame_node.total):>8}  {indent}{mark}"
+                lines.append(line + _short(frame_node.key))
+        else:
+            names = [_short(n.key) for n in chain]
+            if len(names) > 3:
+                names = [names[0], f"... {len(names) - 2} frames ...", names[-1]]
+            rest = last.total - sum(c.total for c in last.children.values())
+            own_text = f"  (own {_pct(rest, view.whole).strip()})" if rest >= limit else ""
+            amount_text = f"{_pct(last.total, view.whole)} {amount(p, last.total):>8}"
+            lines.append(f"{amount_text}  {indent}{' > '.join(names)}{own_text}")
         for child in sorted(last.children.values(), key=lambda c: -c.total):
             if child.total >= limit:
                 walk(child, depth + 1)
@@ -687,7 +697,7 @@ def focus_report(
     lines.append(f"Matched {len(keys)} method(s): {', '.join(keys[:6])}{' ...' if len(keys) > 6 else ''}")
     lines.append(f"Their total: {_pct(tree.total, view.whole).strip()} of the thread, {amount(p, tree.total)}")
     if up:
-        lines.append("Read each branch downwards as: method < its caller < that caller's caller")
+        lines.append("Read downwards: the method, then < its caller, < that caller's caller, and so on")
     lines.append("")
-    lines += tree_lines(view, tree, min_pct, max_lines, own=not up)
+    lines += tree_lines(view, tree, min_pct, max_lines, up=up)
     return "\n".join(lines)

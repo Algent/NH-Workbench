@@ -2,7 +2,7 @@
     height: 3;
 }
 
-#repos, #pack, #reviews, #mine, #org {
+#repos, #pack, #reviews, #mine, #org, #tools {
     height: 1fr;
 }
 
@@ -73,4 +73,30 @@ ConfirmScreen, MenuScreen {
 
 #dialog-buttons Button {
     margin-left: 2;
+}
+
+#spark-status {
+    height: 1;
+    padding: 0 1;
+    background: $boost;
+}
+
+#spark-input {
+    height: 3;
+}
+
+#spark-recent {
+    height: auto;
+    max-height: 22;
+    border: none;
+}
+
+#spark-report {
+    height: 1fr;
+    border: none;
+}
+
+#spark-hint {
+    height: 1;
+    padding: 0 1;
 }

@@ -39,6 +39,7 @@ or Extras in the UI.
 | Reviews | Open PRs asking for your review personally (`t` adds the ones that reach you through a team) |
 | All PRs | Every open PR of the org, marked when you wrote it, are asked to review it, or reviewed it |
 | Pack | Every mod of the current daily and the latest release, and whether it is checked out |
+| Tools | Tools that do not need the checkouts: for now, reading spark profiles |
 
 The panel at the bottom gives details on the selected line: branches and their PRs, the last commit,
 commits waiting on the release branch.
@@ -109,7 +110,12 @@ changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM argumen
 for the server thread: the methods with the most own time and total time, own time per mod (guessed from the
 package, since 1.7.10 profiles do not record mods), and the hot call paths.
 
-`--thread NAME` picks another thread, `--window ID` (repeatable) narrows everything to the minutes listed under
+In the UI: Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report, Enter on
+a method shows what it calls, `t` / `c` what the method on the cursor line calls / who calls it (asked for when
+the line has none), Enter on one of the worst minutes narrows to it, `w` / `h` pick a minute / thread, `s` goes
+back to the summary, `y` copies the report (for an LLM), `e` saves it as a file, `o` opens another profile.
+
+On the command line, `--thread NAME` picks another thread, `--window ID` (repeatable) narrows everything to the minutes listed under
 "Worst minutes", `--min` and `--lines` control how much of the call tree is shown. A link or code also accepts a
 downloaded `.sparkprofile` file. Downloads are kept in the cache folder under `spark`; `--refresh` downloads
 again. The name and UUID of whoever recorded the profile are left out of the reports.

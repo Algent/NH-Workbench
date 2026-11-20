@@ -820,3 +820,97 @@ async def test_extras_deletes_built_jars(sandbox, offline):
         await pilot.press("y")
         await settle(app, pilot)
         assert not (libs / "mod.jar").exists() and libs.is_dir()
+
+
+async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
+    from test_spark import profile_bytes
+    from textual.widgets import Input, TextArea
+
+    from gtnh_devenv_tools import spark, tui_spark
+    from gtnh_devenv_tools.tui import MenuScreen
+    from gtnh_devenv_tools.tui_spark import SparkScreen
+
+    cache = tmp_path / "cache"
+    (cache / "spark").mkdir(parents=True)
+    (cache / "spark" / "Saved12345.sparkprofile").write_bytes(profile_bytes())
+    monkeypatch.setattr(spark, "cache_dir", lambda: cache)
+    monkeypatch.setattr(tui_spark, "cache_dir", lambda: cache)
+    copied = []
+
+    app = RepoApp(sandbox.cfg)
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(app, pilot)
+        app.query_one(Tabs).active = "view-tools"
+        await settle(app, pilot)
+        assert app.query_one("#tools", DataTable).row_count == 1 and "spark link" in str(
+            app.query_one("#detail").content
+        )
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SparkScreen)
+        assert screen.query_one("#spark-recent").option_count == 1  # the saved profile
+
+        async def until_loaded() -> None:
+            for _ in range(100):
+                await pilot.pause()
+                if screen.text:
+                    return
+
+        screen.query_one(Input).value = "Saved12345"
+        await pilot.press("enter")
+        await until_loaded()
+        report = screen.query_one(TextArea)
+        assert screen.text.startswith("# spark profile Saved12345") and report.has_focus
+
+        def cursor_to(needle: str) -> None:
+            row = next(i for i, line in enumerate(screen.text.splitlines()) if needle in line)
+            report.move_cursor((row, 0))
+
+        cursor_to("a.Mod.helper")
+        await pilot.press("enter")  # what helper calls
+        await pilot.pause()
+        assert screen.method == "a.Mod.helper" and not screen.up and "What is called by" in screen.text
+        await pilot.press("c")  # who calls the method on the cursor line (the first line: none), so it asks
+        await pilot.pause()
+        app.screen.query_one(Input).value = "helper"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert screen.up and "Who calls 'helper'" in screen.text
+
+        await pilot.press("s")
+        await pilot.pause()
+        assert screen.method is None
+        cursor_to("101  ")  # a row of the worst minutes
+        await pilot.press("enter")
+        await pilot.pause()
+        assert screen.windows == [101] and "Only window(s) 101" in screen.text
+        await pilot.press("w")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuScreen)
+        await pilot.press("a")  # whole recording again
+        await settle(app, pilot)
+        assert screen.windows is None
+
+        await pilot.press("y", "e")
+        await pilot.pause()
+        assert copied == [screen.text] and (cache / "spark" / "Saved12345-summary.md").is_file()
+        await pilot.press("q")
+        await pilot.pause()
+        assert not isinstance(app.screen, SparkScreen) and app.is_running
+
+
+def test_method_and_window_on_report_lines():
+    from gtnh_devenv_tools.tui_spark import method_on_line, window_on_line
+
+    assert method_on_line(" 41.8%  galaxyspace.core.Craters.makeCrater") == "galaxyspace.core.Craters.makeCrater"
+    line = " 41.7%     3.4s            Craters.createCraters > Craters.makeCrater  (own 41.7%)"
+    assert method_on_line(line) == "Craters.makeCrater"
+    assert method_on_line(" 18.2%    1m04s    World.tick > ... 8 frames ... > MinecraftServer$2.run") == (
+        "MinecraftServer$2.run"
+    )
+    assert method_on_line(" 58.3%  galaxyspace") == "galaxyspace"
+    assert method_on_line(" 17.3%  native code") is None and method_on_line("## Thread Server thread") is None
+    assert window_on_line("29920107 2h19m      769  14.7      16.3 23518") == 29920107
+    assert window_on_line(" 41.8%  a.B.c") is None

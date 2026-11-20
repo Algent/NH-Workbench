@@ -132,7 +132,12 @@ def test_summary_report(profile):
     assert " 55.0%  a.Mod.tick" in text  # own time, 11 of 20 ms
     assert " 80.0%  a.Mod.tick" in text  # total time, 16 of 20
     focus = spark.focus_report(profile, "abc", "helper", up=True)
-    assert "Matched 1 method(s): a.Mod.helper" in focus and "Mod.helper > Mod.tick > Main.run" in focus
+    assert (
+        "Matched 1 method(s): a.Mod.helper" in focus
+        and "Mod.helper\n" in focus
+        and "< Mod.tick\n" in focus
+        and "< Main.run" in focus
+    )
     with pytest.raises(spark.ProfileError, match="no frame matching"):
         spark.focus_report(profile, "abc", "nothing", up=False)
 

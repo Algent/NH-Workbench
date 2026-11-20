@@ -32,6 +32,7 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "reviews": ("Reviews", None),
     "org": ("All PRs", None),
     "pack": ("Pack", None),
+    "tools": ("Tools", None),
 }
 SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
     "name": ("name", ops.by_repo),
@@ -45,10 +46,22 @@ PR_SORTS = render.PR_SORTS
 PR_HEADER_SORT = {"Updated": "updated", "Size": "small", "Repo": "repo"}
 REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup"}  # hidden on the Reviews and Pack tabs
 # views with their own table; the rest share #repos
-TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine", "org": "#org"}
+TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine", "org": "#org", "tools": "#tools"}
 PR_VIEWS = ("reviews", "mine", "org")  # views listing pull requests rather than repos
 REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
 PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
+TOOL_COLUMNS = ("Tool", "What it does")
+# (key, name, what it does, longer help for the detail pane)
+TOOLS = [
+    (
+        "spark",
+        "spark profiles",
+        "Read a spark.lucko.me link (a lag report) as a short text report",
+        "Paste a spark link or code: server stats, the worst minutes, where the time goes. Enter on a method"
+        " shows what it calls, c who calls it, y copies the report for an LLM. Same as `gtnh-dev tools spark`.",
+    ),
+]
+NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
 
 
@@ -393,6 +406,7 @@ class RepoApp(App[None]):
         yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="mine", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="org", cursor_type="row", zebra_stripes=True)
+        yield DataTable(id="tools", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
         yield Footer()
 
@@ -404,6 +418,7 @@ class RepoApp(App[None]):
             ("#reviews", render.REVIEW_COLUMNS),
             ("#mine", render.MINE_COLUMNS),
             ("#org", render.ORG_COLUMNS),
+            ("#tools", TOOL_COLUMNS),
         )
         for table_id, columns in layout:
             table = self.query_one(table_id, DataTable)
@@ -641,6 +656,7 @@ class RepoApp(App[None]):
             "reviews": sum(1 for item in self.reviews if item.direct),
             "mine": len(self.mine),
             "org": len(self._org_shown()) if self.org else None,  # not searched yet
+            "tools": None,
         }
         for key, (label, wanted) in VIEWS.items():
             count = special[key] if wanted is None else sum(1 for st in states if wanted(st))
@@ -660,6 +676,9 @@ class RepoApp(App[None]):
             shown = self._pr_items(self._org_shown())
             rows = [(i.pr.url, render.org_row(i, self._org_mark(i))) for i in shown]
             self._fill(self.query_one("#org", DataTable), rows)
+        elif self.view == "tools":
+            rows = [(key, [Text(name, "bold"), Text(what)]) for key, name, what, _ in TOOLS]
+            self._fill(self.query_one("#tools", DataTable), rows)
         elif self.view == "pack":
             shown = [e for e in self.entries if self.needle in e.name.lower()]
             self._fill(self.query_one("#pack", DataTable), [(e.name, render.pack_row(e)) for e in shown])
@@ -694,6 +713,11 @@ class RepoApp(App[None]):
 
     def _update_detail(self) -> None:
         detail = self.query_one("#detail", Static)
+        if self.view == "tools":
+            key = self._cursor_key()
+            tool = next((t for t in TOOLS if t[0] == key), None)
+            detail.update(Text(tool[3]) if tool else Text("nothing selected", "dim"))
+            return
         entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
         if review and self.view == "mine":
             detail.update(mine_detail(review, self._local_branch(review)))
@@ -726,6 +750,9 @@ class RepoApp(App[None]):
             self._refresh()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if self.view == "tools":
+            self._open_tool(self._cursor_key())
+            return
         if self.view in PR_VIEWS:
             self.action_open_web()
             return
@@ -811,6 +838,10 @@ class RepoApp(App[None]):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Keep the footer to what works in the current view."""
+        if self.view == "tools" and action in NOT_ON_TOOLS:
+            return False
+        if action in ("extras", "cycle_view") and len(self.screen_stack) > 1:
+            return False  # a tool screen is open
         if action in REPO_ONLY_ACTIONS:
             return self.view not in TABLES
         if action == "sort":
@@ -850,6 +881,12 @@ class RepoApp(App[None]):
             return
         keys = list(VIEWS)
         self.query_one(Tabs).active = f"view-{keys[(keys.index(self.view) + step) % len(keys)]}"
+
+    def _open_tool(self, key: str | None) -> None:
+        if key == "spark" and not self._modal():
+            from .tui_spark import SparkScreen  # imports this module, so not at the top
+
+            self.push_screen(SparkScreen())
 
     def action_filter(self) -> None:
         box = self.query_one("#filter", Input)
