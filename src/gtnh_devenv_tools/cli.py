@@ -500,23 +500,32 @@ def spark_callers(
 
 @tools_app.command("install-skill")
 def install_skill(
+    agent: Annotated[
+        str | None,
+        typer.Option("--for", help="claude, codex or all; default: the agents found in your home folder."),
+    ] = None,
     dest: Annotated[
-        Path | None, typer.Option("--dest", help="Skills folder to install into; default: your Claude skills folder.")
+        Path | None, typer.Option("--dest", help="Skills folder to install into instead of the agent's own.")
     ] = None,
 ) -> None:
-    """Install the spark-profile skill for Claude Code: spark links then get read with this tool."""
+    """Install the spark-profile skill for Claude Code and/or Codex: spark links then get read with this tool."""
     from . import skill
 
-    try:
-        folder, checkout = skill.install(dest)
-    except OSError as e:
-        err.print(f"[bold red]Could not install the skill: {e}")
-        raise typer.Exit(1) from e
-    out.print(f"Installed the {skill.SKILL} skill in {folder}")
+    if agent not in (None, "all", *skill.AGENTS):
+        err.print(f"[bold red]--for takes claude, codex or all, not {agent!r}")
+        raise typer.Exit(2)
+    agents = list(skill.AGENTS) if agent == "all" else [agent] if agent else skill.detected()
+    for name in agents[:1] if dest else agents:
+        try:
+            folder, checkout = skill.install(dest, name)
+        except OSError as e:
+            err.print(f"[bold red]Could not install the skill for {skill.AGENTS[name]}: {e}")
+            raise typer.Exit(1) from e
+        out.print(f"Installed the {skill.SKILL} skill for {skill.AGENTS[name]} in {folder}")
     if checkout:
         out.print(f"It runs this checkout: {checkout}")
     elif (folder / "checkout.txt").is_file():
         out.print("It keeps running the checkout chosen earlier.")
     else:
-        out.print("It runs the published version from GitHub until a checkout is set (Claude asks on first use).")
-    out.print("New Claude Code sessions pick it up.")
+        out.print("It runs the published version from GitHub until a checkout is set (the agent asks on first use).")
+    out.print("New sessions pick it up.")

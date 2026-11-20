@@ -50,3 +50,23 @@ def test_launcher_without_a_checkout(tmp_path, monkeypatch):
 def skill_published(folder: Path) -> str:
     text = (folder / "spark.py").read_text(encoding="utf-8")
     return text.split('PUBLISHED = "', 1)[1].split('"', 1)[0]
+
+
+def test_install_for_codex_and_claude(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill, "_home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert skill.detected() == ["claude"]  # nothing found: Claude Code
+    (tmp_path / ".codex").mkdir()
+    assert skill.detected() == ["codex"]
+    (tmp_path / ".claude").mkdir()
+    assert skill.detected() == ["claude", "codex"]
+
+    runner = CliRunner()
+    base = ["--root", str(tmp_path / "none"), "tools", "install-skill"]
+    res = runner.invoke(app, [*base, "--for", "codex"])
+    assert res.exit_code == 0, res.output
+    assert (tmp_path / ".agents" / "skills" / "spark-profile" / "SKILL.md").is_file()
+    assert not skill.installed("claude") and skill.installed("codex")
+    res = runner.invoke(app, base)  # both are found
+    assert res.exit_code == 0 and skill.installed("claude") and "for Codex" in res.output
+    assert runner.invoke(app, [*base, "--for", "gemini"]).exit_code == 2

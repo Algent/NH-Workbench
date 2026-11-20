@@ -913,6 +913,16 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await pilot.press("y", "e")
         await pilot.pause()
         assert copied == [screen.text] and (cache / "spark" / "Saved12345-summary.md").is_file()
+        from gtnh_devenv_tools import skill
+
+        monkeypatch.setattr(skill, "_home", lambda: tmp_path)
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuScreen)
+        await pilot.press("2")  # Codex
+        await settle(app, pilot)
+        assert skill.installed("codex") and not (tmp_path / ".claude").exists()
+
         await pilot.press("q")  # leaves at once, whatever the history
         await pilot.pause()
         assert not isinstance(app.screen, SparkScreen) and app.is_running
