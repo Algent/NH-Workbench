@@ -889,7 +889,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
 
         await pilot.press("enter")  # helper's calls, then its callers
         await pilot.pause()
-        cursor_to("s  Mod.helper")  # the tree line, after its time
+        cursor_to("] Mod.helper")  # the tree line, after its [mod] tag
         await pilot.press("c")
         await settle(app, pilot)
         assert screen.up and len(screen.history) == 2
@@ -928,6 +928,9 @@ def test_method_and_window_on_report_lines():
         "MinecraftServer$2.run"
     )
     assert method_on_line(" 58.3%  galaxyspace") == "galaxyspace"
+    assert method_on_line(" 41.7%     3.4s  < [ServerUtilities] FileUtils.writeAtomic") == "FileUtils.writeAtomic"
+    tagged = " 65.4%     5.3s    Server.load > [GalaxySpace] Craters.provideChunk  (own 5.1%)"
+    assert method_on_line(tagged) == "Craters.provideChunk"
     assert method_on_line(" 17.3%  native code") is None and method_on_line("## Thread Server thread") is None
     assert window_on_line("29920107 2h19m      769  14.7      16.3 23518") == 29920107
     assert window_on_line(" 41.8%  a.B.c") is None

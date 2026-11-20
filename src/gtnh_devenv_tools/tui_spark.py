@@ -21,6 +21,7 @@ _LEAD = re.compile(r"^\s*[\d.]+%\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\d+ [MG]B)?\s*
 _OWN = re.compile(r"\s+\(own [\d.]+%\)$")
 _WINDOW_ROW = re.compile(r"^(\d+)\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\?)\s+\d+\s")
 _METHOD = re.compile(r"^[\w$.<>/-]+$")
+_TAG = re.compile(r"^\[[^\]]*\]\s*")  # [Mod] in front of a frame
 RECENT = 20  # saved profiles listed
 
 
@@ -29,7 +30,7 @@ def method_on_line(line: str) -> str | None:
     if not _LEAD.match(line):
         return None
     rest = _OWN.sub("", _LEAD.sub("", line, count=1)).strip()
-    last = rest.rpartition(" > ")[2].strip()
+    last = _TAG.sub("", rest.rpartition(" > ")[2].strip().removeprefix("< "))
     return last if _METHOD.match(last) else None
 
 

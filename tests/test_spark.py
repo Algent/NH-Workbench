@@ -136,7 +136,7 @@ def test_summary_report(profile):
         "Matched 1 method(s): a.Mod.helper" in focus
         and "Mod.helper\n" in focus
         and "< Mod.tick\n" in focus
-        and "< Main.run" in focus
+        and "< [x?] Main.run" in focus
     )
     with pytest.raises(spark.ProfileError, match="no frame matching"):
         spark.focus_report(profile, "abc", "nothing", up=False)
@@ -197,3 +197,40 @@ def test_cli_needs_no_checkouts(tmp_path):
     assert res.exit_code == 0 and "Only" not in res.output and "Mod.helper" in res.output
     res = runner.invoke(app, [*base, "tree", str(file), "nope"])
     assert res.exit_code == 1
+
+
+def test_native_and_library_time_counts_for_the_mod_that_asked():
+    # mod tick -> minecraft region file -> java -> native: the mod asked for it
+    frames = [
+        spark.Frame("a.Mod", "tick", 0, [10], [1]),
+        spark.Frame("net.minecraft.RegionFile", "write", 0, [8], [2]),
+        spark.Frame("java.io.FileDescriptor", "sync", 0, [6], [3]),
+        spark.Frame("libc.so.6", "fsync", 0, [5], []),
+        spark.Frame("java.lang.Thread", "sleep", 0, [4], []),  # nobody but the JVM above it
+    ]
+    p = spark.Profile(threads=[spark.Thread("Server thread", frames, [0, 4], [14])])
+    view = spark.View(p, p.threads[0])
+    assert view.owners() == ["a (package)", "minecraft", "a (package)", "a (package)", "java"]
+    assert view.own_by_package() == {"a (package)": 2 + 1 + 5, "minecraft": 2, "java": 4}
+
+
+def test_readable_method_names(monkeypatch):
+    monkeypatch.setattr(spark, "mcp_names", lambda minecraft: {"func_73154_d": "provideChunk"})
+    p = spark.readable(spark.parse(profile_bytes()))
+    assert p.names == "" and p.threads[0].frames[0].method == "run"  # no func_ names: nothing to do
+    p.threads[0].frames[0].method = "func_73154_d"
+    p.threads[0].frames[1].method = "func_99999_x"  # not in the mappings: kept
+    spark.readable(p)
+    assert p.names == "mcp" and [f.method for f in p.threads[0].frames[:2]] == ["provideChunk", "func_99999_x"]
+    assert "method names from MCP" in spark.summary(p, "abc")
+    monkeypatch.setattr(spark, "mcp_names", lambda minecraft: {})
+    p.threads[0].frames[0].method = "func_73154_d"
+    assert spark.readable(p).names == "raw" and "func_ names left as is" in spark.summary(p, "abc")
+
+
+def test_call_paths_name_the_mods(monkeypatch):
+    monkeypatch.setattr(spark, "mod_packages", lambda: {"a": "Mod A"})
+    p = spark.parse(profile_bytes())
+    text = spark.summary(p, "abc", min_pct=1)
+    assert "[Mod A] Mod.tick" in text and "[x?] Main.run" in text
+    assert "[Mod A] Mod.helper" not in text  # same mod as its caller: no new tag

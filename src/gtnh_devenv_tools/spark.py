@@ -4,11 +4,13 @@ The upload is protobuf; the schema is spark-common/src/main/proto/spark/*.proto 
 fields used here are read, by number, so profiles from newer spark versions still load.
 """
 
+import csv
 import re
 import struct
 import tomllib
 import urllib.error
 import urllib.request
+import zipfile
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -21,6 +23,8 @@ from . import APP_NAME
 from .config import cache_dir
 
 DATA_URL = "https://spark-usercontent.lucko.me/{code}"
+# Readable names for the func_ methods of Minecraft 1.7.10 (what GTNH development uses too).
+MCP_URL = "https://maven.minecraftforge.net/de/oceanlabs/mcp/mcp_stable/12-1.7.10/mcp_stable-12-1.7.10.zip"
 _CODE = re.compile(r"^[A-Za-z0-9]{6,16}$")
 _URL = re.compile(r"spark\.lucko\.me/([A-Za-z0-9]{6,16})")
 
@@ -207,6 +211,7 @@ class Profile:
     class_sources: dict[str, str] = field(default_factory=dict)  # class -> mod, when the platform reports them
     threads: list[Thread] = field(default_factory=list)
     windows: list[Window] = field(default_factory=list)  # in the order the frame times use
+    names: str = ""  # "mcp" when func_ names were made readable, "raw" when that was not possible
 
     @property
     def duration_ms(self) -> int:
@@ -294,12 +299,12 @@ def load(source: str, refresh: bool = False) -> tuple[Profile, str]:
     if code is None:
         path = Path(source).expanduser()
         try:
-            return parse(path.read_bytes()), path.stem
+            return readable(parse(path.read_bytes())), path.stem
         except OSError as e:
             raise ProfileError(f"cannot read {path}: {e.strerror or e}") from e
     cached = cache_dir() / "spark" / f"{code}.sparkprofile"
     if cached.is_file() and not refresh:
-        return parse(cached.read_bytes()), code
+        return readable(parse(cached.read_bytes())), code
     data = _download(code)
     profile = parse(data)  # only keep what parses
     try:
@@ -307,7 +312,43 @@ def load(source: str, refresh: bool = False) -> tuple[Profile, str]:
         cached.write_bytes(data)
     except OSError:
         pass
-    return profile, code
+    return readable(profile), code
+
+
+@cache
+def mcp_names(minecraft: str) -> dict[str, str]:
+    """func_ name -> readable name from the MCP mappings, downloaded once. Empty when not available."""
+    if minecraft != "1.7.10":
+        return {}
+    path = cache_dir() / "mcp" / MCP_URL.rpartition("/")[2]
+    if not path.is_file():
+        req = urllib.request.Request(MCP_URL, headers={"User-Agent": APP_NAME})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = resp.read()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except (urllib.error.URLError, OSError):
+            return {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            rows = csv.reader(z.read("methods.csv").decode("utf-8", "replace").splitlines())
+            next(rows, None)  # searge,name,side,desc
+            return {row[0]: row[1] for row in rows if len(row) > 1 and row[1]}
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return {}
+
+
+def readable(p: Profile) -> Profile:
+    """Rename func_ methods to their MCP names, when the mappings can be had."""
+    frames = [f for t in p.threads for f in t.frames if f.method.startswith("func_")]
+    if not frames:
+        return p
+    names = mcp_names(p.minecraft)
+    for f in frames:
+        f.method = names.get(f.method, f.method)
+    p.names = "mcp" if names else "raw"
+    return p
 
 
 def _download(code: str) -> bytes:
@@ -343,6 +384,8 @@ _BUILTIN = (
     ("native", "native code"),
 )
 _NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "native code"}
+# Code that only does what its caller asked: its time counts for that caller in the per-mod totals.
+_CHARGED = {"java", "netty", "fastutil", "guava/gson", "native code"}
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
 
 
@@ -403,6 +446,7 @@ class View:
         for i, f in enumerate(thread.frames):
             for c in f.children:
                 self.parent[c] = i
+        self._owners: list[str] | None = None
 
     def own(self, i: int) -> float:
         return max(0.0, self.total[i] - sum(self.total[c] for c in self.thread.frames[i].children))
@@ -413,11 +457,34 @@ class View:
             out[f.key] += self.own(i)
         return out
 
+    def owners(self) -> list[str]:
+        """Per frame, who its time counts for. Native, JVM and library code does what it was asked: it counts for
+        the nearest mod up the stack, else the nearest game code (a backup's disk writes go through Minecraft's
+        region files, but the backup mod asked for them)."""
+        if self._owners is None:
+            frames, sources = self.thread.frames, self.profile.class_sources
+            out = [""] * len(frames)
+            # (frame, nearest mod above, nearest game code above)
+            stack: list[tuple[int, str | None, str | None]] = [(r, None, None) for r in self.thread.roots]
+            while stack:
+                i, mod_above, game_above = stack.pop()
+                label = package_of(frames[i].cls, sources)
+                if label in _CHARGED:
+                    out[i] = mod_above or game_above or label
+                else:
+                    out[i] = label
+                    if label in _NOT_MODS:
+                        game_above = label
+                    else:
+                        mod_above = label
+                stack += [(c, mod_above, game_above) for c in frames[i].children]
+            self._owners = out
+        return self._owners
+
     def own_by_package(self) -> dict[str, float]:
         out: dict[str, float] = defaultdict(float)
-        sources = self.profile.class_sources
-        for i, f in enumerate(self.thread.frames):
-            out[package_of(f.cls, sources)] += self.own(i)
+        for i, owner in enumerate(self.owners()):
+            out[owner] += self.own(i)
         return out
 
     def total_by_method(self) -> dict[str, float]:
@@ -526,11 +593,11 @@ def _short(key: str) -> str:
 
 def header(p: Profile, name: str) -> list[str]:
     when = datetime.fromtimestamp(p.start / 1000, UTC).strftime("%Y-%m-%d %H:%M UTC") if p.start else "?"
-    lines = [f"# spark profile {name}"]
     mc = f", Minecraft {p.minecraft}" if p.minecraft else ""
-    lines.append(f"{p.platform} {p.platform_version}{mc}, spark v{p.spark_version}")
+    lines = [f"# spark profile {name}: {p.platform} {p.platform_version}{mc}, spark v{p.spark_version}"]
     what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
-    lines.append(f"Recorded {when} for {_span(p.duration_ms)}, sampling {what}")
+    names = {"mcp": "; method names from MCP", "raw": "; func_ names left as is (MCP mappings unavailable)"}
+    lines.append(f"Recorded {when} for {_span(p.duration_ms)}, sampling {what}{names.get(p.names, '')}")
     if p.ticked:
         lines.append(
             f"Mode: only ticks over {p.tick_threshold_ms:g} ms were kept ({p.included_ticks} of {p.ticks} ticks)."
@@ -542,32 +609,38 @@ def header(p: Profile, name: str) -> list[str]:
         lines.append(f"Comment: {p.comment}")
     m = p.mspt
     if any(p.tps) or any(m.values()):
-        lines.append(
-            f"Server: TPS {p.tps[0]:.1f} (1m) / {p.tps[1]:.1f} (5m) / {p.tps[2]:.1f} (15m);"
-            f" MSPT 1m median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.1f}; players {p.players}"
+        server = (
+            f"Server: TPS {p.tps[0]:.1f} / {p.tps[1]:.1f} / {p.tps[2]:.1f} (1, 5, 15 min);"
+            f" tick ms median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.0f} (last min); players {p.players}"
         )
+        if p.entities:
+            top = sorted(p.entity_counts.items(), key=lambda kv: -kv[1])[:5]
+            server += f"; entities {p.entities} ({', '.join(f'{k} {v}' for k, v in top)})"
+        lines.append(server)
+    memory = []
     if p.heap_total:
-        lines.append(f"Heap: {_bytes(p.heap_used)} used of {_bytes(p.heap_total)}")
-    if p.gc:
-        gcs = [f"{n} {g.collections}x avg {g.avg_ms:.0f} ms" for n, g in p.gc.items() if g.collections]
-        lines.append(f"GC: {'; '.join(gcs) or 'none'}")
+        memory.append(f"heap {_bytes(p.heap_used)} of {_bytes(p.heap_total)}")
+    gcs = [f"{n} {g.collections}x avg {g.avg_ms:.0f} ms" for n, g in p.gc.items() if g.collections]
+    if gcs:
+        memory.append("GC " + ", ".join(gcs))
+    if memory:
+        lines.append(f"Memory: {'; '.join(memory)}")
+    machine = []
     if p.cpu_threads:
-        lines.append(
-            f"CPU: {p.cpu_model or '?'} ({p.cpu_threads} threads); process {100 * p.cpu_process[0]:.0f}% (1m),"
-            f" system {100 * p.cpu_system[0]:.0f}% (1m)"
+        machine.append(
+            f"{p.cpu_model or 'CPU'} ({p.cpu_threads} threads), CPU use {100 * p.cpu_process[0]:.0f}% by the game,"
+            f" {100 * p.cpu_system[0]:.0f}% overall"
         )
     if p.ram_total:
-        lines.append(f"RAM: {_bytes(p.ram_used)} used of {_bytes(p.ram_total)}")
-    if p.os or p.java:
-        lines.append(f"System: {p.os}; Java {p.java}")
+        machine.append(f"RAM {_bytes(p.ram_used)} of {_bytes(p.ram_total)}")
+    machine += [x for x in (p.os, f"Java {p.java}" if p.java else "") if x]
+    if machine:
+        lines.append(f"Machine: {'; '.join(machine)}")
     if p.vm_args:
         args = p.vm_args.split()
         kept = [a for a in args if not a.startswith(("--add-opens", "--add-exports"))]
         dropped = f" (+{len(args) - len(kept)} --add-opens/--add-exports)" if len(kept) < len(args) else ""
         lines.append(f"JVM args: {' '.join(kept)}{dropped}")
-    if p.entities:
-        top = sorted(p.entity_counts.items(), key=lambda kv: -kv[1])[:8]
-        lines.append(f"Entities: {p.entities} ({', '.join(f'{k} {v}' for k, v in top)})")
     if p.mods:
         lines.append(f"Mods reported: {len(p.mods)}")
     return lines
@@ -577,15 +650,18 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
     windows = [w for w in p.windows if w.ticks]
     if len(windows) < 2:
         return []
-    lines = [f"\n## Worst minutes (of {len(windows)}, by slowest tick); window ids work with --window"]
-    lines.append("window  at       ticks   TPS  MSPT med   max  players entities tiles chunks")
-    for w in sorted(windows, key=lambda w: -w.mspt_max)[:worst]:
+    shown = sorted(windows, key=lambda w: -w.mspt_max)[:worst]
+    lines = [f"\n## Worst minutes ({len(shown)} of {len(windows)}, by slowest tick; the id works with --window)"]
+    columns = [("players", "players"), ("entities", "entities"), ("tile_entities", "tiles"), ("chunks", "chunks")]
+    columns = [(attr, title) for attr, title in columns if any(getattr(w, attr) >= 0 for w in shown)]
+    width = max(len(str(w.id)) for w in shown)
+    head = f"{'id':<{width}}  {'at':>6}  {'ticks':>5}  {'TPS':>4}  {'median ms':>9}  {'max ms':>6}"
+    lines.append(head + "".join(f"  {title:>8}" for _, title in columns))
+    for w in shown:
         at = _span(w.start - p.start) if w.start and p.start else "?"
-        counts = [str(n) if n >= 0 else "?" for n in (w.players, w.entities, w.tile_entities, w.chunks)]
-        lines.append(
-            f"{w.id:<7} {at:<8} {w.ticks:5}  {w.tps:4.1f}  {w.mspt_median:8.1f} {w.mspt_max:5.0f}"
-            f"  {counts[0]:>7} {counts[1]:>8} {counts[2]:>5} {counts[3]:>6}"
-        )
+        row = f"{w.id:<{width}}  {at:>6}  {w.ticks:5}  {w.tps:4.1f}  {w.mspt_median:9.1f}  {w.mspt_max:6.0f}"
+        counts = (getattr(w, attr) for attr, _ in columns)
+        lines.append(row + "".join(f"  {str(n) if n >= 0 else '?':>8}" for n in counts))
     return lines
 
 
@@ -598,12 +674,41 @@ def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, up: bool
     p = view.profile
     limit = view.whole * min_pct / 100
     lines: list[str] = []
+    mods: dict[str, str] = {}
 
-    def walk(node: Merged, depth: int) -> None:
+    def mod(key: str) -> str:
+        if key not in mods:
+            mods[key] = package_of(key.rpartition(".")[0], p.class_sources)
+        return mods[key]
+
+    def name(key: str, before: str) -> str:
+        """Class.method, with [Mod] in front where a mod's code starts."""
+        owner = mod(key)
+        tag = f"[{owner.replace(' (package)', '?')}] " if owner not in _NOT_MODS and owner != before else ""
+        return tag + _short(key)
+
+    def fold(chain: list[Merged], before: str) -> str:
+        """A run of frames on one line: the first, the last, and up to three where another mod takes over."""
+        keys = [n.key for n in chain]
+        keep = set(range(len(keys)))
+        if len(keys) > 3:
+            entries = [i for i in range(1, len(keys) - 1) if mod(keys[i]) not in _NOT_MODS]
+            entries = [i for i in entries if mod(keys[i]) != mod(keys[i - 1])]
+            keep = {0, len(keys) - 1, *entries[:3]}
+        parts, last, prev = [], -1, before
+        for i in sorted(keep):
+            if i - last > 1:
+                parts.append(f"... {i - last - 1} frames ...")
+            parts.append(name(keys[i], prev))
+            prev, last = mod(keys[i]), i
+        return " > ".join(parts)
+
+    def walk(node: Merged, depth: int, before: str) -> None:
         chain = [node]
         while True:  # fold a run of frames that each pass almost all their time to one child
             kids = [c for c in chain[-1].children.values() if c.total >= limit]
-            if len(kids) != 1 or kids[0].total < 0.97 * chain[-1].total:
+            # Going up, a single caller continues the list whatever time branches off below it.
+            if len(kids) != 1 or (not up and kids[0].total < 0.97 * chain[-1].total):
                 break
             chain.append(kids[0])
         if len(lines) >= max_lines:
@@ -611,25 +716,24 @@ def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, up: bool
         last = chain[-1]
         indent = "  " * depth
         if up:
+            prev = before
             for n, frame_node in enumerate(chain):
                 mark = "< " if n else ""
                 line = f"{_pct(frame_node.total, view.whole)} {amount(p, frame_node.total):>8}  {indent}{mark}"
-                lines.append(line + _short(frame_node.key))
+                lines.append(line + name(frame_node.key, prev))
+                prev = mod(frame_node.key)
         else:
-            names = [_short(n.key) for n in chain]
-            if len(names) > 3:
-                names = [names[0], f"... {len(names) - 2} frames ...", names[-1]]
             rest = last.total - sum(c.total for c in last.children.values())
             own_text = f"  (own {_pct(rest, view.whole).strip()})" if rest >= limit else ""
             amount_text = f"{_pct(last.total, view.whole)} {amount(p, last.total):>8}"
-            lines.append(f"{amount_text}  {indent}{' > '.join(names)}{own_text}")
+            lines.append(f"{amount_text}  {indent}{fold(chain, before)}{own_text}")
         for child in sorted(last.children.values(), key=lambda c: -c.total):
             if child.total >= limit:
-                walk(child, depth + 1)
+                walk(child, depth + 1, mod(last.key))
 
     for child in sorted(top.children.values(), key=lambda c: -c.total):
         if child.total >= limit:
-            walk(child, 0)
+            walk(child, 0, "")
     if len(lines) >= max_lines:
         lines.append(f"... cut at {max_lines} lines; raise --lines or --min")
     return lines
@@ -639,10 +743,10 @@ def thread_report(view: View, top_n: int, min_pct: float, max_lines: int) -> lis
     p, t = view.profile, view.thread
     unit = "allocated" if p.allocation else "sampled"
     lines = [f"\n## Thread {t.name}: {amount(p, view.whole)} {unit}, {len(t.frames)} frames"]
-    lines.append("\n### Most own time (the method itself, not what it calls)")
+    lines.append("\n### Most own time (spent in the method itself, not in what it calls)")
     for key, value in sorted(view.own_by_method().items(), key=lambda kv: -kv[1])[:top_n]:
         lines.append(f"{_pct(value, view.whole)}  {key}")
-    lines.append("\n### Most total time (including what it calls), outside java, minecraft, forge and libraries")
+    lines.append("\n### Most total time (including what it calls), mods only")
     shown = 0
     for key, value in sorted(view.total_by_method().items(), key=lambda kv: -kv[1]):
         if package_of(key.rpartition(".")[0], p.class_sources) in _NOT_MODS:
@@ -652,16 +756,17 @@ def thread_report(view: View, top_n: int, min_pct: float, max_lines: int) -> lis
         if shown >= top_n:
             break
     lines.append("\n### Own time by mod")
-    if not p.class_sources:
-        lines.append(
-            "(from a table of the pack's jars, as 1.7.10 profiles do not say; mixins count for the mod that wrote"
-            " them, (package) marks a guess)"
-        )
+    lines.append(
+        "(native, JVM and library code counts for the nearest mod up the stack, else Minecraft or Forge; mixins"
+        " for the mod that wrote them"
+        + ("" if p.class_sources else "; (package) marks a guess where the pack's table has no entry")
+        + ")"
+    )
     for name, value in sorted(view.own_by_package().items(), key=lambda kv: -kv[1])[:top_n]:
         if value < view.whole * 0.002:
             break
         lines.append(f"{_pct(value, view.whole)}  {name}")
-    lines.append(f"\n### Hot call paths (at least {min_pct:g}% of the thread)")
+    lines.append(f"\n### Hot call paths (at least {min_pct:g}% of the thread; [Mod] where its code starts)")
     lines += tree_lines(view, callees(view, list(t.roots)), min_pct, max_lines)
     return lines
 

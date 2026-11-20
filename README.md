@@ -108,7 +108,13 @@ gtnh-dev tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
 The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
 changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM arguments, the worst minutes, then
 for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
-paths.
+paths, with `[Mod]` where a mod's code starts.
+
+- Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
+  uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.
+- Own time per mod: time in native code, the JVM and libraries (netty, fastutil, guava) counts for the nearest
+  mod up the call stack, else Minecraft or Forge. A backup's disk writes count for the backup mod, not for
+  "native code".
 
 In the UI: Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report, Enter on
 a method shows what it calls, `t` / `c` what the method on the cursor line calls / who calls it (asked for when

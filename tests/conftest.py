@@ -59,3 +59,11 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Sandbox:
     for key, value in isolated.items():
         monkeypatch.setitem(proc._ENV, key, value)
     return Sandbox(tmp_path, {**os.environ, **isolated})
+
+
+@pytest.fixture(autouse=True)
+def no_mcp_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never fetch the MCP mappings in tests: spark profiles keep their func_ names."""
+    from gtnh_devenv_tools import spark
+
+    monkeypatch.setattr(spark, "mcp_names", lambda minecraft: {})
