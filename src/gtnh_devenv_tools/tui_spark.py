@@ -23,6 +23,12 @@ _WINDOW_ROW = re.compile(r"^(\d+)\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\?)\s+\d+\s")
 _METHOD = re.compile(r"^[\w$.<>/-]+$")
 _TAG = re.compile(r"^\[[^\]]*\]\s*")  # [Mod] in front of a frame
 RECENT = 20  # saved profiles listed
+INSTALL = "install-skill"  # id of the list entry that installs the skill
+HINTS = {
+    "pick": "Paste a link or code and press Enter, or pick a saved profile. F2: install the AI skill.",
+    "read": "Enter on a method: what it calls (t), c: who calls it, Enter on a minute: only that minute,"
+    " Esc: step back, s: summary, y: copy for an LLM",
+}
 
 
 def method_on_line(line: str) -> str | None:
@@ -63,7 +69,7 @@ class SparkScreen(Screen[None]):
         Binding("y", "copy", "Copy"),
         Binding("e", "save", "Save"),
         Binding("r", "reload", "Download again"),
-        Binding("i", "install_skill", "AI skill"),
+        Binding("f2", "install_skill", "Install AI skill"),  # a letter would go into the text box
     ]
 
     def __init__(self) -> None:
@@ -85,24 +91,30 @@ class SparkScreen(Screen[None]):
         report = TextArea(id="spark-report", read_only=True, soft_wrap=False, show_line_numbers=False)
         report.display = False
         yield report
-        yield Static(
-            Text(
-                "Enter on a method: what it calls (t), c: who calls it, Enter on a minute: only that minute,"
-                " Esc: step back, s: summary, y: copy for an LLM",
-                "dim",
-            ),
-            id="spark-hint",
-        )
+        yield Static(Text(HINTS["pick"], "dim"), id="spark-hint")
         yield Footer()
 
     def on_mount(self) -> None:
         self._fill_recent()
         self.query_one("#spark-input", Input).focus()
 
+    def _picking(self) -> bool:
+        """The text box and saved profiles are shown (nothing loaded yet, or "open other")."""
+        return bool(self.query_one("#spark-input", Input).display)
+
+    def _set_mode(self, picking: bool) -> None:
+        self.query_one("#spark-input", Input).display = picking
+        self.query_one("#spark-recent", OptionList).display = picking
+        self.query_one("#spark-report", TextArea).display = not picking and self.profile is not None
+        self.query_one("#spark-hint", Static).update(Text(HINTS["pick" if picking else "read"], "dim"))
+        self.refresh_bindings()
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action in ("open", "back", "leave", "install_skill"):
+        if action == "back":
             return True
-        return self.profile is not None
+        if self._picking():
+            return action == "install_skill"
+        return action != "install_skill" and (action in ("open", "leave") or self.profile is not None)
 
     # --- loading -----------------------------------------------------------------
 
@@ -113,7 +125,10 @@ class SparkScreen(Screen[None]):
         for path in files:
             when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
             recent.add_option(Option(Text.assemble((path.stem, "bold"), f"   downloaded {when}"), id=str(path)))
-        recent.display = bool(files)
+        if files:
+            recent.add_option(None)  # separator
+        label = Text.assemble(("Install the AI skill", "bold"), "   for Claude Code or Codex (F2)")
+        recent.add_option(Option(label, id=INSTALL))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
@@ -122,7 +137,10 @@ class SparkScreen(Screen[None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         event.stop()
-        self.load(event.option.id or "")
+        if event.option.id == INSTALL:
+            self.action_install_skill()
+        else:
+            self.load(event.option.id or "")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         event.stop()  # keep it away from the app's filter box
@@ -138,12 +156,8 @@ class SparkScreen(Screen[None]):
         self.profile, self.name_, self.source = profile, name, source
         self.thread = self.windows = self.method = None
         self.history = []
-        self.query_one("#spark-input", Input).display = False
-        self.query_one("#spark-recent", OptionList).display = False
-        report = self.query_one("#spark-report", TextArea)
-        report.display = True
-        report.focus()
-        self.refresh_bindings()
+        self._set_mode(picking=False)
+        self.query_one("#spark-report", TextArea).focus()
         await self._show()
 
     async def _show(self, row: int = 0) -> bool:
@@ -198,8 +212,7 @@ class SparkScreen(Screen[None]):
         """Close "open other", else step back to the previous view, else leave the screen."""
         box = self.query_one("#spark-input", Input)
         if box.display and self.profile is not None:  # leave "open other" without loading anything
-            box.display = False
-            self.query_one("#spark-recent", OptionList).display = False
+            self._set_mode(picking=False)
             self.query_one("#spark-report", TextArea).focus()
             return
         if self.history:
@@ -213,9 +226,9 @@ class SparkScreen(Screen[None]):
 
     def action_open(self) -> None:
         box = self.query_one("#spark-input", Input)
-        box.display = True
         box.value = ""
         self._fill_recent()
+        self._set_mode(picking=True)
         box.focus()
 
     async def action_dig(self) -> None:

@@ -143,7 +143,7 @@ It prints the packages several mods share without a clear owner; decide those in
 uv run gtnh-dev tools install-skill            # for the agents found in your home folder; --for claude|codex|all
 ```
 
-(or `i` on the spark screen) installs a `spark-profile` skill, so a spark link pasted in any project gets read
+(or F2 where the spark screen asks for a link) installs a `spark-profile` skill, so a spark link pasted in any project gets read
 with these commands instead of the web viewer: for Claude Code in `~/.claude/skills`, for Codex in
 `~/.agents/skills`. It runs through a small launcher that needs only uv: it uses the checkout it was installed
 from, else `gtnh-dev` on PATH, else the published version from GitHub through `uvx` (the agent then offers once

@@ -850,7 +850,13 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, SparkScreen)
-        assert screen.query_one("#spark-recent").option_count == 1  # the saved profile
+        assert screen.query_one("#spark-recent").option_count == 2  # the saved profile and install
+
+        def enabled(key: str) -> bool:
+            found = screen.active_bindings.get(key)
+            return bool(found and found.enabled)
+
+        assert enabled("f2") and not enabled("t")
 
         async def until_loaded() -> None:
             for _ in range(100):
@@ -916,12 +922,16 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         from gtnh_devenv_tools import skill
 
         monkeypatch.setattr(skill, "_home", lambda: tmp_path)
-        await pilot.press("i")
+        assert not enabled("f2") and enabled("t")  # F2 only where profiles are picked
+        await pilot.press("o", "f2")
         await pilot.pause()
         assert isinstance(app.screen, MenuScreen)
         await pilot.press("2")  # Codex
         await settle(app, pilot)
         assert skill.installed("codex") and not (tmp_path / ".claude").exists()
+        await pilot.press("escape")  # back to the profile from "open other"
+        await pilot.pause()
+        assert not screen._picking()
 
         await pilot.press("q")  # leaves at once, whatever the history
         await pilot.pause()
