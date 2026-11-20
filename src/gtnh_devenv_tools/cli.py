@@ -496,3 +496,27 @@ def spark_callers(
     """Who calls a method, weighted by the time spent in it."""
     profile, name = _profile(source, refresh)
     _emit(lambda: spark.focus_report(profile, name, method, True, thread, window, min_pct, lines))
+
+
+@tools_app.command("install-skill")
+def install_skill(
+    dest: Annotated[
+        Path | None, typer.Option("--dest", help="Skills folder to install into; default: your Claude skills folder.")
+    ] = None,
+) -> None:
+    """Install the spark-profile skill for Claude Code: spark links then get read with this tool."""
+    from . import skill
+
+    try:
+        folder, checkout = skill.install(dest)
+    except OSError as e:
+        err.print(f"[bold red]Could not install the skill: {e}")
+        raise typer.Exit(1) from e
+    out.print(f"Installed the {skill.SKILL} skill in {folder}")
+    if checkout:
+        out.print(f"It runs this checkout: {checkout}")
+    elif (folder / "checkout.txt").is_file():
+        out.print("It keeps running the checkout chosen earlier.")
+    else:
+        out.print("It runs the published version from GitHub until a checkout is set (Claude asks on first use).")
+    out.print("New Claude Code sessions pick it up.")
