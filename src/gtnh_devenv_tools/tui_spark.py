@@ -51,7 +51,7 @@ class SparkScreen(Screen[None]):
 
     BINDINGS = [
         Binding("escape", "back", "Back"),
-        Binding("q", "back", show=False),
+        Binding("q", "leave", "Close"),
         Binding("enter", "dig", "Dig in", show=False),
         Binding("o", "open", "Open other"),
         Binding("s", "summary", "Summary"),
@@ -74,6 +74,7 @@ class SparkScreen(Screen[None]):
         self.method: str | None = None  # None: the summary
         self.up = False  # callers instead of callees
         self.text = ""
+        self.history: list[tuple] = []  # earlier views, for Esc: (method, up, windows, thread, cursor row)
 
     def compose(self) -> ComposeResult:
         yield Static(Text("spark profile", "bold"), id="spark-status")
@@ -85,7 +86,7 @@ class SparkScreen(Screen[None]):
         yield Static(
             Text(
                 "Enter on a method: what it calls (t), c: who calls it, Enter on a minute: only that minute,"
-                " s: summary, y: copy for an LLM",
+                " Esc: step back, s: summary, y: copy for an LLM",
                 "dim",
             ),
             id="spark-hint",
@@ -97,7 +98,7 @@ class SparkScreen(Screen[None]):
         self.query_one("#spark-input", Input).focus()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action in ("open", "back"):
+        if action in ("open", "back", "leave"):
             return True
         return self.profile is not None
 
@@ -134,6 +135,7 @@ class SparkScreen(Screen[None]):
             return
         self.profile, self.name_, self.source = profile, name, source
         self.thread = self.windows = self.method = None
+        self.history = []
         self.query_one("#spark-input", Input).display = False
         self.query_one("#spark-recent", OptionList).display = False
         report = self.query_one("#spark-report", TextArea)
@@ -142,10 +144,11 @@ class SparkScreen(Screen[None]):
         self.refresh_bindings()
         await self._show()
 
-    async def _show(self) -> None:
+    async def _show(self, row: int = 0) -> bool:
+        """Render the current view, the cursor on the given row. False when it cannot be shown."""
         p = self.profile
         if p is None:
-            return
+            return False
         try:
             if self.method is None:
                 text = await asyncio.to_thread(spark.summary, p, self.name_, self.thread, self.windows)
@@ -155,11 +158,11 @@ class SparkScreen(Screen[None]):
                 )
         except spark.ProfileError as e:
             self.notify(str(e), severity="warning")
-            return
+            return False
         self.text = text
         report = self.query_one("#spark-report", TextArea)
         report.load_text(text)
-        report.move_cursor((0, 0))
+        report.move_cursor((min(row, report.document.line_count - 1), 0), center=bool(row))
         where = [self.name_, self.thread or "server thread"]
         if self.windows:
             where.append(f"minute {', '.join(map(str, self.windows))}")
@@ -167,6 +170,21 @@ class SparkScreen(Screen[None]):
         self.query_one("#spark-status", Static).update(
             Text.assemble(("spark ", "bold"), " · ".join(where), ("  ·  ", "dim"), (view, "bold"))
         )
+        return True
+
+    def _snapshot(self) -> tuple:
+        report = self.query_one("#spark-report", TextArea)
+        return (self.method, self.up, self.windows, self.thread, report.cursor_location[0])
+
+    async def _go(self, **changes: object) -> None:
+        """Switch to another view, remembering this one for Esc."""
+        before = self._snapshot()
+        for key, value in changes.items():
+            setattr(self, key, value)
+        if await self._show():
+            self.history.append(before)
+        else:
+            self.method, self.up, self.windows, self.thread, _ = before
 
     def _cursor_line(self) -> str:
         report = self.query_one("#spark-report", TextArea)
@@ -174,13 +192,21 @@ class SparkScreen(Screen[None]):
 
     # --- actions -------------------------------------------------------------------
 
-    def action_back(self) -> None:
+    async def action_back(self) -> None:
+        """Close "open other", else step back to the previous view, else leave the screen."""
         box = self.query_one("#spark-input", Input)
         if box.display and self.profile is not None:  # leave "open other" without loading anything
             box.display = False
             self.query_one("#spark-recent", OptionList).display = False
             self.query_one("#spark-report", TextArea).focus()
             return
+        if self.history:
+            self.method, self.up, self.windows, self.thread, row = self.history.pop()
+            await self._show(row)
+            return
+        self.dismiss()
+
+    def action_leave(self) -> None:
         self.dismiss()
 
     def action_open(self) -> None:
@@ -194,15 +220,15 @@ class SparkScreen(Screen[None]):
         line = self._cursor_line()
         window = window_on_line(line)
         if window is not None:
-            self.windows = None if self.windows == [window] else [window]
-            await self._show()
+            await self._go(windows=None if self.windows == [window] else [window])
             return
         method = method_on_line(line)
         if method:
-            self.method, self.up = method, False
-            await self._show()
+            await self._go(method=method, up=False)
 
     async def action_summary(self) -> None:
+        """Straight back to the summary (minute and thread kept); Esc then leaves."""
+        self.history.clear()
         self.method = None
         await self._show()
 
@@ -213,8 +239,7 @@ class SparkScreen(Screen[None]):
             hint = "Part of Class.method, any case. Tip: put the cursor on a line of the report instead."
             method = await self.app.push_screen_wait(PromptScreen("Method", self.method or "", hint))
         if method:
-            self.method, self.up = method, up
-            await self._show()
+            await self._go(method=method, up=up)
 
     @work(group="spark-dialog")
     async def action_window(self) -> None:
@@ -230,8 +255,7 @@ class SparkScreen(Screen[None]):
         title = Text("Only one minute (worst first)", "bold")
         choice = await self.app.push_screen_wait(MenuScreen(title, actions))
         if choice:
-            self.windows = None if choice == "all" else [int(choice)]
-            await self._show()
+            await self._go(windows=None if choice == "all" else [int(choice)])
 
     @work(group="spark-dialog")
     async def action_thread(self) -> None:
@@ -242,8 +266,7 @@ class SparkScreen(Screen[None]):
         actions = [(str(i), t.name, t.name, None) for i, t in enumerate(threads, 1)]
         choice = await self.app.push_screen_wait(MenuScreen(Text("Thread", "bold"), actions))
         if choice:
-            self.thread = choice
-            await self._show()
+            await self._go(thread=choice)
 
     def action_copy(self) -> None:
         if self.text:

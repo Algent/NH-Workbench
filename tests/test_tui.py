@@ -869,6 +869,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
             report.move_cursor((row, 0))
 
         cursor_to("a.Mod.helper")
+        helper_row = report.cursor_location[0]
         await pilot.press("enter")  # what helper calls
         await pilot.pause()
         assert screen.method == "a.Mod.helper" and not screen.up and "What is called by" in screen.text
@@ -879,9 +880,22 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await settle(app, pilot)
         assert screen.up and "Who calls 'helper'" in screen.text
 
-        await pilot.press("s")
+        await pilot.press("escape")  # back to what helper calls
         await pilot.pause()
-        assert screen.method is None
+        assert screen.method == "a.Mod.helper" and not screen.up
+        await pilot.press("escape")  # back to the summary, on the line we left from
+        await pilot.pause()
+        assert screen.method is None and report.cursor_location[0] == helper_row and screen.history == []
+
+        await pilot.press("enter")  # helper's calls, then its callers
+        await pilot.pause()
+        cursor_to("s  Mod.helper")  # the tree line, after its time
+        await pilot.press("c")
+        await settle(app, pilot)
+        assert screen.up and len(screen.history) == 2
+        await pilot.press("s")  # straight to the summary, forgetting the way there
+        await pilot.pause()
+        assert screen.method is None and screen.history == []
         cursor_to("101  ")  # a row of the worst minutes
         await pilot.press("enter")
         await pilot.pause()
@@ -892,11 +906,14 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await pilot.press("a")  # whole recording again
         await settle(app, pilot)
         assert screen.windows is None
+        await pilot.press("escape")  # undoes the minute choice
+        await pilot.pause()
+        assert screen.windows == [101]
 
         await pilot.press("y", "e")
         await pilot.pause()
         assert copied == [screen.text] and (cache / "spark" / "Saved12345-summary.md").is_file()
-        await pilot.press("q")
+        await pilot.press("q")  # leaves at once, whatever the history
         await pilot.pause()
         assert not isinstance(app.screen, SparkScreen) and app.is_running
 

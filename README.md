@@ -112,8 +112,8 @@ package, since 1.7.10 profiles do not record mods), and the hot call paths.
 
 In the UI: Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report, Enter on
 a method shows what it calls, `t` / `c` what the method on the cursor line calls / who calls it (asked for when
-the line has none), Enter on one of the worst minutes narrows to it, `w` / `h` pick a minute / thread, `s` goes
-back to the summary, `y` copies the report (for an LLM), `e` saves it as a file, `o` opens another profile.
+the line has none), Enter on one of the worst minutes narrows to it, `w` / `h` pick a minute / thread, Esc steps back to the previous view (on the summary: closes), `q` closes, `s` jumps
+straight to the summary, `y` copies the report (for an LLM), `e` saves it as a file, `o` opens another profile.
 
 On the command line, `--thread NAME` picks another thread, `--window ID` (repeatable) narrows everything to the minutes listed under
 "Worst minutes", `--min` and `--lines` control how much of the call tree is shown. A link or code also accepts a
