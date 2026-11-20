@@ -107,8 +107,8 @@ gtnh-dev tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
 
 The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
 changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM arguments, the worst minutes, then
-for the server thread: the methods with the most own time and total time, own time per mod (guessed from the
-package, since 1.7.10 profiles do not record mods), and the hot call paths.
+for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
+paths.
 
 In the UI: Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report, Enter on
 a method shows what it calls, `t` / `c` what the method on the cursor line calls / who calls it (asked for when
@@ -119,6 +119,17 @@ On the command line, `--thread NAME` picks another thread, `--window ID` (repeat
 "Worst minutes", `--min` and `--lines` control how much of the call tree is shown. A link or code also accepts a
 downloaded `.sparkprofile` file. Downloads are kept in the cache folder under `spark`; `--refresh` downloads
 again. The name and UUID of whoever recorded the profile are left out of the reports.
+
+1.7.10 profiles do not say which mod a class comes from, so the tool ships a table of package prefixes per mod,
+`src/gtnh_devenv_tools/mod_packages.toml`, generated from a pack's jars (classes of mixins count for the mod that
+wrote them; anything the table misses is shown as `<package> (package)`). After mods were added or renamed,
+regenerate it from the mods folders of recent packs, newest last:
+
+```
+uv run python scripts/gen_mod_packages.py "<2.9.0 client>/.minecraft/mods" "<2.9.0 server>/mods" "<daily>/.minecraft/mods"
+```
+
+It prints the packages several mods share without a clear owner; decide those in its `OVERRIDES`.
 
 ## What the tool will and won't do
 

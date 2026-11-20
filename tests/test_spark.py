@@ -103,7 +103,7 @@ def test_own_and_total_time(profile):
     total = view.total_by_method()
     assert total["a.Mod.tick"] == 16  # the recursive call inside is not counted twice
     assert total["a.Mod.helper"] == 6 and total["x.Main.run"] == 20
-    assert view.own_by_package() == {"x": 2, "a": 16, "minecraft": 2}
+    assert view.own_by_package() == {"x (package)": 2, "a (package)": 16, "minecraft": 2}
 
 
 def test_one_window_only(profile):
@@ -142,14 +142,25 @@ def test_summary_report(profile):
         spark.focus_report(profile, "abc", "nothing", up=False)
 
 
-def test_package_guess():
-    assert spark.package_of("galaxyspace.core.dimension.ChunkProviderSpaceCraters") == "galaxyspace"
-    assert spark.package_of("com.gtnewhorizon.gtnhlib.util.data.Lazy") == "com.gtnewhorizon.gtnhlib"
-    assert spark.package_of("micdoodle8.mods.galacticraft.core.util.WorldUtil") == "micdoodle8.mods.galacticraft"
-    assert spark.package_of("mods.railcraft.common.Thing") == "mods.railcraft"
+def test_mod_of_a_class(monkeypatch):
+    table = {"galaxyspace": "GalaxySpace", "micdoodle8.mods.galacticraft.core": "Galacticraft", "gregtech": "GT"}
+    monkeypatch.setattr(spark, "mod_packages", lambda: table)
+    assert spark.package_of("galaxyspace.core.dimension.ChunkProviderSpaceCraters") == "GalaxySpace"
+    assert spark.package_of("micdoodle8.mods.galacticraft.core.util.WorldUtil") == "Galacticraft"
+    assert spark.package_of("micdoodle8.mods.galacticraft.planets.X") == "micdoodle8.mods.galacticraft (package)"
+    assert spark.package_of("com.gtnewhorizon.gtnhlib.util.data.Lazy") == "com.gtnewhorizon.gtnhlib (package)"
+    assert spark.package_of("mods.railcraft.common.Thing") == "mods.railcraft (package)"
     assert spark.package_of("cpw.mods.fml.common.eventhandler.EventBus") == "forge"
+    assert spark.package_of("net.minecraft.world.World") == "minecraft"  # never taken from the table
     assert spark.package_of("libc.so.6") == "native code"
+    assert spark.package_of("a.CommonProxy$$Lambda/0x10adfab0") == "a (package)"  # a lambda, not native code
     assert spark.package_of("a.B", {"a.B": "SomeMod"}) == "SomeMod"
+
+
+def test_shipped_mod_table():
+    table = spark.mod_packages()
+    assert table["gregtech"] == "GregTech" and table["galaxyspace"] == "GalaxySpace"
+    assert not any(k.startswith(("net.minecraft", "cpw.mods.fml", "java.")) for k in table)
 
 
 def test_sources(tmp_path, monkeypatch):

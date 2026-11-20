@@ -6,12 +6,15 @@ fields used here are read, by number, so profiles from newer spark versions stil
 
 import re
 import struct
+import tomllib
 import urllib.error
 import urllib.request
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cache
+from importlib import resources
 from pathlib import Path
 
 from . import APP_NAME
@@ -343,19 +346,38 @@ _NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "n
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
 
 
+@cache
+def mod_packages() -> dict[str, str]:
+    """Package prefix -> mod, generated from the pack's jars by scripts/gen_mod_packages.py."""
+    text = resources.files(__package__).joinpath("mod_packages.toml").read_text(encoding="utf-8")
+    return tomllib.loads(text)
+
+
+def is_native(cls: str) -> bool:
+    """A frame of the JVM or the OS (async-profiler reports those), not a Java class."""
+    return cls.startswith(("native", "/")) or ".so" in cls
+
+
 def package_of(cls: str, sources: dict[str, str] | None = None) -> str:
-    """Who a class most likely belongs to: the mod spark reports, else a guess from its package."""
+    """Who a class belongs to: the mod spark reports, the pack's table, else "<package> (package)"."""
     if sources and cls in sources:
         return sources[cls]
     for prefix, name in _BUILTIN:
         if cls.startswith(prefix):
             return name
-    if ".so" in cls or "/" in cls:
+    if is_native(cls):
         return "native code"
     parts = cls.split(".")[:-1] or [cls]
+    table = mod_packages()
+    for end in range(len(parts), 0, -1):
+        mod = table.get(".".join(parts[:end]))
+        if mod:
+            return mod
     if parts[0] in _TLDS or (len(parts) > 1 and parts[1] == "mods"):
-        return ".".join(parts[:3])
-    return ".".join(parts[:2]) if parts[0] == "mods" else parts[0]
+        guess = ".".join(parts[:3])
+    else:
+        guess = ".".join(parts[:2]) if parts[0] == "mods" else parts[0]
+    return f"{guess} (package)"
 
 
 class View:
@@ -496,9 +518,9 @@ def amount(profile: Profile, value: float) -> str:
 
 def _short(key: str) -> str:
     """Class.method without the package, to keep trees narrow."""
-    if ".so" in key or "/" in key:  # native frame: library path and symbol
-        return key.rpartition("/")[2]
     cls, _, method = key.rpartition(".")
+    if is_native(cls):  # library path and symbol
+        return key.rpartition("/")[2]
     return f"{cls.rpartition('.')[2]}.{method}" if cls else key
 
 
@@ -629,8 +651,12 @@ def thread_report(view: View, top_n: int, min_pct: float, max_lines: int) -> lis
         shown += 1
         if shown >= top_n:
             break
-    label = "mod" if p.class_sources else "package (1.7.10 profiles do not say which mod a class is from)"
-    lines.append(f"\n### Own time by {label}")
+    lines.append("\n### Own time by mod")
+    if not p.class_sources:
+        lines.append(
+            "(from a table of the pack's jars, as 1.7.10 profiles do not say; mixins count for the mod that wrote"
+            " them, (package) marks a guess)"
+        )
     for name, value in sorted(view.own_by_package().items(), key=lambda kv: -kv[1])[:top_n]:
         if value < view.whole * 0.002:
             break
