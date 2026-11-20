@@ -89,6 +89,31 @@ Settings changed from the UI are written to the config file, keeping its comment
 
 Global options: `--root PATH`, `-v` (log every command run).
 
+## Tools
+
+Things that do not need the checkouts.
+
+### spark profiles
+
+Turns a [spark](https://spark.lucko.me) profile, the link players paste when reporting lag, into a short text
+report that reads well for people and LLMs alike (a few thousand tokens, no screenshots):
+
+```
+gtnh-dev tools spark summary https://spark.lucko.me/XXXXXXXXXX
+gtnh-dev tools spark tree XXXXXXXXXX makeCrater        # what a method calls, all its call sites merged
+gtnh-dev tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
+```
+
+The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
+changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM arguments, the worst minutes, then
+for the server thread: the methods with the most own time and total time, own time per mod (guessed from the
+package, since 1.7.10 profiles do not record mods), and the hot call paths.
+
+`--thread NAME` picks another thread, `--window ID` (repeatable) narrows everything to the minutes listed under
+"Worst minutes", `--min` and `--lines` control how much of the call tree is shown. A link or code also accepts a
+downloaded `.sparkprofile` file. Downloads are kept in the cache folder under `spark`; `--refresh` downloads
+again. The name and UUID of whoever recorded the profile are left out of the reports.
+
 ## What the tool will and won't do
 
 **Pull** only fast-forwards: it never merges, rebases or forces.

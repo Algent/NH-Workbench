@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 
-from . import config, github, ops, pack, render
+from . import config, github, ops, pack, render, spark
 from .config import Config
 from .models import PackInfo, RepoState
 
@@ -34,7 +34,7 @@ def main(
         err.print(f"[bold red]{e}")
         raise typer.Exit(2) from e
     # The UI asks for the folder itself; commands need it up front.
-    if not cfg.root.is_dir() and ctx.invoked_subcommand is not None:
+    if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools"):
         err.print(f'[bold red]Folder with your checkouts not found: "{cfg.root}"')
         err.print(
             f'Pass --root PATH, set root in "{config.config_path()}", or start gtnh-dev without a command to pick it.'
@@ -416,3 +416,83 @@ def clone(
         err.print(f"[bold red]{e}")
         raise typer.Exit(1) from e
     raise typer.Exit(1 if failed else 0)
+
+
+tools_app = typer.Typer(help="Tools that do not need the checkouts.", no_args_is_help=True)
+spark_app = typer.Typer(
+    help="Read spark profiles (spark.lucko.me links) as short text reports, for people and LLMs.",
+    no_args_is_help=True,
+)
+app.add_typer(tools_app, name="tools")
+tools_app.add_typer(spark_app, name="spark")
+
+Source = Annotated[str, typer.Argument(help="spark.lucko.me link, its code, or a .sparkprofile file.")]
+Method = Annotated[str, typer.Argument(help="Part of Class.method, any case, e.g. makeCrater.")]
+ThreadOpt = Annotated[
+    str | None, typer.Option("--thread", help="Thread name (part of it); default: the server thread.")
+]
+WindowOpt = Annotated[
+    list[int] | None, typer.Option("--window", help="Only this minute (id from the summary); repeatable.")
+]
+RefreshOpt = Annotated[bool, typer.Option("--refresh", help="Download again instead of using the saved copy.")]
+
+
+def _profile(source: str, refresh: bool) -> tuple[spark.Profile, str]:
+    try:
+        return spark.load(source, refresh)
+    except spark.ProfileError as e:
+        err.print(f"[bold red]{e}")
+        raise typer.Exit(1) from e
+
+
+def _emit(make: Callable[[], str]) -> None:
+    try:
+        typer.echo(make())
+    except spark.ProfileError as e:
+        err.print(f"[bold red]{e}")
+        raise typer.Exit(1) from e
+
+
+@spark_app.command("summary")
+def spark_summary(
+    source: Source,
+    thread: ThreadOpt = None,
+    window: WindowOpt = None,
+    top: Annotated[int, typer.Option("--top", help="Entries per list.")] = 15,
+    min_pct: Annotated[float, typer.Option("--min", help="Hide call paths under this % of the thread.")] = 1.0,
+    lines: Annotated[int, typer.Option("--lines", help="Most call path lines.")] = 60,
+    refresh: RefreshOpt = False,
+) -> None:
+    """Server stats, the worst minutes, and where the time goes."""
+    profile, name = _profile(source, refresh)
+    _emit(lambda: spark.summary(profile, name, thread, window, top, min_pct, lines))
+
+
+@spark_app.command("tree")
+def spark_tree(
+    source: Source,
+    method: Method,
+    thread: ThreadOpt = None,
+    window: WindowOpt = None,
+    min_pct: Annotated[float, typer.Option("--min", help="Hide branches under this % of the thread.")] = 0.5,
+    lines: Annotated[int, typer.Option("--lines", help="Most lines.")] = 80,
+    refresh: RefreshOpt = False,
+) -> None:
+    """What a method calls and where its time goes, all its call sites merged."""
+    profile, name = _profile(source, refresh)
+    _emit(lambda: spark.focus_report(profile, name, method, False, thread, window, min_pct, lines))
+
+
+@spark_app.command("callers")
+def spark_callers(
+    source: Source,
+    method: Method,
+    thread: ThreadOpt = None,
+    window: WindowOpt = None,
+    min_pct: Annotated[float, typer.Option("--min", help="Hide branches under this % of the thread.")] = 0.5,
+    lines: Annotated[int, typer.Option("--lines", help="Most lines.")] = 80,
+    refresh: RefreshOpt = False,
+) -> None:
+    """Who calls a method, weighted by the time spent in it."""
+    profile, name = _profile(source, refresh)
+    _emit(lambda: spark.focus_report(profile, name, method, True, thread, window, min_pct, lines))
