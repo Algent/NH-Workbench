@@ -1027,3 +1027,27 @@ async def test_theme_is_kept(sandbox, offline, monkeypatch, tmp_path):
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
         assert app.theme == "textual-dark"
+
+
+async def test_tool_updates_itself(sandbox, offline, monkeypatch):
+    from gtnh_devenv_tools import tui
+    from gtnh_devenv_tools.tui import MenuScreen
+
+    monkeypatch.setattr(tui, "tool_checkout", lambda: sandbox.work)  # stands in for the tool's checkout
+    tip = sandbox.push_upstream("new feature")
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert app._tool_behind() == 1
+        assert app._tool_entry() == ("Update gtnh-devenv-tools (1 new commit)", None)
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, MenuScreen)
+        await pilot.press("n")
+        await settle(app, pilot)
+        assert sandbox.sha(sandbox.work) == tip and app.tool_updated
+        assert app._tool_entry()[1] == "updated: restart the tool to use it"
+        assert any("Restart the tool" in n.message for n in app._notifications)
+
+    monkeypatch.setattr(tui, "tool_checkout", lambda: None)
+    assert RepoApp(sandbox.cfg)._tool_entry()[1].startswith("installed as a package")

@@ -66,7 +66,8 @@ commits waiting on the release branch.
 **Repo menu** (`Enter`): fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or
 in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
 
-**Extras** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), clone over SSH or HTTPS,
+**Extras** (`x`): update the tool itself (its checkout is fetched at start; a notification says when
+there are new commits, and after updating, restart it), auto-refresh interval, fetch during auto-refresh (off by default), clone over SSH or HTTPS,
 clone every missing pack mod or org repo (archived ones left out) after listing them, IntelliJ launcher, refresh pack data, change the repo folder,
 show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
 jars, delete the jars Gradle left in `build/libs` of the org's repos (with the list and total size first).

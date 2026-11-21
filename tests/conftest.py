@@ -67,3 +67,11 @@ def no_mcp_download(monkeypatch: pytest.MonkeyPatch) -> None:
     from gtnh_devenv_tools import spark
 
     monkeypatch.setattr(spark, "mcp_names", lambda minecraft: {})
+
+
+@pytest.fixture(autouse=True)
+def no_self_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The UI fetches its own checkout at start; tests must not touch the real one."""
+    from gtnh_devenv_tools import tui
+
+    monkeypatch.setattr(tui, "tool_checkout", lambda: None)

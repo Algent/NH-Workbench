@@ -17,7 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 
-from . import config, github, ops, pack, proc, render
+from . import config, git, github, ops, pack, proc, render, skill
 from .config import Config
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 
@@ -319,8 +319,13 @@ class RepoMenu(MenuScreen):
         self._st = st
 
 
+def tool_checkout() -> Path | None:
+    """The checkout this tool runs from, which can update itself; None when installed as a package."""
+    return skill.own_checkout()
+
+
 class ExtrasMenu(MenuScreen):
-    def __init__(self, cfg: Config, info: PackInfo | None) -> None:
+    def __init__(self, cfg: Config, info: PackInfo | None, update: tuple[str, str | None]) -> None:
         lines = [Text(f"Root: {cfg.root}", "dim"), Text(f"Config: {config.config_path()}", "dim")]
         if info:
             lines.append(render.pack_header(info))
@@ -342,6 +347,7 @@ class ExtrasMenu(MenuScreen):
             ("l", "logs", "Open logs and cache folder", None),
             ("j", "jars", f"Download closed-source jars ({closed})", None if closed else "pack data not loaded"),
             ("b", "purge_jars", f"Delete built jars (build/libs) of {cfg.org} repos", None),
+            ("n", "update", *update),
         ]
         super().__init__(Text("Extras", "bold"), actions, Group(*lines))
 
@@ -390,6 +396,8 @@ class RepoApp(App[None]):
         self.reviews: list[ReviewItem] = []
         self.mine: list[ReviewItem] = []
         self.org: github.OrgPrs | None = None  # loaded the first time the All PRs tab opens
+        self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
+        self.tool_updated = False
         self.org_drafts = False
         self.last_loaded = time.monotonic()
         self.view = "all"
@@ -432,12 +440,74 @@ class RepoApp(App[None]):
         if self.cfg.theme in self.available_themes:
             self.theme = self.cfg.theme
         self.theme_changed_signal.subscribe(self, self._save_theme)
+        self._check_tool()
         if self.cfg.root.is_dir():
             self.load_everything()
         else:
             self._first_root()
         # Checked every minute, so a new interval set from Extras applies without a restart.
         self.set_interval(60, self.auto_refresh)
+
+    # --- updating the tool itself -------------------------------------------------
+
+    @work(group="tool-update", exclusive=True)
+    async def _check_tool(self) -> None:
+        """Fetch the tool's own checkout once per start, and say when it has new commits."""
+        path = tool_checkout()
+        if path is None:
+            return
+        self.tool = await ops.fetch_repo(self.cfg, path)
+        behind = self._tool_behind()
+        if behind:
+            self.notify(f"gtnh-devenv-tools has {behind} new commit(s): Extras (x) updates it", timeout=10)
+
+    def _tool_behind(self) -> int:
+        st = self.tool
+        if st is None or st.error:
+            return 0
+        return st.main_behind if st.off_main else st.behind
+
+    def _tool_entry(self) -> tuple[str, str | None]:
+        """Label of the Extras entry that updates the tool, and why it cannot be used now."""
+        label = "Update gtnh-devenv-tools"
+        st = self.tool
+        if tool_checkout() is None:
+            return label, "installed as a package: uv tool upgrade or uvx --refresh"
+        if self.tool_updated:
+            return label, "updated: restart the tool to use it"
+        if st is None:
+            return label, "checking for updates"
+        if st.error or (st.note and st.note.kind == "failed"):
+            return label, f"could not check: {st.error or st.note.text}"
+        behind = self._tool_behind()
+        if behind:
+            return f"{label} ({behind} new commit{'s' if behind > 1 else ''})", None
+        return label, f"up to date, {st.head or 'detached'} at {st.head_sha[:7]}"
+
+    async def _update_tool(self) -> None:
+        path, st = tool_checkout(), self.tool
+        if path is None or st is None or not st.tracked:
+            return
+        subjects = await git.subjects_between(path, st.tracked, f"{st.tracked}@{{u}}") or []
+        new = await ops.pull_repo(self.cfg, path)
+        self.tool = new
+        note = new.note
+        if not note or note.kind != "updated":
+            self.notify(f"Not updated: {note.text if note else 'nothing to pull'}", severity="warning", timeout=15)
+            return
+        self.tool_updated = True
+        if new.off_main:
+            self.notify(
+                f"{new.tracked} updated in {path}, but the checkout is on {new.head}:"
+                f" switch to {new.tracked} and restart the tool to use it",
+                severity="warning",
+                timeout=30,
+            )
+            return
+        latest = (
+            f": {subjects[0]}" + (f" and {len(subjects) - 1} more" if len(subjects) > 1 else "") if subjects else ""
+        )
+        self.notify(f"Updated{latest}. Restart the tool to use it.", severity="warning", timeout=30)
 
     def _save_theme(self, theme) -> None:
         """Keep the theme picked in the command palette for the next start."""
@@ -1038,13 +1108,15 @@ class RepoApp(App[None]):
     async def action_extras(self) -> None:
         if self._modal():
             return
-        choice = await self.push_screen_wait(ExtrasMenu(self.cfg, self.pack_info))
+        choice = await self.push_screen_wait(ExtrasMenu(self.cfg, self.pack_info, self._tool_entry()))
         if choice == "refresh":
             self.notify("Refreshing pack data...")
             await self._load_pack(force=True)
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
+        elif choice == "update":
+            await self._update_tool()
         elif choice == "purge_jars":
             await self._purge_jars()
         elif choice == "jars":
