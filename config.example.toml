@@ -5,6 +5,7 @@
 # org = "GTNewHorizons"                # its repos form the "gtnh" group; the All PRs tab lists its PRs
 # refresh_minutes = 15                 # the UI rescans this often, 0 turns it off
 # clone_protocol = "ssh"              # or "https": URLs for new clones and fork remotes
+# theme = "nord"                       # UI theme; picking one with Ctrl+P saves it here
 # refresh_fetch = false                # true: auto-refresh fetches every repo instead of only rescanning
 # pr_filters = ["local", "unreviewed"] # All PRs shows only: local, pack, unreviewed, stale (set with v)
 # concurrency = 8                      # repos handled at the same time

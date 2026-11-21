@@ -429,12 +429,26 @@ class RepoApp(App[None]):
             self.query_one(table_id).display = False
         self.query_one("#repos").focus()
         self.sub_title = str(self.cfg.root)
+        if self.cfg.theme in self.available_themes:
+            self.theme = self.cfg.theme
+        self.theme_changed_signal.subscribe(self, self._save_theme)
         if self.cfg.root.is_dir():
             self.load_everything()
         else:
             self._first_root()
         # Checked every minute, so a new interval set from Extras applies without a restart.
         self.set_interval(60, self.auto_refresh)
+
+    def _save_theme(self, theme) -> None:
+        """Keep the theme picked in the command palette for the next start."""
+        if theme.name == self.cfg.theme:
+            return
+        try:
+            config.save_setting(("theme",), theme.name)
+        except config.ConfigError as e:
+            self.notify(str(e), severity="error")
+            return
+        self.cfg.theme = theme.name
 
     def auto_refresh(self) -> None:
         """Rescan like `r` does once the interval has passed, unless something else is going on."""

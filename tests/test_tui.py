@@ -1005,3 +1005,25 @@ async def test_spark_screen_heap_summary(sandbox, offline, monkeypatch, tmp_path
         await pilot.press("escape")  # back to the summary
         await pilot.pause()
         assert screen.text.startswith("# spark heap summary") and screen.other is None
+
+
+async def test_theme_is_kept(sandbox, offline, monkeypatch, tmp_path):
+    from gtnh_devenv_tools import config
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    config.save_setting(("theme",), "nord", cfg_file)
+    app = RepoApp(config.load(sandbox.root, cfg_file))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.theme == "nord"
+        app.theme = "gruvbox"
+        await settle(app, pilot)
+        assert config.load(sandbox.root, cfg_file).theme == "gruvbox"
+
+    cfg = config.load(sandbox.root, cfg_file)
+    cfg.theme = "no-such-theme"  # removed from Textual, or a typo: the default stays
+    app = RepoApp(cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.theme == "textual-dark"
