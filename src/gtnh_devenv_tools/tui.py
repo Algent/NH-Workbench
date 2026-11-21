@@ -83,7 +83,7 @@ TOOLS = [
     (
         "skill",
         "Install AI skill",
-        "Let Claude Code or Codex read spark links with this tool, in any project",
+        "Let Claude Code, Codex or OpenCode read spark links with this tool, in any project",
         "Installs the spark-profile skill for the agent you pick. Same as `gtnh-dev tools install-skill`.",
     ),
 ]
@@ -1036,12 +1036,12 @@ class RepoApp(App[None]):
         return ""
 
     async def install_skill_menu(self) -> None:
-        """Install the skill that lets Claude Code or Codex read spark links with this tool."""
+        """Install the skill that lets Claude Code, Codex or OpenCode read spark links with this tool."""
         actions = []
-        for key, (agent, label) in zip("12", skill.AGENTS.items(), strict=True):
+        for key, (agent, label) in zip("123", skill.AGENTS.items(), strict=True):
             state = "update" if skill.installed(agent) else "install"
             actions.append((key, agent, f"{label}: {state} in {skill.skills_dir(agent) / skill.SKILL}", None))
-        actions.append(("a", "all", "Both", None))
+        actions.append(("a", "all", "All", None))
         info = Text("Spark links pasted in a chat with that agent then get read with this tool, in any project.", "dim")
         choice = await self.push_screen_wait(MenuScreen(Text("Install the spark-profile skill", "bold"), actions, info))
         if not choice:

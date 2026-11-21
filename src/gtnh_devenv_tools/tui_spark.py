@@ -143,7 +143,7 @@ class SparkScreen(Screen[None]):
             recent.add_option(Option(label, id=str(path)))
         if files:
             recent.add_option(None)  # separator
-        label = Text.assemble(("Install the AI skill", "bold"), "   for Claude Code or Codex (F2)")
+        label = Text.assemble(("Install the AI skill", "bold"), "   for Claude Code, Codex or OpenCode (F2)")
         recent.add_option(Option(label, id=INSTALL))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -348,7 +348,7 @@ class SparkScreen(Screen[None]):
 
     @work(group="spark-dialog")
     async def action_install_skill(self) -> None:
-        """Install the skill that lets Claude Code or Codex read spark links with this tool."""
+        """Install the skill that lets Claude Code, Codex or OpenCode read spark links with this tool."""
         await self.app.install_skill_menu()
 
     @work(group="spark-dialog")

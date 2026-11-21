@@ -142,15 +142,15 @@ uv run python scripts/gen_mod_packages.py "<2.9.0 client>/.minecraft/mods" "<2.9
 
 It prints the packages several mods share without a clear owner; decide those in its `OVERRIDES`.
 
-#### Skill for Claude Code and Codex
+#### Skill for Claude Code, Codex and OpenCode
 
 ```
-uv run gtnh-dev tools install-skill            # for the agents found in your home folder; --for claude|codex|all
+uv run gtnh-dev tools install-skill            # for the agents found in your home folder; --for claude|codex|opencode|all
 ```
 
 (or F2 where the spark screen asks for a link) installs a `spark-profile` skill, so a spark link pasted in any project gets read
 with these commands instead of the web viewer: for Claude Code in `~/.claude/skills`, for Codex in
-`~/.agents/skills`. It runs through a small launcher that needs only uv: it uses the checkout it was installed
+`~/.agents/skills`, for OpenCode in `~/.config/opencode/skills`. It runs through a small launcher that needs only uv: it uses the checkout it was installed
 from, else `gtnh-dev` on PATH, else the published version from GitHub through `uvx` (the agent then offers once
 to point it at a checkout).
 

@@ -1,6 +1,6 @@
 """Install the spark-profile skill for coding agents (user level, so it works in every project).
 
-Claude Code and Codex read the same skill format: a folder with SKILL.md (name, description) and its files.
+Claude Code, Codex and OpenCode read the same skill format: a folder with SKILL.md (name, description) and its files.
 """
 
 import os
@@ -9,7 +9,7 @@ from pathlib import Path
 
 SKILL = "spark-profile"
 FILES = ("SKILL.md", "spark.py")
-AGENTS = {"claude": "Claude Code", "codex": "Codex"}
+AGENTS = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}
 
 
 def _home() -> Path:
@@ -20,6 +20,9 @@ def skills_dir(agent: str = "claude") -> Path:
     """Where an agent looks for the user's own skills."""
     if agent == "codex":
         return _home() / ".agents" / "skills"
+    if agent == "opencode":
+        base = os.environ.get("OPENCODE_CONFIG_DIR")
+        return (Path(base).expanduser() if base else _home() / ".config" / "opencode") / "skills"
     base = os.environ.get("CLAUDE_CONFIG_DIR")
     return (Path(base).expanduser() if base else _home() / ".claude") / "skills"
 
@@ -31,6 +34,8 @@ def detected() -> list[str]:
         found.append("claude")
     if (_home() / ".codex").is_dir() or (_home() / ".agents").is_dir():
         found.append("codex")
+    if os.environ.get("OPENCODE_CONFIG_DIR") or (_home() / ".config" / "opencode").is_dir():
+        found.append("opencode")
     return found or ["claude"]
 
 

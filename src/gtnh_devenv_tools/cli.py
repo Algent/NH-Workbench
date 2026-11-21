@@ -518,17 +518,17 @@ def spark_compare(
 def install_skill(
     agent: Annotated[
         str | None,
-        typer.Option("--for", help="claude, codex or all; default: the agents found in your home folder."),
+        typer.Option("--for", help="claude, codex, opencode or all; default: the agents found in your home folder."),
     ] = None,
     dest: Annotated[
         Path | None, typer.Option("--dest", help="Skills folder to install into instead of the agent's own.")
     ] = None,
 ) -> None:
-    """Install the spark-profile skill for Claude Code and/or Codex: spark links then get read with this tool."""
+    """Install the spark-profile skill for Claude Code, Codex and/or OpenCode, to read spark links with this tool."""
     from . import skill
 
     if agent not in (None, "all", *skill.AGENTS):
-        err.print(f"[bold red]--for takes claude, codex or all, not {agent!r}")
+        err.print(f"[bold red]--for takes claude, codex, opencode or all, not {agent!r}")
         raise typer.Exit(2)
     agents = list(skill.AGENTS) if agent == "all" else [agent] if agent else skill.detected()
     for name in agents[:1] if dest else agents:

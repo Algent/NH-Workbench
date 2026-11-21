@@ -55,6 +55,7 @@ def skill_published(folder: Path) -> str:
 def test_install_for_codex_and_claude(tmp_path, monkeypatch):
     monkeypatch.setattr(skill, "_home", lambda: tmp_path)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
     assert skill.detected() == ["claude"]  # nothing found: Claude Code
     (tmp_path / ".codex").mkdir()
     assert skill.detected() == ["codex"]
@@ -70,3 +71,16 @@ def test_install_for_codex_and_claude(tmp_path, monkeypatch):
     res = runner.invoke(app, base)  # both are found
     assert res.exit_code == 0 and skill.installed("claude") and "for Codex" in res.output
     assert runner.invoke(app, [*base, "--for", "gemini"]).exit_code == 2
+
+
+def test_install_for_opencode(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill, "_home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+    (tmp_path / ".config" / "opencode").mkdir(parents=True)
+    assert skill.detected() == ["opencode"]
+    res = CliRunner().invoke(app, ["--root", str(tmp_path / "none"), "tools", "install-skill", "--for", "opencode"])
+    assert res.exit_code == 0, res.output
+    assert (tmp_path / ".config" / "opencode" / "skills" / "spark-profile" / "SKILL.md").is_file()
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "oc"))
+    assert skill.skills_dir("opencode") == tmp_path / "oc" / "skills"
