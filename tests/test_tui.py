@@ -58,6 +58,21 @@ def offline(monkeypatch):
     return loads
 
 
+def detail_text(app) -> str:
+    content = app.query_one("#detail").content
+    return "\n".join(getattr(part, "plain", str(part)) for part in getattr(content, "renderables", [content]))
+
+
+async def open_tool(app, pilot, key: str) -> None:
+    """Start a tool from the Tools tab, as Enter on its row does."""
+    app.query_one(Tabs).active = "view-tools"
+    await settle(app, pilot)
+    table = app.query_one("#tools", DataTable)
+    table.move_cursor(row=table.get_row_index(key))
+    await pilot.press("enter")
+    await pilot.pause()
+
+
 async def settle(app, pilot):
     await pilot.pause()  # let messages like a tab change land before waiting on the work they start
     await app.workers.wait_for_complete()
@@ -209,7 +224,7 @@ async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch,
         assert [st.name for st in app.states.values()] == ["second"]
         assert config.load(sandbox.root, cfg_file).repo("repo").ignore
 
-        await pilot.press("x", "u")  # Extras, then "show a hidden repo again"
+        await pilot.press("x", "u")  # Settings, then "show a hidden repo again"
         await pilot.pause()
         await pilot.press("1")
         await settle(app, pilot)
@@ -777,8 +792,7 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
         await settle(app, pilot)
         assert config.load(sandbox.root, cfg_file).clone_protocol == "https"
 
-        await pilot.press("x", "m")
-        await pilot.pause()
+        await open_tool(app, pilot, "clone")
         assert isinstance(app.screen, MenuScreen)
         await pilot.press("p")  # the fake pack has one missing mod, o/m
         await pilot.pause()
@@ -787,7 +801,8 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
         await settle(app, pilot)
         assert urls == ["https://github.com/o/m.git"] and str(sandbox.root / "m") in app.states
 
-        await pilot.press("x", "m", "o")  # not archived, forks included (most GTNH mods are forks)
+        await open_tool(app, pilot, "clone")
+        await pilot.press("o")  # not archived, forks included (most GTNH mods are forks)
         for _ in range(50):  # the list comes from a (fake) GitHub call first
             await pilot.pause()
             if isinstance(app.screen, ConfirmScreen):
@@ -799,7 +814,7 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
         assert (sandbox.root / "new" / ".git").exists() and str(sandbox.root / "fork") in app.states
 
 
-async def test_extras_deletes_built_jars(sandbox, offline):
+async def test_tools_deletes_built_jars(sandbox, offline):
     from gtnh_devenv_tools.tui import ConfirmScreen
 
     sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/GTNewHorizons/repo.git")
@@ -809,13 +824,13 @@ async def test_extras_deletes_built_jars(sandbox, offline):
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
-        await pilot.press("x", "b")
-        await pilot.pause()
+        await open_tool(app, pilot, "clean")
         assert isinstance(app.screen, ConfirmScreen) and "Delete 1 built jars" in app.screen._title
         await pilot.press("n")  # keeps them
         await pilot.pause()
         assert (libs / "mod.jar").exists()
-        await pilot.press("x", "b")
+        assert "Now: 1 built jars" in detail_text(app)
+        await pilot.press("enter")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)
@@ -843,9 +858,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await settle(app, pilot)
         app.query_one(Tabs).active = "view-tools"
         await settle(app, pilot)
-        assert app.query_one("#tools", DataTable).row_count == 1 and "spark link" in str(
-            app.query_one("#detail").content
-        )
+        assert app.query_one("#tools", DataTable).row_count == 5 and "spark link" in detail_text(app)
         await pilot.press("enter")
         await pilot.pause()
         screen = app.screen

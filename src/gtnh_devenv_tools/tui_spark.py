@@ -13,7 +13,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import skill, spark
+from . import spark
 from .config import cache_dir
 from .tui import MenuScreen, PromptScreen
 
@@ -349,24 +349,7 @@ class SparkScreen(Screen[None]):
     @work(group="spark-dialog")
     async def action_install_skill(self) -> None:
         """Install the skill that lets Claude Code or Codex read spark links with this tool."""
-        actions = []
-        for key, (agent, label) in zip("12", skill.AGENTS.items(), strict=True):
-            state = "update" if skill.installed(agent) else "install"
-            actions.append((key, agent, f"{label}: {state} in {skill.skills_dir(agent) / skill.SKILL}", None))
-        actions.append(("a", "all", "Both", None))
-        info = Text("Spark links pasted in a chat with that agent then get read with this tool, in any project.", "dim")
-        choice = await self.app.push_screen_wait(
-            MenuScreen(Text("Install the spark-profile skill", "bold"), actions, info)
-        )
-        if not choice:
-            return
-        for agent in skill.AGENTS if choice == "all" else [choice]:
-            try:
-                folder, _ = await asyncio.to_thread(skill.install, None, agent)
-            except OSError as e:
-                self.notify(f"{skill.AGENTS[agent]}: {e}", severity="error")
-                continue
-            self.notify(f"Skill installed for {skill.AGENTS[agent]} in {folder}; new sessions pick it up", timeout=10)
+        await self.app.install_skill_menu()
 
     @work(group="spark-dialog")
     async def action_compare(self) -> None:

@@ -289,7 +289,7 @@ _SSH_REFUSED = ("Permission denied (publickey", "Host key verification failed", 
 def clone_error(res: Result) -> str:
     """Why a clone failed, in one line; SSH refusals get a pointer to the HTTPS setting."""
     if any(s in res.err for s in _SSH_REFUSED):
-        return "SSH refused (no key for GitHub, or unknown host key). Extras can switch cloning to HTTPS"
+        return "SSH refused (no key for GitHub, or unknown host key). Settings (x) can switch cloning to HTTPS"
     return res.message
 
 

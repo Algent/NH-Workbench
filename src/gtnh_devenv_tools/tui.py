@@ -60,6 +60,32 @@ TOOLS = [
         "Paste a spark link or code: server stats, the worst minutes, where the time goes. Enter on a method"
         " shows what it calls, c who calls it, y copies the report for an LLM. Same as `gtnh-dev tools spark`.",
     ),
+    (
+        "clone",
+        "Clone missing repos",
+        "Clone the pack mods, or the org repos, you do not have yet",
+        "Lists what is missing first and asks before cloning, a few at a time; folders that already exist are"
+        " skipped. Uses SSH or HTTPS as chosen in Settings.",
+    ),
+    (
+        "jars",
+        "Closed-source jars",
+        "Download the jars of closed-source pack mods, where DreamAssemblerXXL expects them",
+        "Into _GTNH_Closed_Source in the repo folder; jars already there are left alone. Same as `gtnh-dev jars`.",
+    ),
+    (
+        "clean",
+        "Clean built jars",
+        "Delete the jars Gradle left in build/libs of the org's repos",
+        "Only *.jar files directly in build/libs, of checkouts with a remote in the org; lists them with their"
+        " size and asks first. They are deleted for good, the next build makes them again.",
+    ),
+    (
+        "skill",
+        "Install AI skill",
+        "Let Claude Code or Codex read spark links with this tool, in any project",
+        "Installs the spark-profile skill for the agent you pick. Same as `gtnh-dev tools install-skill`.",
+    ),
 ]
 NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
@@ -269,7 +295,7 @@ def repo_actions(st: RepoState, ide_off: bool = False) -> list[tuple[str, str, s
         ("m", "main", f"Switch to {main} and pull", no_switch),
         ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
         ("k", "keep", f"Protect branches from cleanup ({kept})", None),
-        ("o", "ide", "Open in IntelliJ", "turned off in Extras" if ide_off else None),
+        ("o", "ide", "Open in IntelliJ", "turned off in Settings" if ide_off else None),
         ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
         ("e", "folder", "Open folder", None),
         ("b", "main_branch", f"Set main branch (now {main})", None),
@@ -329,7 +355,6 @@ class ExtrasMenu(MenuScreen):
         lines = [Text(f"Root: {cfg.root}", "dim"), Text(f"Config: {config.config_path()}", "dim")]
         if info:
             lines.append(render.pack_header(info))
-        closed = sum(1 for entry in info.entries if entry.closed) if info else 0
         every = f"every {cfg.refresh_minutes} min" if cfg.refresh_minutes else "off"
         ide_now = "off" if cfg.ide_off else cfg.ide_command or "found automatically"
         other = "HTTPS" if cfg.clone_protocol == "ssh" else "SSH"
@@ -338,18 +363,16 @@ class ExtrasMenu(MenuScreen):
             ("f", "refresh_fetch", f"Fetch during auto-refresh (now {'on' if cfg.refresh_fetch else 'off'})", None),
             ("i", "ide", f"IntelliJ launcher (now {ide_now})", None),
             ("s", "protocol", f"Clone over {other} (now {cfg.clone_protocol.upper()})", None),
-            ("m", "clone_many", "Clone missing repos: pack mods, org repos", None),
             ("r", "refresh", "Refresh pack data now (otherwise hourly)", None),
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
             ("k", "unkeep", f"Unprotect a kept branch ({len(cfg.kept)})", None if cfg.kept else "none protected"),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
-            ("j", "jars", f"Download closed-source jars ({closed})", None if closed else "pack data not loaded"),
-            ("b", "purge_jars", f"Delete built jars (build/libs) of {cfg.org} repos", None),
             ("n", "update", *update),
         ]
-        super().__init__(Text("Extras", "bold"), actions, Group(*lines))
+        lines.append(Text("Clone missing repos, closed-source jars, built jars and the AI skill: Tools tab", "dim"))
+        super().__init__(Text("Settings", "bold"), actions, Group(*lines))
 
 
 class RepoApp(App[None]):
@@ -373,7 +396,7 @@ class RepoApp(App[None]):
         Binding("t", "toggle_team", "Team reviews"),
         Binding("t", "toggle_drafts", "Drafts"),
         Binding("v", "pr_filters", "Show only"),
-        Binding("x", "extras", "Extras"),
+        Binding("x", "extras", "Settings"),
         Binding("C", "open_folder('config')", "Config dir", show=False),
         Binding("L", "open_folder('logs')", "Logs dir", show=False),
         Binding("tab", "cycle_view(1)", "Next view", priority=True),
@@ -445,7 +468,7 @@ class RepoApp(App[None]):
             self.load_everything()
         else:
             self._first_root()
-        # Checked every minute, so a new interval set from Extras applies without a restart.
+        # Checked every minute, so a new interval set from Settings applies without a restart.
         self.set_interval(60, self.auto_refresh)
 
     # --- updating the tool itself -------------------------------------------------
@@ -459,7 +482,7 @@ class RepoApp(App[None]):
         self.tool = await ops.fetch_repo(self.cfg, path)
         behind = self._tool_behind()
         if behind:
-            self.notify(f"gtnh-devenv-tools has {behind} new commit(s): Extras (x) updates it", timeout=10)
+            self.notify(f"gtnh-devenv-tools has {behind} new commit(s): Settings (x) updates it", timeout=10)
 
     def _tool_behind(self) -> int:
         st = self.tool
@@ -468,7 +491,7 @@ class RepoApp(App[None]):
         return st.main_behind if st.off_main else st.behind
 
     def _tool_entry(self) -> tuple[str, str | None]:
-        """Label of the Extras entry that updates the tool, and why it cannot be used now."""
+        """Label of the Settings entry that updates the tool, and why it cannot be used now."""
         label = "Update gtnh-devenv-tools"
         st = self.tool
         if tool_checkout() is None:
@@ -800,7 +823,10 @@ class RepoApp(App[None]):
         if self.view == "tools":
             key = self._cursor_key()
             tool = next((t for t in TOOLS if t[0] == key), None)
-            detail.update(Text(tool[3]) if tool else Text("nothing selected", "dim"))
+            if tool:
+                detail.update(Group(Text(tool[3]), Text(self._tool_status(tool[0]), "bold")))
+            else:
+                detail.update(Text("nothing selected", "dim"))
             return
         entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
         if review and self.view == "mine":
@@ -888,7 +914,7 @@ class RepoApp(App[None]):
             if group is not None:
                 self._save_setting(("repos", st.name, "group"), group or None)
         elif choice == "hide":
-            body = Text(f"Adds ignore = true for {st.name} to the config file.\nTo undo, edit the file (Extras, c).")
+            body = Text(f"Adds ignore = true for {st.name} to the config file.\nTo undo, edit the file (Settings, c).")
             if await self.push_screen_wait(ConfirmScreen(f"Hide {st.name} from the tool?", body)):
                 self._save_setting(("repos", st.name, "ignore"), True)
 
@@ -967,10 +993,79 @@ class RepoApp(App[None]):
         self.query_one(Tabs).active = f"view-{keys[(keys.index(self.view) + step) % len(keys)]}"
 
     def _open_tool(self, key: str | None) -> None:
-        if key == "spark" and not self._modal():
+        if self._modal():
+            return
+        if key == "spark":
             from .tui_spark import SparkScreen  # imports this module, so not at the top
 
             self.push_screen(SparkScreen())
+        elif key:
+            self._run_tool(key)
+
+    @work(group="dialog")
+    async def _run_tool(self, key: str) -> None:
+        if key == "clone":
+            await self._clone_many_menu()
+        elif key == "jars":
+            await self._download_jars()
+        elif key == "clean":
+            await self._purge_jars()
+        elif key == "skill":
+            await self.install_skill_menu()
+
+    def _tool_status(self, key: str) -> str:
+        """The current state a tool would act on, for the detail pane."""
+        if key == "clone":
+            if not self.entries:
+                return "Pack data not loaded yet."
+            missing = pack.missing_jobs(self.entries, self.cfg.root, self.cfg.clone_protocol)
+            return f"Pack mods not checked out: {len(missing)}. Org repos are listed from GitHub when you pick them."
+        if key == "jars":
+            closed = sum(1 for e in self.entries if e.closed)
+            return f"Closed-source mods in the pack: {closed}" if self.entries else "Pack data not loaded yet."
+        if key == "clean":
+            found = ops.built_jars(self.states.values(), self.cfg.org)
+            files = [p for _, jars in found for p in jars]
+            size = render.megabytes(sum(ops.file_size(p) for p in files))
+            return f"Now: {len(files)} built jars, {size}, in {len(found)} repos." if files else "No built jars now."
+        if key == "skill":
+            states = [
+                f"{label} {'installed' if skill.installed(a) else 'not installed'}" for a, label in skill.AGENTS.items()
+            ]
+            return ", ".join(states) + "."
+        return ""
+
+    async def install_skill_menu(self) -> None:
+        """Install the skill that lets Claude Code or Codex read spark links with this tool."""
+        actions = []
+        for key, (agent, label) in zip("12", skill.AGENTS.items(), strict=True):
+            state = "update" if skill.installed(agent) else "install"
+            actions.append((key, agent, f"{label}: {state} in {skill.skills_dir(agent) / skill.SKILL}", None))
+        actions.append(("a", "all", "Both", None))
+        info = Text("Spark links pasted in a chat with that agent then get read with this tool, in any project.", "dim")
+        choice = await self.push_screen_wait(MenuScreen(Text("Install the spark-profile skill", "bold"), actions, info))
+        if not choice:
+            return
+        for agent in skill.AGENTS if choice == "all" else [choice]:
+            try:
+                folder, _ = await asyncio.to_thread(skill.install, None, agent)
+            except OSError as e:
+                self.notify(f"{skill.AGENTS[agent]}: {e}", severity="error")
+                continue
+            self.notify(f"Skill installed for {skill.AGENTS[agent]} in {folder}; new sessions pick it up", timeout=10)
+        if self.view == "tools":
+            self._update_detail()
+
+    async def _download_jars(self) -> None:
+        if not any(e.closed for e in self.entries):
+            self.notify("Pack data not loaded yet", severity="warning")
+            return
+        folder = self.cfg.root / pack.JAR_FOLDER
+        self.notify("Downloading closed-source jars...")
+        report = await pack.download_closed(self.entries, folder)
+        for line in report.failed:
+            self.notify(line, severity="error")
+        self.notify(f"{report.summary} in {folder}")
 
     def action_filter(self) -> None:
         box = self.query_one("#filter", Input)
@@ -1070,7 +1165,7 @@ class RepoApp(App[None]):
         try:
             proc.launch(ide, str(st.path))
         except OSError as e:
-            self.notify(f"Could not start {ide}: {e}. Extras (x) can change it.", severity="error")
+            self.notify(f"Could not start {ide}: {e}. Settings (x) can change it.", severity="error")
             return
         self.notify(f"Opening {st.name}")
 
@@ -1099,7 +1194,7 @@ class RepoApp(App[None]):
         self.cfg.ide_off, self.cfg.ide_command = off, None if off else answer or None
         self.refresh_bindings()
         if off:
-            self.notify("IDE actions turned off. Extras (x) turns them back on.")
+            self.notify("IDE actions turned off. Settings (x) turns them back on.")
             return None
         self.notify(f"Saved to {path}")
         return answer or None
@@ -1117,15 +1212,6 @@ class RepoApp(App[None]):
             self.action_open_folder(choice)
         elif choice == "update":
             await self._update_tool()
-        elif choice == "purge_jars":
-            await self._purge_jars()
-        elif choice == "jars":
-            folder = self.cfg.root / pack.JAR_FOLDER
-            self.notify("Downloading closed-source jars...")
-            report = await pack.download_closed(self.entries, folder)
-            for line in report.failed:
-                self.notify(line, severity="error")
-            self.notify(f"{report.summary} in {folder}")
         elif choice == "unhide":
             # Number keys pick a repo; beyond nine, use the arrows.
             names = self.cfg.hidden
@@ -1149,8 +1235,6 @@ class RepoApp(App[None]):
             new = "https" if self.cfg.clone_protocol == "ssh" else "ssh"
             if self._save_setting(("clone_protocol",), new, rescan=False, quiet=True):
                 self.notify(f"New clones and remotes use {new.upper()}; existing ones are left as they are")
-        elif choice == "clone_many":
-            await self._clone_many_menu()
         elif choice == "refresh_fetch":
             on = not self.cfg.refresh_fetch
             if self._save_setting(("refresh_fetch",), on or None, rescan=False, quiet=True):
@@ -1253,7 +1337,7 @@ class RepoApp(App[None]):
         guess = config.suggest_root()
         why = f'"{self.cfg.root}" does not exist.'
         if not await self._ask_root(str(guess or self.cfg.root), why):
-            self.notify("No repo folder yet: Extras (x) → Change the repo folder", severity="warning", timeout=10)
+            self.notify("No repo folder yet: Settings (x) → Change the repo folder", severity="warning", timeout=10)
 
     async def _ask_root(self, current: str, why: str = "") -> bool:
         """Ask for the folder with the checkouts until it exists, then save it. False when cancelled."""

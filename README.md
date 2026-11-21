@@ -26,7 +26,7 @@ uv tool install -e .         # optional: puts `gtnh-dev` on PATH
 directly or point a shortcut at them. Command-line arguments are passed through.
 
 Checkouts are read from `IdeaProjects` in your home folder; change it with `--root`, `root` in the config,
-or Extras in the UI.
+or Settings in the UI.
 
 ## Terminal UI
 
@@ -39,7 +39,7 @@ or Extras in the UI.
 | Reviews | Open PRs asking for your review personally (`t` adds the ones that reach you through a team) |
 | All PRs | Every open PR of the org, marked when you wrote it, are asked to review it, or reviewed it |
 | Pack | Every mod of the current daily and the latest release, and whether it is checked out |
-| Tools | Tools that do not need the checkouts: for now, reading spark profiles |
+| Tools | spark profiles, clone missing repos, closed-source jars, clean built jars, install the AI skill |
 
 The panel at the bottom gives details on the selected line: branches and their PRs, the last commit,
 commits waiting on the release branch.
@@ -60,17 +60,16 @@ commits waiting on the release branch.
 | `t` | Reviews: show team requests. All PRs: show drafts |
 | `v` | All PRs: show only PRs in repos checked out here, in pack mods, without any review, or not updated for 30+ days |
 | `c` | Pack tab: clone the selected mod. PR tabs: check out the PR in its local repo |
-| `x` | Extras |
+| `x` | Settings |
 | `q` | Quit (also closes menus) |
 
 **Repo menu** (`Enter`): fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or
 in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
 
-**Extras** (`x`): update the tool itself (its checkout is fetched at start; a notification says when
-there are new commits, and after updating, restart it), auto-refresh interval, fetch during auto-refresh (off by default), clone over SSH or HTTPS,
-clone every missing pack mod or org repo (archived ones left out) after listing them, IntelliJ launcher, refresh pack data, change the repo folder,
-show a hidden repo again, unprotect a kept branch, open the config or cache folder, download closed-source
-jars, delete the jars Gradle left in `build/libs` of the org's repos (with the list and total size first).
+**Settings** (`x`): auto-refresh interval, fetch during auto-refresh (off by default), IntelliJ launcher, clone
+over SSH or HTTPS, refresh pack data, change the repo folder, show a hidden repo again, unprotect a kept
+branch, open the config or cache folder, and update the tool itself (its checkout is fetched at start; a
+notification says when there are new commits, and after updating, restart it).
 
 Settings changed from the UI are written to the config file, keeping its comments.
 
@@ -189,7 +188,7 @@ Nothing is ever pushed.
 
 ## Pack data
 
-Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --refresh` or Extras forces
+Read from DreamAssemblerXXL's `master` on GitHub, at most once an hour (`pack --refresh` or Settings forces
 it): the daily manifest, the latest stable release, and the number of the last successful daily build.
 
 The Daily and Release columns (`status --pack` on the command line) count commits as of your last fetch:
@@ -198,7 +197,7 @@ The Daily and Release columns (`status --pack` on the command line) count commit
 - `1.8.18 +2` in Release: the `release/<major>.<minor>.x` branch has 2 commits since that version's tag.
 - `Δ17` in Release: main has 17 commits since that tag; the higher, the harder a backport.
 
-Closed-source mods: `gtnh-dev jars` (or Extras) downloads their jars into `_GTNH_Closed_Source` under the
+Closed-source mods: `gtnh-dev jars` (or the Tools tab) downloads their jars into `_GTNH_Closed_Source` under the
 root, where DreamAssemblerXXL expects them. Jars already there are left alone.
 
 ## GitHub data
@@ -242,7 +241,7 @@ Per repo, under `[repos.<folder name>]`: `tracked_branch` (what counts as main),
 example `IdeaProjects/_External/ForgeEssentials`) takes the subfolder's name as its group.
 
 **IntelliJ** is found through `ide_command`, else a JetBrains Toolbox script (`idea`), else `idea` on PATH.
-When none works, `o` asks for the path and saves it. Not using IntelliJ? Answer `off` there (or in Extras)
+When none works, `o` asks for the path and saves it. Not using IntelliJ? Answer `off` there (or in Settings)
 and the IDE actions disappear.
 
 **Pack mods outside the org**: their source repo and branch are known for most of them; add or override
