@@ -437,9 +437,9 @@ WindowOpt = Annotated[
 RefreshOpt = Annotated[bool, typer.Option("--refresh", help="Download again instead of using the saved copy.")]
 
 
-def _profile(source: str, refresh: bool) -> tuple[spark.Profile, str]:
+def _profile(source: str, refresh: bool, loader: Callable = spark.load_profile) -> tuple:
     try:
-        return spark.load(source, refresh)
+        return loader(source, refresh)
     except spark.ProfileError as e:
         err.print(f"[bold red]{e}")
         raise typer.Exit(1) from e
@@ -463,9 +463,12 @@ def spark_summary(
     lines: Annotated[int, typer.Option("--lines", help="Most call path lines.")] = 60,
     refresh: RefreshOpt = False,
 ) -> None:
-    """Server stats, the worst minutes, and where the time goes."""
-    profile, name = _profile(source, refresh)
-    _emit(lambda: spark.summary(profile, name, thread, window, top, min_pct, lines))
+    """Server stats, the worst minutes, entities, and where the time goes; for a heap summary, what fills memory."""
+    upload, name = _profile(source, refresh, spark.load)
+    if isinstance(upload, spark.Heap):
+        _emit(lambda: spark.heap_report(upload, name, max(top, 25)))
+    else:
+        _emit(lambda: spark.summary(upload, name, thread, window, top, min_pct, lines))
 
 
 @spark_app.command("tree")
@@ -496,6 +499,19 @@ def spark_callers(
     """Who calls a method, weighted by the time spent in it."""
     profile, name = _profile(source, refresh)
     _emit(lambda: spark.focus_report(profile, name, method, True, thread, window, min_pct, lines))
+
+
+@spark_app.command("compare")
+def spark_compare(
+    before: Annotated[str, typer.Argument(help="The earlier heap summary: link, code or file.")],
+    after: Annotated[str, typer.Argument(help="The later one.")],
+    top: Annotated[int, typer.Option("--top", help="Classes listed.")] = 25,
+    refresh: RefreshOpt = False,
+) -> None:
+    """What grew in memory between two heap summaries (/spark heapsummary): the leak suspects."""
+    a, a_name = _profile(before, refresh, spark.load_heap)
+    b, b_name = _profile(after, refresh, spark.load_heap)
+    _emit(lambda: spark.heap_compare(a, a_name, b, b_name, top))
 
 
 @tools_app.command("install-skill")

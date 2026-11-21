@@ -176,6 +176,15 @@ class Gc:
 
 
 @dataclass
+class ChunkEntities:
+    world: str
+    x: int  # chunk coordinates
+    z: int
+    total: int
+    counts: dict[str, int]
+
+
+@dataclass
 class Profile:
     platform: str = ""
     platform_version: str = ""
@@ -198,6 +207,8 @@ class Profile:
     players: int = 0
     entities: int = 0
     entity_counts: dict[str, int] = field(default_factory=dict)
+    world_entities: dict[str, int] = field(default_factory=dict)
+    chunks: list[ChunkEntities] = field(default_factory=list)
     cpu_model: str = ""
     cpu_threads: int = 0
     cpu_process: tuple[float, float] = (0, 0)  # 1m, 15m, as a fraction of all cores
@@ -216,6 +227,46 @@ class Profile:
     @property
     def duration_ms(self) -> int:
         return max(0, self.end - self.start)
+
+
+@dataclass
+class HeapEntry:
+    cls: str  # class name; arrays end in []
+    instances: int
+    size: int  # bytes
+
+
+@dataclass
+class Heap:
+    """A heap summary (/spark heapsummary): what is in memory, per class."""
+
+    platform: str = ""
+    platform_version: str = ""
+    minecraft: str = ""
+    spark_version: int = 0
+    heap_used: int = 0
+    heap_total: int = 0
+    gc: dict[str, Gc] = field(default_factory=dict)
+    players: int = 0
+    entries: list[HeapEntry] = field(default_factory=list)
+
+    @property
+    def size(self) -> int:
+        return sum(e.size for e in self.entries)
+
+
+_UNNAMED = re.compile(r"^unknown\[class (?:[\w$]+\.)*([\w$]+)\]$")
+
+
+def _entity_counts(entries: list["_Msg"]) -> dict[str, int]:
+    out: dict[str, int] = defaultdict(int)
+    for e in entries:
+        name = e.str(1)
+        m = _UNNAMED.match(name)
+        if m:
+            name = "Player" if m[1] in ("EntityPlayerMP", "EntityPlayer") else m[1]
+        out[name] += e.int(2)
+    return dict(out)
 
 
 def parse(data: bytes) -> Profile:
@@ -254,7 +305,14 @@ def parse(data: bytes) -> Profile:
         gc={name: Gc(g.int(1), g.double(2), g.double(3)) for name, g in stats.msg_map(2).items()},
         players=stats.int(7),
         entities=world.int(1),
-        entity_counts={e.str(1): e.int(2) for e in world.msgs(2)},
+        entity_counts=_entity_counts(world.msgs(2)),
+        world_entities={w.str(1): w.int(2) for w in world.msgs(3)},
+        chunks=[
+            ChunkEntities(w.str(1), c.int(1), c.int(2), c.int(3), _entity_counts(c.msgs(4)))
+            for w in world.msgs(3)
+            for r in w.msgs(3)
+            for c in r.msgs(2)
+        ],
         cpu_model=cpu.str(4),
         cpu_threads=cpu.int(1),
         cpu_process=(cpu.msg(2).double(1), cpu.msg(2).double(2)),
@@ -293,26 +351,100 @@ def code_of(source: str) -> str | None:
     return source if _CODE.match(source) and not Path(source).exists() else None
 
 
-def load(source: str, refresh: bool = False) -> tuple[Profile, str]:
-    """A profile from a spark.lucko.me link, its code, or a .sparkprofile file. Returns it and a short name."""
+def kind_of(data: bytes) -> str:
+    """ "heap" or "sampler", from the data itself (a downloaded file does not say)."""
+    entries = _Msg(data).raw.get(2)
+    if not entries or entries[0][0] != 2:
+        raise ProfileError("not a spark profile or heap summary")
+    first = _Msg(entries[0][1])
+    # A heap entry starts with numbers (size is field 3); a profile's thread has its frames as field 3.
+    if 3 in first.raw:
+        return "heap" if first.raw[3][0][0] == 0 else "sampler"
+    return "heap" if 2 in first.raw else "sampler"
+
+
+def parse_heap(data: bytes) -> Heap:
+    root = _Msg(data)
+    meta = root.msg(1)
+    platform, stats = meta.msg(2), meta.msg(3)
+    return Heap(
+        platform=platform.str(2),
+        platform_version=platform.str(3),
+        minecraft=platform.str(4),
+        spark_version=platform.int(7),
+        heap_used=stats.msg(1).msg(1).int(1),
+        heap_total=stats.msg(1).msg(1).int(2),
+        gc={name: Gc(g.int(1), g.double(2), g.double(3)) for name, g in stats.msg_map(2).items()},
+        players=stats.int(7),
+        entries=[HeapEntry(_class_name(e.str(4)), e.int(2), e.int(3)) for e in root.msgs(2)],
+    )
+
+
+_PRIMITIVES = {
+    "B": "byte",
+    "C": "char",
+    "D": "double",
+    "F": "float",
+    "I": "int",
+    "J": "long",
+    "S": "short",
+    "Z": "boolean",
+}
+
+
+def _class_name(name: str) -> str:
+    """Class names as spark sends them, with JVM descriptors ([B, [Lfoo.Bar;) made readable."""
+    dims = len(name) - len(name.lstrip("["))
+    if not dims:
+        return name
+    base = name[dims:]
+    base = base[1:-1] if base.startswith("L") and base.endswith(";") else _PRIMITIVES.get(base, base)
+    return base.replace("/", ".") + "[]" * dims
+
+
+def parse_upload(data: bytes) -> "Profile | Heap":
+    return parse_heap(data) if kind_of(data) == "heap" else readable(parse(data))
+
+
+_EXTENSIONS = {"sampler": ".sparkprofile", "heap": ".sparkheap"}
+
+
+def load(source: str, refresh: bool = False) -> "tuple[Profile | Heap, str]":
+    """A profile or heap summary from a spark.lucko.me link, its code, or a downloaded file, and a short name."""
     code = code_of(source)
     if code is None:
         path = Path(source).expanduser()
         try:
-            return readable(parse(path.read_bytes())), path.stem
+            return parse_upload(path.read_bytes()), path.stem
         except OSError as e:
             raise ProfileError(f"cannot read {path}: {e.strerror or e}") from e
-    cached = cache_dir() / "spark" / f"{code}.sparkprofile"
-    if cached.is_file() and not refresh:
-        return readable(parse(cached.read_bytes())), code
+    folder = cache_dir() / "spark"
+    if not refresh:
+        for ext in _EXTENSIONS.values():
+            if (folder / f"{code}{ext}").is_file():
+                return parse_upload((folder / f"{code}{ext}").read_bytes()), code
     data = _download(code)
-    profile = parse(data)  # only keep what parses
+    upload = parse_upload(data)  # only keep what parses
     try:
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        cached.write_bytes(data)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{code}{_EXTENSIONS[kind_of(data)]}").write_bytes(data)
     except OSError:
         pass
-    return readable(profile), code
+    return upload, code
+
+
+def load_profile(source: str, refresh: bool = False) -> tuple[Profile, str]:
+    upload, name = load(source, refresh)
+    if not isinstance(upload, Profile):
+        raise ProfileError(f"{name} is a heap summary: it has no call tree (summary and compare read it)")
+    return upload, name
+
+
+def load_heap(source: str, refresh: bool = False) -> tuple[Heap, str]:
+    upload, name = load(source, refresh)
+    if not isinstance(upload, Heap):
+        raise ProfileError(f"{name} is a CPU profile, not a heap summary (/spark heapsummary)")
+    return upload, name
 
 
 @cache
@@ -361,8 +493,8 @@ def _download(code: str) -> bytes:
         raise ProfileError(f"{code}: {'not found (expired?)' if e.code == 404 else f'HTTP {e.code}'}") from e
     except (urllib.error.URLError, OSError) as e:
         raise ProfileError(f"{code}: download failed: {e}") from e
-    if "sampler" not in kind:
-        raise ProfileError(f"{code} is not a profiler upload ({kind or 'unknown type'})")
+    if "sampler" not in kind and "heap" not in kind:
+        raise ProfileError(f"{code} is neither a profile nor a heap summary ({kind or 'unknown type'})")
     return data
 
 
@@ -569,7 +701,11 @@ def _pct(part: float, whole: float) -> str:
 
 
 def _bytes(n: float) -> str:
-    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+    if abs(n) >= 1e9:
+        return f"{n / 1e9:.1f} GB"
+    if abs(n) >= 1e6:
+        return f"{n / 1e6:.0f} MB"
+    return f"{n / 1e3:.0f} KB" if abs(n) >= 1e3 else f"{n:.0f} B"
 
 
 def _span(ms: float) -> str:
@@ -614,8 +750,7 @@ def header(p: Profile, name: str) -> list[str]:
             f" tick ms median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.0f} (last min); players {p.players}"
         )
         if p.entities:
-            top = sorted(p.entity_counts.items(), key=lambda kv: -kv[1])[:5]
-            server += f"; entities {p.entities} ({', '.join(f'{k} {v}' for k, v in top)})"
+            server += f"; entities {p.entities}"
         lines.append(server)
     memory = []
     if p.heap_total:
@@ -662,6 +797,30 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
         row = f"{w.id:<{width}}  {at:>6}  {w.ticks:5}  {w.tps:4.1f}  {w.mspt_median:9.1f}  {w.mspt_max:6.0f}"
         counts = (getattr(w, attr) for attr, _ in columns)
         lines.append(row + "".join(f"  {str(n) if n >= 0 else '?':>8}" for n in counts))
+    return lines
+
+
+def _counts(counts: dict[str, int], n: int) -> str:
+    return ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])[:n])
+
+
+def entities(p: Profile, busiest: int = 5) -> list[str]:
+    """Entities by type, by world, and the chunks with the most (a mob farm, dropped items piling up)."""
+    if not p.entities:
+        return []
+    lines = [f"\n## Entities: {p.entities}"]
+    if p.entity_counts:
+        lines.append(f"By type: {_counts(p.entity_counts, 8)}")
+    worlds = {w: n for w, n in p.world_entities.items() if n}
+    if worlds:
+        lines.append(f"By world: {_counts(worlds, 8)}")
+    chunks = sorted((c for c in p.chunks if c.total), key=lambda c: -c.total)[:busiest]
+    if chunks:
+        lines.append("Busiest chunks (block coordinates of the chunk centre):")
+        width = max(len(c.world) for c in chunks)
+        for c in chunks:
+            where = f"x {c.x * 16 + 8} z {c.z * 16 + 8}"
+            lines.append(f"{c.total:5}  {c.world:<{width}}  {where:<16}  {_counts(c.counts, 4)}")
     return lines
 
 
@@ -795,7 +954,7 @@ def summary(
     p: Profile, name: str, thread: str | None = None, windows: list[int] | None = None, top_n: int = 15,
     min_pct: float = 1.0, max_lines: int = 60,
 ) -> str:  # fmt: skip
-    lines = header(p, name) + timeline(p)
+    lines = header(p, name) + timeline(p) + entities(p)
     threads = busiest_threads(p)
     if len(threads) > 1:
         weights = [(t, sum(t.times)) for t in threads]
@@ -831,4 +990,93 @@ def focus_report(
         lines.append("Read downwards: the method, then < its caller, < that caller's caller, and so on")
     lines.append("")
     lines += tree_lines(view, tree, min_pct, max_lines, up=up)
+    return "\n".join(lines)
+
+
+# --- heap summaries ------------------------------------------------------------------------------------------
+
+
+def _heap_owner(cls: str) -> str:
+    """Who a class in memory belongs to; arrays count for their element type, primitive arrays for java."""
+    base = cls.split("[", 1)[0]
+    return "java" if "." not in base else package_of(base)
+
+
+def heap_header(h: Heap, name: str, what: str = "heap summary") -> list[str]:
+    mc = f", Minecraft {h.minecraft}" if h.minecraft else ""
+    lines = [f"# spark {what} {name}: {h.platform} {h.platform_version}{mc}, spark v{h.spark_version}"]
+    memory = []
+    if h.heap_total:
+        memory.append(f"heap {_bytes(h.heap_used)} used of {_bytes(h.heap_total)}")
+    gcs = [f"{n} {g.collections}x avg {g.avg_ms:.0f} ms" for n, g in h.gc.items() if g.collections]
+    if gcs:
+        memory.append("GC " + ", ".join(gcs))
+    if memory:
+        lines.append(f"Memory: {'; '.join(memory)}; players {h.players}")
+    return lines
+
+
+def _by_owner(entries: Iterable[HeapEntry]) -> dict[str, list[int]]:
+    out: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for e in entries:
+        totals = out[_heap_owner(e.cls)]
+        totals[0] += e.size
+        totals[1] += e.instances
+    return out
+
+
+def heap_report(h: Heap, name: str, top_n: int = 25) -> str:
+    total = h.size or 1
+    lines = heap_header(h, name)
+    objects = sum(e.instances for e in h.entries)
+    lines.append(f"Live objects: {objects:,} in {len(h.entries):,} classes, {_bytes(h.size)}")
+    lines.append(f"\n## Biggest classes (of {len(h.entries):,})")
+    lines.append(f"{'size':>8}  {'share':>6}  {'objects':>11}  class  [mod]")
+    for e in sorted(h.entries, key=lambda e: -e.size)[:top_n]:
+        owner = _heap_owner(e.cls)
+        tag = f"  [{owner}]" if owner not in _NOT_MODS else ""
+        lines.append(f"{_bytes(e.size):>8}  {_pct(e.size, total)}  {e.instances:>11,}  {e.cls}{tag}")
+    lines.append("\n## By mod (arrays count for their element type)")
+    for owner, (size, count) in sorted(_by_owner(h.entries).items(), key=lambda kv: -kv[1][0])[:top_n]:
+        lines.append(f"{_bytes(size):>8}  {_pct(size, total)}  {count:>11,}  {owner}")
+    lines.append(
+        "\nbyte[], int[], Object[] and String are shared by everything, so they rarely point at a culprit; a"
+        " class from a mod with far more objects than expected does. A leak shows as growth: take a second"
+        " summary later and compare them."
+    )
+    return "\n".join(lines)
+
+
+def heap_compare(a: Heap, a_name: str, b: Heap, b_name: str, top_n: int = 25) -> str:
+    """What grew in memory from summary a to summary b (taken later)."""
+    before = {e.cls: e for e in a.entries}
+    after = {e.cls: e for e in b.entries}
+    deltas = []
+    for cls in before.keys() | after.keys():
+        old, new = before.get(cls), after.get(cls)
+        size = (new.size if new else 0) - (old.size if old else 0)
+        count = (new.instances if new else 0) - (old.instances if old else 0)
+        deltas.append((cls, size, count, new))
+    lines = heap_header(b, f"{a_name} -> {b_name}", "heap growth")
+    lines.append(
+        f"Live objects: {_bytes(a.size)} -> {_bytes(b.size)} ({'+' if b.size >= a.size else '-'}"
+        f"{_bytes(abs(b.size - a.size))}). Growth between two summaries points at leaks; one moment can be noise."
+    )
+    lines.append("\n## Grew the most")
+    lines.append(f"{'+size':>9}  {'+objects':>11}  {'now':>8}  class  [mod]")
+    for cls, size, count, new in sorted(deltas, key=lambda d: -d[1])[:top_n]:
+        if size <= 0:
+            break
+        owner = _heap_owner(cls)
+        tag = f"  [{owner}]" if owner not in _NOT_MODS else ""
+        now = _bytes(new.size) if new else "gone"
+        lines.append(f"{'+' + _bytes(size):>9}  {count:>+11,}  {now:>8}  {cls}{tag}")
+    lines.append("\n## By mod")
+    old_owner, new_owner = _by_owner(a.entries), _by_owner(b.entries)
+    changes = {
+        o: new_owner.get(o, [0, 0])[0] - old_owner.get(o, [0, 0])[0] for o in old_owner.keys() | new_owner.keys()
+    }
+    for owner, size in sorted(changes.items(), key=lambda kv: -abs(kv[1]))[:15]:
+        if size:
+            lines.append(f"{'+' if size > 0 else '-'}{_bytes(abs(size)):>8}  {owner}")
     return "\n".join(lines)

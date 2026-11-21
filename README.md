@@ -108,7 +108,12 @@ gtnh-dev tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
 The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
 changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM arguments, the worst minutes, then
 for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
-paths, with `[Mod]` where a mod's code starts.
+paths, with `[Mod]` where a mod's code starts. Entities are listed by type, by world, and the busiest chunks
+with their block coordinates.
+
+Heap summaries (`/spark heapsummary`) read the same way: `summary` lists the biggest classes in memory and
+the total per mod, and `compare EARLIER LATER` shows what grew between two of them, which is how a leak
+shows. In the UI, `m` on a heap summary compares it with a later one.
 
 - Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
   uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.

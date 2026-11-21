@@ -50,6 +50,30 @@ def window(wid: int, start: int, mspt_max: float) -> bytes:
     return blob(7, num(1, wid) + blob(2, stats))
 
 
+def counts(field: int, pairs: dict[str, int]) -> bytes:
+    return b"".join(blob(field, blob(1, k) + num(2, v)) for k, v in pairs.items())
+
+
+def world_stats() -> bytes:
+    player = "unknown[class net.minecraft.entity.player.EntityPlayerMP]"
+    farm = num(1, -8) + num(2, 6) + num(3, 15) + counts(4, {"Cow": 12, "Item": 3})
+    quiet = num(1, 2) + num(2, -3) + num(3, 2) + counts(4, {player: 2})
+    overworld = blob(1, "Overworld") + num(2, 17) + blob(3, num(1, 17) + blob(2, farm) + blob(2, quiet))
+    nether = blob(1, "Nether") + num(2, 0)
+    return num(1, 17) + counts(2, {"Cow": 12, "Item": 3, player: 2}) + blob(3, overworld) + blob(3, nether)
+
+
+def heap_bytes(entries: list[tuple[str, int, int]]) -> bytes:
+    platform = num(1, 0) + blob(2, "Forge") + blob(3, "10.13.4.1614") + blob(4, "1.7.10") + num(7, 2)
+    stats = blob(1, blob(1, num(1, 2_000_000_000) + num(2, 4_000_000_000))) + num(7, 3)
+    meta = blob(1, num(1, 1) + blob(2, "SomePlayer")) + blob(2, platform) + blob(3, stats)
+    rows = b"".join(
+        blob(2, num(1, order) + num(2, count) + num(3, size) + blob(4, cls))
+        for order, (cls, count, size) in enumerate(entries)
+    )
+    return blob(1, meta) + rows
+
+
 START = 1_795_000_000_000
 
 
@@ -68,6 +92,7 @@ def profile_bytes() -> bytes:
     stats = blob(4, dbl(1, 14.7) + dbl(2, 18.7) + dbl(3, 19.5))
     stats += blob(5, blob(1, dbl(1, 20) + dbl(2, 900) + dbl(4, 16.5) + dbl(5, 35.2)))
     stats += blob(1, blob(1, num(1, 1_600_000_000) + num(2, 3_000_000_000))) + num(7, 2)
+    stats += blob(8, world_stats())
     java = blob(1, "Adoptium") + blob(2, "25") + blob(4, "-Xmx8G --add-opens=java.base/java.io=ALL-UNNAMED")
     system = blob(6, java)
     creator = num(1, 1) + blob(2, "SomePlayer") + blob(3, "d96247b3-0000")
@@ -234,3 +259,61 @@ def test_call_paths_name_the_mods(monkeypatch):
     text = spark.summary(p, "abc", min_pct=1)
     assert "[Mod A] Mod.tick" in text and "[x?] Main.run" in text
     assert "[Mod A] Mod.helper" not in text  # same mod as its caller: no new tag
+
+
+def test_entities_by_world_and_chunk(profile):
+    assert profile.world_entities == {"Overworld": 17, "Nether": 0}
+    assert profile.entity_counts["Player"] == 2  # spark's unknown[class ...EntityPlayerMP]
+    farm = max(profile.chunks, key=lambda c: c.total)
+    assert (farm.world, farm.x, farm.z, farm.total) == ("Overworld", -8, 6, 15)
+    text = spark.summary(profile, "abc")
+    assert "## Entities: 17" in text and "By world: Overworld 17" in text and "Nether" not in text
+    assert "   15  Overworld  x -120 z 104      Cow 12, Item 3" in text
+
+
+HEAP_A = [("[B", 1000, 50_000_000), ("a.Machine", 10, 1_000), ("java.lang.String", 500, 20_000_000)]
+HEAP_B = [("[B", 1200, 60_000_000), ("a.Machine", 90_000, 9_000_000), ("[[La.Machine;", 5, 400)]
+
+
+def test_heap_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr(spark, "mod_packages", lambda: {"a": "Mod A"})
+    assert spark.kind_of(heap_bytes(HEAP_A)) == "heap" and spark.kind_of(profile_bytes()) == "sampler"
+    assert spark._class_name("[B") == "byte[]" and spark._class_name("[[La/Machine;") == "a.Machine[][]"
+    file = tmp_path / "before.sparkheap"
+    file.write_bytes(heap_bytes(HEAP_A))
+    heap, name = spark.load(str(file))
+    assert isinstance(heap, spark.Heap) and name == "before" and heap.players == 3
+    assert [e.cls for e in heap.entries] == ["byte[]", "a.Machine", "java.lang.String"]
+    with pytest.raises(spark.ProfileError, match="heap summary"):
+        spark.load_profile(str(file))
+
+    text = spark.heap_report(heap, name)
+    assert "SomePlayer" not in text and "Live objects: 1,510 in 3 classes, 70 MB" in text
+    assert text.index("byte[]") < text.index("java.lang.String") < text.index("a.Machine")
+    assert "a.Machine  [Mod A]" in text
+
+    later = spark.parse_heap(heap_bytes(HEAP_B))
+    growth = spark.heap_compare(heap, "before", later, "after")
+    rows = growth.split("## Grew the most")[1].split("## By mod")[0].splitlines()[2:]
+    assert "byte[]" in rows[0] and "+10 MB" in rows[0]
+    assert "+89,990" in rows[1] and "[Mod A]" in rows[1] and "+400 B" in rows[2]
+    by_mod = growth.split("## By mod")[1]
+    assert "-   10 MB  java" in by_mod and "+    9 MB  Mod A" in by_mod
+
+
+def test_cli_heap_summary_and_compare(tmp_path):
+    before, after = tmp_path / "before.sparkheap", tmp_path / "after.sparkheap"
+    before.write_bytes(heap_bytes(HEAP_A))
+    after.write_bytes(heap_bytes(HEAP_B))
+    profile = tmp_path / "lag.sparkprofile"
+    profile.write_bytes(profile_bytes())
+    runner = CliRunner()
+    base = ["--root", str(tmp_path / "missing"), "tools", "spark"]
+    res = runner.invoke(app, [*base, "summary", str(before)])
+    assert res.exit_code == 0 and res.output.startswith("# spark heap summary before")
+    res = runner.invoke(app, [*base, "compare", str(before), str(after)])
+    assert res.exit_code == 0 and "## Grew the most" in res.output
+    res = runner.invoke(app, [*base, "compare", str(before), str(profile)])
+    assert res.exit_code == 1 and "not a heap summary" in res.output
+    res = runner.invoke(app, [*base, "tree", str(before), "Machine"])
+    assert res.exit_code == 1 and "no call tree" in res.output

@@ -1,6 +1,6 @@
 ---
 name: spark-profile
-description: Read a spark profiler report of a Minecraft 1.7.10 / GT New Horizons server or client (a spark.lucko.me link, its code, or a .sparkprofile file) as text and find what causes the lag. Use it whenever such a link or file shows up, instead of fetching the web page, which is a JavaScript viewer without the data.
+description: Read a spark report of a Minecraft 1.7.10 / GT New Horizons server or client (a spark.lucko.me link, its code, or a .sparkprofile or .sparkheap file) as text: CPU profiles to find what causes lag, heap summaries to find what fills memory. Use it whenever such a link or file shows up, instead of fetching the web page, which is a JavaScript viewer without the data.
 ---
 
 # Reading spark profiles
@@ -35,6 +35,14 @@ uv run --no-project "<this skill's folder>/spark.py" --set-checkout "<path to th
    (who calls it: read downwards, each `<` is the caller of the line above). METHOD is any part of
    `Class.method`, case does not matter, for example `makeCrater` or `ChunkProviderSpaceCraters`.
 5. `--thread NAME` looks at another thread (the summary lists them); the server thread is the default.
+6. **Entities** lists them by type, by world, and the busiest chunks with block coordinates: a mob farm or
+   dropped items piling up shows there.
+
+## Heap summaries (/spark heapsummary)
+
+`summary LINK` on a heap summary lists the biggest classes in memory and the total per mod. One summary rarely
+proves a leak (byte[], int[], Object[] and String are everyone's); ask for a second one taken later and run
+`compare EARLIER LATER`: the classes and mods that grew are the suspects.
 
 ## Reporting back
 

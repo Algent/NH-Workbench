@@ -954,3 +954,54 @@ def test_method_and_window_on_report_lines():
     assert method_on_line(" 17.3%  native code") is None and method_on_line("## Thread Server thread") is None
     assert window_on_line("29920107 2h19m      769  14.7      16.3 23518") == 29920107
     assert window_on_line(" 41.8%  a.B.c") is None
+
+
+async def test_spark_screen_heap_summary(sandbox, offline, monkeypatch, tmp_path):
+    from test_spark import HEAP_A, HEAP_B, heap_bytes
+    from textual.widgets import Input
+
+    from gtnh_devenv_tools import spark, tui_spark
+    from gtnh_devenv_tools.tui import PromptScreen
+    from gtnh_devenv_tools.tui_spark import SparkScreen
+
+    cache = tmp_path / "cache"
+    (cache / "spark").mkdir(parents=True)
+    (cache / "spark" / "Before1234.sparkheap").write_bytes(heap_bytes(HEAP_A))
+    (cache / "spark" / "After12345.sparkheap").write_bytes(heap_bytes(HEAP_B))
+    monkeypatch.setattr(spark, "cache_dir", lambda: cache)
+    monkeypatch.setattr(tui_spark, "cache_dir", lambda: cache)
+
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(app, pilot)
+        app.query_one(Tabs).active = "view-tools"
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SparkScreen)
+        assert "heap summary" in str(screen.query_one("#spark-recent").get_option_at_index(0).prompt)
+
+        screen.query_one(Input).value = "Before1234"
+        await pilot.press("enter")
+        for _ in range(100):
+            await pilot.pause()
+            if screen.text:
+                break
+        assert screen.text.startswith("# spark heap summary Before1234")
+
+        def enabled(key: str) -> bool:
+            found = screen.active_bindings.get(key)
+            return bool(found and found.enabled)
+
+        assert enabled("m") and not enabled("t") and not enabled("w")
+        await pilot.press("m")
+        await pilot.pause()
+        assert isinstance(app.screen, PromptScreen)
+        app.screen.query_one(Input).value = "After12345"
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert screen.text.startswith("# spark heap growth Before1234 -> After12345")
+        await pilot.press("escape")  # back to the summary
+        await pilot.pause()
+        assert screen.text.startswith("# spark heap summary") and screen.other is None
