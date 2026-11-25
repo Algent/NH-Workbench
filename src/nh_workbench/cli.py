@@ -428,7 +428,7 @@ def clone(
 
 @app.command()
 def gui(ctx: typer.Context) -> None:
-    """Open the desktop UI, a preview (needs the desktop extra: uv sync --extra desktop)."""
+    """Open the desktop UI (needs the desktop extra: uv sync --extra desktop)."""
     try:
         from . import gui as desktop
     except ImportError as e:

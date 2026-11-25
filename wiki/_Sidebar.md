@@ -1,6 +1,7 @@
 **[NH Workbench](Home)**
 
 - [Terminal UI](Terminal-UI)
+- [Desktop UI](Desktop-UI)
 - [Command line](Command-Line)
 - [spark profiles](Spark-Profiles)
 - [What it will and won't do](Safety)

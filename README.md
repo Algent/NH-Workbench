@@ -9,6 +9,7 @@ Keeps a folder full of GTNH mod checkouts under control:
 - where each repo stands in the pack: daily and release versions, what still needs a backport
 - clone missing pack mods, download the closed-source jars
 - read spark profiles as text, for people and coding agents
+- in the terminal, or in a desktop window with the same tabs and keys
 
 Works on Windows, Linux and macOS. Everything else is in the [wiki](https://github.com/Algent/NH-Workbench/wiki).
 
@@ -22,9 +23,14 @@ Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.gi
 ```
 uv sync
 uv run nh-workbench          # terminal UI
-uv run --extra desktop nh-workbench gui   # desktop UI, a preview with every tab of the terminal UI
+uv run --extra desktop nh-workbench gui   # desktop UI (installs Qt, about 100 MB)
 uv tool install -e .         # optional: puts `nh-workbench` and its short name `nhwb` on PATH
 ```
+
+The desktop UI is optional: `uv sync --extra desktop` installs it, then `nh-workbench gui` or
+`nh-workbench-desktop` (no console window on Windows) opens it. See [Desktop UI](https://github.com/Algent/NH-Workbench/wiki/Desktop-UI).
+
+![The desktop UI: the same repo list, with Textual's dark theme](wiki/images/desktop-ui.png)
 
 `nh-workbench.cmd` (Windows) and `nh-workbench.sh` (Linux, macOS) start the terminal UI from anywhere: run them
 directly or point a shortcut at them. Command-line arguments are passed through.
@@ -41,6 +47,7 @@ new ones (unless those exist already) and updates the installed skill. The old `
 ## Documentation
 
 - [Terminal UI](https://github.com/Algent/NH-Workbench/wiki/Terminal-UI): tabs, keys, the repo menu and Settings
+- [Desktop UI](https://github.com/Algent/NH-Workbench/wiki/Desktop-UI): starting it, what differs, themes
 - [Command line](https://github.com/Algent/NH-Workbench/wiki/Command-Line): every command and its options
 - [spark profiles](https://github.com/Algent/NH-Workbench/wiki/Spark-Profiles): lag and memory reports as
   text, and the skill for Claude Code, Codex and OpenCode
@@ -53,7 +60,7 @@ new ones (unless those exist already) and updates the installed skill. The old `
 ## Development
 
 ```
-uv run pytest
+uv run --extra desktop pytest   # without the extra, the desktop UI's tests are skipped
 uv run ruff check
 uv run ruff format --check
 ```
@@ -62,7 +69,7 @@ GitHub Actions runs all three on Linux, Windows and macOS for every push and pul
 
 The wiki is generated from the `wiki` folder: edit the pages there, and every push to master that changes them
 publishes them (`.github/workflows/sync-wiki.yml`). Pages edited on GitHub are overwritten by the next sync.
-Pictures go in `wiki/images`; the screenshot is the UI's own export (`Ctrl+P`, then Screenshot).
+Pictures go in `wiki/images`; the terminal UI's screenshot is its own export (`Ctrl+P`, then Screenshot).
 
 spark reports name the mod of each class from a table of package prefixes, `src/nh_workbench/mod_packages.toml`,
 generated from a pack's jars (classes of mixins count for the mod that wrote them). After mods were added or

@@ -1,7 +1,7 @@
 # Terminal UI
 
 Started by `nh-workbench` (or `nhwb`) without a command, or by the `nh-workbench.cmd` / `nh-workbench.sh`
-launchers.
+launchers. The same in a window: [Desktop UI](Desktop-UI).
 
 ![The terminal UI on the All tab](images/terminal-ui.svg)
 
