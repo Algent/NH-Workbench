@@ -1983,6 +1983,25 @@ class MainWindow(QMainWindow):
             self._notify(f"Opening {st.name}")
 
 
+def ask_root(missing: Path) -> Path | None:
+    """The folder with the checkouts on a first start, the likely one offered first as the terminal UI does."""
+    guess = config.suggest_root()
+    if guess:
+        box = QMessageBox(QMessageBox.Icon.Question, "NH Workbench", f'"{missing}" does not exist.')
+        box.setInformativeText(f"Use {guess} as the folder with your checkouts (one repo per subfolder)?")
+        use = box.addButton(f"Use {guess.name}", QMessageBox.ButtonRole.AcceptRole)
+        other = box.addButton("Choose another...", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(use)
+        box.exec()
+        if box.clickedButton() is use:
+            return guess
+        if box.clickedButton() is not other:
+            return None
+    folder = QFileDialog.getExistingDirectory(None, "Folder with your checkouts", str(guess or Path.home()))
+    return Path(folder) if folder else None
+
+
 def run(cfg: Config, root_override: Path | None = None) -> int:
     if sys.platform == "win32":  # its own taskbar entry and icon, not Python's
         import ctypes
@@ -1993,12 +2012,12 @@ def run(cfg: Config, root_override: Path | None = None) -> int:
     app.setStyle("Fusion")  # looks the same on Windows, Linux and macOS
     gui_theme.apply(app, gui_theme.theme_name(cfg.theme), cfg.font_size)
     if not cfg.root.is_dir():
-        folder = QFileDialog.getExistingDirectory(None, "Folder with your checkouts", str(Path.home()))
+        folder = ask_root(cfg.root)
         if not folder:
             return 1
-        cfg.root = Path(folder)
+        cfg.root = folder
         try:
-            config.save_setting(("root",), folder)
+            config.save_setting(("root",), str(folder))
         except config.ConfigError as e:
             QMessageBox.warning(None, "NH Workbench", f"Could not save the folder, it is asked again next time: {e}")
     window = MainWindow(cfg, root_override)

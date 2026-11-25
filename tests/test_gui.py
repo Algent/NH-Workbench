@@ -407,12 +407,35 @@ def test_run_saves_the_picked_folder(sandbox, monkeypatch):
         def show(self): ...
 
     monkeypatch.setattr(gui, "QApplication", type("Qa", (), {"instance": staticmethod(App)}))
+    monkeypatch.setattr(gui.config, "suggest_root", lambda: None)  # nothing to offer: straight to the folder picker
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: str(sandbox.root))
     monkeypatch.setattr(gui, "MainWindow", Window)
     monkeypatch.setattr(gui.config, "save_setting", lambda keys, value: saved.append((keys, value)))
     cfg = gui.Config(root=sandbox.root / "missing")
     assert gui.run(cfg) == 0
     assert cfg.root == sandbox.root and saved == [(("root",), str(sandbox.root))]
+
+
+def test_first_start_offers_the_likely_folder(sandbox, monkeypatch, tmp_path):
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui.config, "suggest_root", lambda: sandbox.root)
+    picked = []
+    monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: picked.append(a[2]) or str(tmp_path))
+
+    def answer(button: str):
+        def press(box) -> int:
+            chosen = box.defaultButton() if button == "use" else next(b for b in box.buttons() if b.text() == button)
+            chosen.click()
+            return 0
+
+        monkeypatch.setattr(gui.QMessageBox, "exec", press)
+
+    answer("use")
+    assert gui.ask_root(tmp_path / "missing") == sandbox.root
+    answer("Choose another...")
+    assert gui.ask_root(tmp_path / "missing") == tmp_path and picked == [str(sandbox.root)]  # opens at the guess
+    answer("Cancel")
+    assert gui.ask_root(tmp_path / "missing") is None
 
 
 def test_desktop_launcher_moves_the_old_dirs(sandbox, monkeypatch):
