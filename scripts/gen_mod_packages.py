@@ -1,4 +1,4 @@
-"""Generate src/gtnh_devenv_tools/mod_packages.toml: Java package prefix -> mod name, for spark reports.
+"""Generate src/nh_workbench/mod_packages.toml: Java package prefix -> mod name, for spark reports.
 
     uv run python scripts/gen_mod_packages.py "<pack>/.minecraft/mods" "<server pack>/mods" ...
 
@@ -16,7 +16,7 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "src" / "gtnh_devenv_tools" / "mod_packages.toml"
+OUT = Path(__file__).resolve().parent.parent / "src" / "nh_workbench" / "mod_packages.toml"
 DOMINANT = 0.7  # share of a package's classes one mod needs to own it despite copies elsewhere
 # Never mapped: the game, Forge, and libraries also on the game's own classpath (a copy in a mod jar is not
 # where those classes load from).

@@ -5,8 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from gtnh_devenv_tools import skill
-from gtnh_devenv_tools.cli import app
+from nh_workbench import skill
+from nh_workbench.cli import app
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -26,7 +26,7 @@ def test_install_points_the_skill_at_this_checkout(tmp_path):
     assert f"runs this checkout: {REPO}" in res.output.replace("\n", "")
 
     which = launcher(folder, "--which").stdout.split()
-    assert which[:3] == ["uv", "run", "--quiet"] and which[-2:] == [str(REPO), "gtnh-dev"]
+    assert which[:3] == ["uv", "run", "--quiet"] and which[-2:] == [str(REPO), "nh-workbench"]
 
 
 def test_launcher_without_a_checkout(tmp_path, monkeypatch):
@@ -36,10 +36,10 @@ def test_launcher_without_a_checkout(tmp_path, monkeypatch):
 
     res = launcher(folder, "--which", path="")  # nothing on PATH: the published version
     assert res.stdout.split()[:4] == ["uvx", "--quiet", "--from", skill_published(folder)]
-    assert "no local gtnh-devenv-tools checkout" in res.stderr
+    assert "no local NH Workbench checkout" in res.stderr
 
     bad = launcher(folder, "--set-checkout", str(tmp_path))
-    assert bad.returncode == 2 and "not a gtnh-devenv-tools checkout" in bad.stderr
+    assert bad.returncode == 2 and "not an NH Workbench checkout" in bad.stderr
     good = launcher(folder, "--set-checkout", str(REPO))
     assert good.returncode == 0 and (folder / "checkout.txt").read_text(encoding="utf-8") == str(REPO)
 
@@ -84,3 +84,27 @@ def test_install_for_opencode(tmp_path, monkeypatch):
     assert (tmp_path / ".config" / "opencode" / "skills" / "spark-profile" / "SKILL.md").is_file()
     monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "oc"))
     assert skill.skills_dir("opencode") == tmp_path / "oc" / "skills"
+
+
+def test_launcher_accepts_a_checkout_from_before_the_rename(tmp_path):
+    folder, _ = skill.install(tmp_path / "skills")
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "pyproject.toml").write_text('[project]\nname = "gtnh-devenv-tools"\n', encoding="utf-8")
+    assert launcher(folder, "--set-checkout", str(old)).returncode == 0
+    assert launcher(folder, "--which").stdout.split()[-2:] == [str(old), "gtnh-dev"]
+
+
+def test_refresh_updates_installed_skills_and_keeps_their_checkout(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill, "_home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+    folder = tmp_path / ".claude" / "skills" / "spark-profile"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("old", encoding="utf-8")
+    (folder / "checkout.txt").write_text("C:/elsewhere", encoding="utf-8")
+
+    assert skill.refresh_installed() == ["claude"]
+    assert "NH Workbench" in (folder / "SKILL.md").read_text(encoding="utf-8") and (folder / "spark.py").is_file()
+    assert (folder / "checkout.txt").read_text(encoding="utf-8") == "C:/elsewhere"
+    assert not (tmp_path / ".agents").exists()  # not installed for Codex: left alone

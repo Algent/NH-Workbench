@@ -1,4 +1,4 @@
-# gtnh-devenv-tools
+# NH Workbench
 
 Keeps a folder full of GTNH mod checkouts under control:
 
@@ -18,12 +18,18 @@ Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.gi
 
 ```
 uv sync
-uv run gtnh-dev              # terminal UI
-uv tool install -e .         # optional: puts `gtnh-dev` on PATH
+uv run nh-workbench          # terminal UI
+uv tool install -e .         # optional: puts `nh-workbench` and its short name `nhwb` on PATH
 ```
 
-`gtnh-dev.cmd` (Windows) and `gtnh-dev.sh` (Linux, macOS) start the terminal UI from anywhere: run them
+`nh-workbench.cmd` (Windows) and `nh-workbench.sh` (Linux, macOS) start the terminal UI from anywhere: run them
 directly or point a shortcut at them. Command-line arguments are passed through.
+
+### Coming from gtnh-devenv-tools
+
+NH Workbench used to be called gtnh-devenv-tools. Its first start moves the old config and cache folders to the
+new ones (unless those exist already) and updates the installed skill. The old `gtnh-dev` command and the
+`gtnh-dev.cmd` / `gtnh-dev.sh` launchers still work, so existing shortcuts keep working.
 
 Checkouts are read from `IdeaProjects` in your home folder; change it with `--root`, `root` in the config,
 or Settings in the UI.
@@ -77,16 +83,16 @@ Settings changed from the UI are written to the config file, keeping its comment
 
 | Command | What it does |
 |---|---|
-| `gtnh-dev status [--off-main] [--behind] [--dirty] [--group G] [--fetch] [--pack]` | One line per repo |
-| `gtnh-dev fetch` | Fetch every repo, move nothing |
-| `gtnh-dev pull [--dry-run]` | Fetch, then fast-forward main where safe |
-| `gtnh-dev to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
-| `gtnh-dev branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
-| `gtnh-dev reviews [--team]` | Open PRs waiting on your review |
-| `gtnh-dev prs [--mine \| --org] [--sort small\|large\|repo] [--max-size N] [--local] [--pack] [--unreviewed] [--stale]` | Review requests, your PRs or the org's, sorted and filtered like the UI (`--help` for more) |
-| `gtnh-dev pack [--missing] [--refresh]` | Pack mods and whether they are checked out |
-| `gtnh-dev clone NAME...` | Clone pack mods into the root |
-| `gtnh-dev jars` | Download the jars of closed-source pack mods |
+| `nh-workbench status [--off-main] [--behind] [--dirty] [--group G] [--fetch] [--pack]` | One line per repo |
+| `nh-workbench fetch` | Fetch every repo, move nothing |
+| `nh-workbench pull [--dry-run]` | Fetch, then fast-forward main where safe |
+| `nh-workbench to-main` | Switch repos parked on a merged PR branch back to main, then fast-forward |
+| `nh-workbench branches [--cleanup]` | Local branches and their PR; optionally delete merged ones |
+| `nh-workbench reviews [--team]` | Open PRs waiting on your review |
+| `nh-workbench prs [--mine \| --org] [--sort small\|large\|repo] [--max-size N] [--local] [--pack] [--unreviewed] [--stale]` | Review requests, your PRs or the org's, sorted and filtered like the UI (`--help` for more) |
+| `nh-workbench pack [--missing] [--refresh]` | Pack mods and whether they are checked out |
+| `nh-workbench clone NAME...` | Clone pack mods into the root |
+| `nh-workbench jars` | Download the jars of closed-source pack mods |
 
 Global options: `--root PATH`, `-v` (log every command run).
 
@@ -100,9 +106,9 @@ Turns a [spark](https://spark.lucko.me) profile, the link players paste when rep
 report that reads well for people and LLMs alike (a few thousand tokens, no screenshots):
 
 ```
-gtnh-dev tools spark summary https://spark.lucko.me/XXXXXXXXXX
-gtnh-dev tools spark tree XXXXXXXXXX makeCrater        # what a method calls, all its call sites merged
-gtnh-dev tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
+nh-workbench tools spark summary https://spark.lucko.me/XXXXXXXXXX
+nh-workbench tools spark tree XXXXXXXXXX makeCrater        # what a method calls, all its call sites merged
+nh-workbench tools spark callers XXXXXXXXXX ASMEventHandler.invoke   # who calls it
 ```
 
 The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
@@ -132,7 +138,7 @@ downloaded `.sparkprofile` file. Downloads are kept in the cache folder under `s
 again. The name and UUID of whoever recorded the profile are left out of the reports.
 
 1.7.10 profiles do not say which mod a class comes from, so the tool ships a table of package prefixes per mod,
-`src/gtnh_devenv_tools/mod_packages.toml`, generated from a pack's jars (classes of mixins count for the mod that
+`src/nh_workbench/mod_packages.toml`, generated from a pack's jars (classes of mixins count for the mod that
 wrote them; anything the table misses is shown as `<package> (package)`). After mods were added or renamed,
 regenerate it from the mods folders of recent packs, newest last:
 
@@ -145,13 +151,13 @@ It prints the packages several mods share without a clear owner; decide those in
 #### Skill for Claude Code, Codex and OpenCode
 
 ```
-uv run gtnh-dev tools install-skill            # for the agents found in your home folder; --for claude|codex|opencode|all
+uv run nh-workbench tools install-skill            # for the agents found in your home folder; --for claude|codex|opencode|all
 ```
 
 (or F2 where the spark screen asks for a link) installs a `spark-profile` skill, so a spark link pasted in any project gets read
 with these commands instead of the web viewer: for Claude Code in `~/.claude/skills`, for Codex in
 `~/.agents/skills`, for OpenCode in `~/.config/opencode/skills`. It runs through a small launcher that needs only uv: it uses the checkout it was installed
-from, else `gtnh-dev` on PATH, else the published version from GitHub through `uvx` (the agent then offers once
+from, else `nh-workbench` (or the old `gtnh-dev`) on PATH, else the published version from GitHub through `uvx` (the agent then offers once
 to point it at a checkout).
 
 ## What the tool will and won't do
@@ -197,7 +203,7 @@ The Daily and Release columns (`status --pack` on the command line) count commit
 - `1.8.18 +2` in Release: the `release/<major>.<minor>.x` branch has 2 commits since that version's tag.
 - `Δ17` in Release: main has 17 commits since that tag; the higher, the harder a backport.
 
-Closed-source mods: `gtnh-dev jars` (or the Tools tab) downloads their jars into `_GTNH_Closed_Source` under the
+Closed-source mods: `nh-workbench jars` (or the Tools tab) downloads their jars into `_GTNH_Closed_Source` under the
 root, where DreamAssemblerXXL expects them. Jars already there are left alone.
 
 ## GitHub data
@@ -207,7 +213,7 @@ too (team requests only on demand, they are slow to search).
 
 All PRs searches GitHub only when the tab is opened and its last search is over 30 minutes old; it takes
 about 20 seconds, and otherwise shows the copy saved in the cache folder. Auto-refresh leaves it alone.
-Its filters (`v`) and `gtnh-dev prs --org` work on that saved copy, so changing them searches nothing.
+Its filters (`v`) and `nh-workbench prs --org` work on that saved copy, so changing them searches nothing.
 
 ## Configuration
 
@@ -215,8 +221,8 @@ Everything is optional; see `config.example.toml`.
 
 | | Windows | Linux | macOS |
 |---|---|---|---|
-| Config | `%APPDATA%\gtnh-devenv-tools\config.toml` | `~/.config/gtnh-devenv-tools/config.toml` | `~/Library/Application Support/gtnh-devenv-tools/config.toml` |
-| Cache, logs | `%LOCALAPPDATA%\gtnh-devenv-tools\Cache` | `~/.cache/gtnh-devenv-tools` | `~/Library/Caches/gtnh-devenv-tools` |
+| Config | `%APPDATA%\nh-workbench\config.toml` | `~/.config/nh-workbench/config.toml` | `~/Library/Application Support/nh-workbench/config.toml` |
+| Cache, logs | `%LOCALAPPDATA%\nh-workbench\Cache` | `~/.cache/nh-workbench` | `~/Library/Caches/nh-workbench` |
 
 Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set.
 

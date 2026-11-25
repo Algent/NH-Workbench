@@ -58,7 +58,7 @@ TOOLS = [
         "spark profiles",
         "Read a spark.lucko.me link (a lag report) as a short text report",
         "Paste a spark link or code: server stats, the worst minutes, where the time goes. Enter on a method"
-        " shows what it calls, c who calls it, y copies the report for an LLM. Same as `gtnh-dev tools spark`.",
+        " shows what it calls, c who calls it, y copies the report for an LLM. Same as `nh-workbench tools spark`.",
     ),
     (
         "clone",
@@ -71,7 +71,7 @@ TOOLS = [
         "jars",
         "Closed-source jars",
         "Download the jars of closed-source pack mods, where DreamAssemblerXXL expects them",
-        "Into _GTNH_Closed_Source in the repo folder; jars already there are left alone. Same as `gtnh-dev jars`.",
+        "Into _GTNH_Closed_Source in the repo folder; jars already there are left alone. Same as `nh-workbench jars`.",
     ),
     (
         "clean",
@@ -84,7 +84,7 @@ TOOLS = [
         "skill",
         "Install AI skill",
         "Let Claude Code, Codex or OpenCode read spark links with this tool, in any project",
-        "Installs the spark-profile skill for the agent you pick. Same as `gtnh-dev tools install-skill`.",
+        "Installs the spark-profile skill for the agent you pick. Same as `nh-workbench tools install-skill`.",
     ),
 ]
 NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
@@ -377,7 +377,7 @@ class ExtrasMenu(MenuScreen):
 
 class RepoApp(App[None]):
     CSS_PATH = "tui.tcss"
-    TITLE = "gtnh-dev"
+    TITLE = "NH Workbench"
     BINDINGS = [
         Binding("f", "fetch", "Fetch all"),
         Binding("p", "pull", "Pull safe"),
@@ -482,7 +482,7 @@ class RepoApp(App[None]):
         self.tool = await ops.fetch_repo(self.cfg, path)
         behind = self._tool_behind()
         if behind:
-            self.notify(f"gtnh-devenv-tools has {behind} new commit(s): Settings (x) updates it", timeout=10)
+            self.notify(f"NH Workbench has {behind} new commit(s): Settings (x) updates it", timeout=10)
 
     def _tool_behind(self) -> int:
         st = self.tool
@@ -492,7 +492,7 @@ class RepoApp(App[None]):
 
     def _tool_entry(self) -> tuple[str, str | None]:
         """Label of the Settings entry that updates the tool, and why it cannot be used now."""
-        label = "Update gtnh-devenv-tools"
+        label = "Update NH Workbench"
         st = self.tool
         if tool_checkout() is None:
             return label, "installed as a package: uv tool upgrade or uvx --refresh"

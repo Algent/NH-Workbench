@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from gtnh_devenv_tools import proc
-from gtnh_devenv_tools.config import Config
+from nh_workbench import proc
+from nh_workbench.config import Config
 
 
 class Sandbox:
@@ -64,7 +64,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Sandbox:
 @pytest.fixture(autouse=True)
 def no_mcp_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never fetch the MCP mappings in tests: spark profiles keep their func_ names."""
-    from gtnh_devenv_tools import spark
+    from nh_workbench import spark
 
     monkeypatch.setattr(spark, "mcp_names", lambda minecraft: {})
 
@@ -72,6 +72,22 @@ def no_mcp_download(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def no_self_update(monkeypatch: pytest.MonkeyPatch) -> None:
     """The UI fetches its own checkout at start; tests must not touch the real one."""
-    from gtnh_devenv_tools import tui
+    from nh_workbench import tui
 
     monkeypatch.setattr(tui, "tool_checkout", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def no_old_dirs_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every command moves the folders of the tool's old name; tests must not touch the real ones."""
+    from nh_workbench import config
+
+    monkeypatch.setattr(config, "move_old_dirs", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def temp_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep what tests write to the cache folder (logs, downloads) out of the real one."""
+    from nh_workbench import config
+
+    monkeypatch.setattr(config, "_cache_dir", lambda name: tmp_path / "cache" / name)

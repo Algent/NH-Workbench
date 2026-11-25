@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from gtnh_devenv_tools import git, github, ops, pack, render
-from gtnh_devenv_tools.config import RepoConfig
-from gtnh_devenv_tools.models import Branch, PrInfo, RepoState
+from nh_workbench import git, github, ops, pack, render
+from nh_workbench.config import RepoConfig
+from nh_workbench.models import Branch, PrInfo, RepoState
 
 
 def repo(name: str = "Backhand", **remotes: str) -> RepoState:
@@ -231,7 +231,7 @@ async def test_fork_tracks_its_upstream_source_branch(sandbox):
 
 
 def test_shipped_sources_are_well_formed():
-    from gtnh_devenv_tools import config
+    from nh_workbench import config
 
     cfg = config.load(path=Path("does-not-exist.toml"))
     assert len(cfg.sources) >= 26
@@ -254,8 +254,8 @@ def test_latest_release_skips_betas_and_dailies():
 def test_pack_header():
     from datetime import UTC, datetime, timedelta
 
-    from gtnh_devenv_tools import render
-    from gtnh_devenv_tools.models import PackInfo
+    from nh_workbench import render
+    from nh_workbench.models import PackInfo
 
     now = datetime.now(UTC)
     info = PackInfo(
@@ -361,7 +361,7 @@ def test_prs_opened_from_a_fork_are_found_upstream():
 
 
 async def test_graphql_retries_once_but_not_without_gh(monkeypatch):
-    from gtnh_devenv_tools.proc import Result
+    from nh_workbench.proc import Result
 
     answers = [Result(1, "", "TLS handshake timeout"), Result(0, '{"data": {"ok": 1}}', "")]
 
@@ -485,7 +485,7 @@ def test_created_ranges_cover_everything_once():
 def test_filter_prs():
     from datetime import UTC, datetime, timedelta
 
-    from gtnh_devenv_tools.models import PrInfo, ReviewItem
+    from nh_workbench.models import PrInfo, ReviewItem
 
     now = datetime(2026, 11, 19, tzinfo=UTC)
 
@@ -514,8 +514,8 @@ def test_to_pr_review_count():
 
 
 def test_clone_urls_and_ssh_errors():
-    from gtnh_devenv_tools import git
-    from gtnh_devenv_tools.proc import Result
+    from nh_workbench import git
+    from nh_workbench.proc import Result
 
     assert git.clone_url("github.com", "o/m") == "git@github.com:o/m.git"
     assert git.clone_url("github.com", "o/m", "https") == "https://github.com/o/m.git"
@@ -525,7 +525,7 @@ def test_clone_urls_and_ssh_errors():
 
 
 def test_missing_pack_jobs(tmp_path):
-    from gtnh_devenv_tools.models import PackEntry, RepoState
+    from nh_workbench.models import PackEntry, RepoState
 
     (tmp_path / "Taken").mkdir()
     entries = [

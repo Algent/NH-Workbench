@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from textual.widgets import DataTable, Tabs
 
-from gtnh_devenv_tools import github, pack
-from gtnh_devenv_tools.models import PackEntry, PackInfo, PrInfo, ReviewItem
-from gtnh_devenv_tools.tui import RepoApp
+from nh_workbench import github, pack
+from nh_workbench.models import PackEntry, PackInfo, PrInfo, ReviewItem
+from nh_workbench.tui import RepoApp
 
 org_searches: list[str] = []
 
@@ -80,7 +80,7 @@ async def settle(app, pilot):
 
 
 async def test_repo_menu_acts_on_one_repo(sandbox, offline):
-    from gtnh_devenv_tools.tui import RepoMenu
+    from nh_workbench.tui import RepoMenu
 
     other = sandbox.root / "second"
     sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(other))
@@ -130,7 +130,7 @@ async def test_repo_menu_acts_on_one_repo(sandbox, offline):
 
 
 async def test_reviews_tab_opens_pr_in_browser(sandbox, offline, monkeypatch):
-    from gtnh_devenv_tools import tui
+    from nh_workbench import tui
 
     opened = []
     monkeypatch.setattr(tui.webbrowser, "open", opened.append)
@@ -191,8 +191,8 @@ async def test_sorting_by_key_and_header(sandbox, offline):
 async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch, tmp_path):
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import config
-    from gtnh_devenv_tools.tui import ConfirmScreen, PromptScreen
+    from nh_workbench import config
+    from nh_workbench.tui import ConfirmScreen, PromptScreen
 
     cfg_file = tmp_path / "user" / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -233,7 +233,7 @@ async def test_group_and_hide_are_saved_to_config(sandbox, offline, monkeypatch,
 
 
 async def test_extras_menu_forces_pack_refresh(sandbox, offline):
-    from gtnh_devenv_tools.tui import ExtrasMenu
+    from nh_workbench.tui import ExtrasMenu
 
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -320,7 +320,7 @@ async def test_footer_follows_the_view(sandbox, offline):
 async def test_my_prs_tab(sandbox, offline, monkeypatch):
     from rich.console import Console
 
-    from gtnh_devenv_tools import tui
+    from nh_workbench import tui
 
     opened = []
     monkeypatch.setattr(tui.webbrowser, "open", opened.append)
@@ -347,8 +347,8 @@ async def test_my_prs_tab(sandbox, offline, monkeypatch):
 async def test_main_branch_and_auto_refresh_settings(sandbox, offline, monkeypatch, tmp_path):
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import config
-    from gtnh_devenv_tools.tui import PromptScreen
+    from nh_workbench import config
+    from nh_workbench.tui import PromptScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -408,7 +408,7 @@ async def test_main_branch_and_auto_refresh_settings(sandbox, offline, monkeypat
 
 
 async def test_auto_refresh_waits_for_interval_and_quiet_moment(sandbox, offline):
-    from gtnh_devenv_tools.tui import ConfirmScreen
+    from nh_workbench.tui import ConfirmScreen
 
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -500,8 +500,8 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
 async def test_open_ide_asks_for_launcher_when_none_found(sandbox, offline, monkeypatch, tmp_path):
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import config, proc
-    from gtnh_devenv_tools.tui import PromptScreen
+    from nh_workbench import config, proc
+    from nh_workbench.tui import PromptScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -538,8 +538,8 @@ async def test_open_ide_asks_for_launcher_when_none_found(sandbox, offline, monk
 async def test_ide_can_be_turned_off(sandbox, offline, monkeypatch, tmp_path):
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import config, proc
-    from gtnh_devenv_tools.tui import PromptScreen, RepoMenu
+    from nh_workbench import config, proc
+    from nh_workbench.tui import PromptScreen, RepoMenu
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -591,8 +591,8 @@ async def test_ide_can_be_turned_off(sandbox, offline, monkeypatch, tmp_path):
 async def test_missing_root_is_asked_for(sandbox, offline, monkeypatch, tmp_path):
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import config
-    from gtnh_devenv_tools.tui import PromptScreen
+    from nh_workbench import config
+    from nh_workbench.tui import PromptScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -617,7 +617,7 @@ async def test_missing_root_is_asked_for(sandbox, offline, monkeypatch, tmp_path
 async def test_check_out_pr_from_reviews(sandbox, offline, monkeypatch):
     from test_git import make_fork
 
-    from gtnh_devenv_tools.models import PrHead
+    from nh_workbench.models import PrHead
 
     fork, tip = make_fork(sandbox)
     sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/m.git")  # matches the fake PR's repo
@@ -639,8 +639,8 @@ async def test_check_out_pr_from_reviews(sandbox, offline, monkeypatch):
 
 
 async def test_cleanup_switches_parked_repos_to_main_first(sandbox, offline, monkeypatch, tmp_path):
-    from gtnh_devenv_tools import config
-    from gtnh_devenv_tools.tui import ConfirmScreen
+    from nh_workbench import config
+    from nh_workbench.tui import ConfirmScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -684,8 +684,8 @@ async def test_cleanup_switches_parked_repos_to_main_first(sandbox, offline, mon
 
 
 async def test_all_prs_filters_use_the_loaded_list(sandbox, offline, monkeypatch, tmp_path):
-    from gtnh_devenv_tools import config
-    from gtnh_devenv_tools.tui import MenuScreen
+    from nh_workbench import config
+    from nh_workbench.tui import MenuScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -728,7 +728,7 @@ async def test_all_prs_filters_use_the_loaded_list(sandbox, offline, monkeypatch
 
 
 async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
-    from gtnh_devenv_tools import config, ops
+    from nh_workbench import config, ops
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -761,8 +761,8 @@ async def test_auto_refresh_can_fetch(sandbox, offline, monkeypatch, tmp_path):
 
 
 async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeypatch, tmp_path):
-    from gtnh_devenv_tools import config, git
-    from gtnh_devenv_tools.tui import ConfirmScreen, MenuScreen
+    from nh_workbench import config, git
+    from nh_workbench.tui import ConfirmScreen, MenuScreen
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -815,7 +815,7 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
 
 
 async def test_tools_deletes_built_jars(sandbox, offline):
-    from gtnh_devenv_tools.tui import ConfirmScreen
+    from nh_workbench.tui import ConfirmScreen
 
     sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/GTNewHorizons/repo.git")
     libs = sandbox.work / "build" / "libs"
@@ -841,9 +841,9 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
     from test_spark import profile_bytes
     from textual.widgets import Input, TextArea
 
-    from gtnh_devenv_tools import spark, tui_spark
-    from gtnh_devenv_tools.tui import MenuScreen
-    from gtnh_devenv_tools.tui_spark import SparkScreen
+    from nh_workbench import spark, tui_spark
+    from nh_workbench.tui import MenuScreen
+    from nh_workbench.tui_spark import SparkScreen
 
     cache = tmp_path / "cache"
     (cache / "spark").mkdir(parents=True)
@@ -932,7 +932,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
         await pilot.press("y", "e")
         await pilot.pause()
         assert copied == [screen.text] and (cache / "spark" / "Saved12345-summary.md").is_file()
-        from gtnh_devenv_tools import skill
+        from nh_workbench import skill
 
         monkeypatch.setattr(skill, "_home", lambda: tmp_path)
         assert not enabled("f2") and enabled("t")  # F2 only where profiles are picked
@@ -952,7 +952,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
 
 
 def test_method_and_window_on_report_lines():
-    from gtnh_devenv_tools.tui_spark import method_on_line, window_on_line
+    from nh_workbench.tui_spark import method_on_line, window_on_line
 
     assert method_on_line(" 41.8%  galaxyspace.core.Craters.makeCrater") == "galaxyspace.core.Craters.makeCrater"
     line = " 41.7%     3.4s            Craters.createCraters > Craters.makeCrater  (own 41.7%)"
@@ -973,9 +973,9 @@ async def test_spark_screen_heap_summary(sandbox, offline, monkeypatch, tmp_path
     from test_spark import HEAP_A, HEAP_B, heap_bytes
     from textual.widgets import Input
 
-    from gtnh_devenv_tools import spark, tui_spark
-    from gtnh_devenv_tools.tui import PromptScreen
-    from gtnh_devenv_tools.tui_spark import SparkScreen
+    from nh_workbench import spark, tui_spark
+    from nh_workbench.tui import PromptScreen
+    from nh_workbench.tui_spark import SparkScreen
 
     cache = tmp_path / "cache"
     (cache / "spark").mkdir(parents=True)
@@ -1021,7 +1021,7 @@ async def test_spark_screen_heap_summary(sandbox, offline, monkeypatch, tmp_path
 
 
 async def test_theme_is_kept(sandbox, offline, monkeypatch, tmp_path):
-    from gtnh_devenv_tools import config
+    from nh_workbench import config
 
     cfg_file = tmp_path / "config.toml"
     monkeypatch.setattr(config, "config_path", lambda: cfg_file)
@@ -1043,8 +1043,8 @@ async def test_theme_is_kept(sandbox, offline, monkeypatch, tmp_path):
 
 
 async def test_tool_updates_itself(sandbox, offline, monkeypatch):
-    from gtnh_devenv_tools import tui
-    from gtnh_devenv_tools.tui import MenuScreen
+    from nh_workbench import tui
+    from nh_workbench.tui import MenuScreen
 
     monkeypatch.setattr(tui, "tool_checkout", lambda: sandbox.work)  # stands in for the tool's checkout
     tip = sandbox.push_upstream("new feature")
@@ -1052,7 +1052,7 @@ async def test_tool_updates_itself(sandbox, offline, monkeypatch):
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)
         assert app._tool_behind() == 1
-        assert app._tool_entry() == ("Update gtnh-devenv-tools (1 new commit)", None)
+        assert app._tool_entry() == ("Update NH Workbench (1 new commit)", None)
         await pilot.press("x")
         await pilot.pause()
         assert isinstance(app.screen, MenuScreen)

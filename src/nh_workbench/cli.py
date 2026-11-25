@@ -14,7 +14,7 @@ from . import config, github, ops, pack, render, spark
 from .config import Config
 from .models import PackInfo, RepoState
 
-app = typer.Typer(add_completion=False, help="Keep track of many GTNH mod checkouts.")
+app = typer.Typer(add_completion=False, help="NH Workbench: keep track of many GTNH mod checkouts.")
 out = Console()
 err = Console(stderr=True)
 
@@ -28,6 +28,13 @@ def main(
     for stream in (sys.stdout, sys.stderr):
         if stream.encoding and stream.encoding.lower().replace("-", "") != "utf8":
             stream.reconfigure(encoding="utf-8", errors="replace")
+    moved = config.move_old_dirs()  # the tool was called gtnh-devenv-tools before
+    for old, new in moved:
+        err.print(f'[dim]Moved "{old}" to "{new}" (gtnh-devenv-tools is now NH Workbench)')
+    if moved:
+        from . import skill
+
+        skill.refresh_installed()  # an installed skill from before the rename only knows the old name
     try:
         cfg = config.load(root)
     except config.ConfigError as e:
@@ -37,7 +44,8 @@ def main(
     if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools"):
         err.print(f'[bold red]Folder with your checkouts not found: "{cfg.root}"')
         err.print(
-            f'Pass --root PATH, set root in "{config.config_path()}", or start gtnh-dev without a command to pick it.'
+            f'Pass --root PATH, set root in "{config.config_path()}",'
+            " or start nh-workbench without a command to pick it."
         )
         raise typer.Exit(2)
     ctx.obj = cfg
@@ -322,7 +330,7 @@ def to_main(ctx: typer.Context) -> None:
 
     done = asyncio.run(switch())
     out.print(render.repo_table(done))
-    out.print("\n[dim]The merged branches are still there: `gtnh-dev branches --cleanup` removes them.")
+    out.print("\n[dim]The merged branches are still there: `nh-workbench branches --cleanup` removes them.")
     raise typer.Exit(1 if any(st.note and st.note.kind == "failed" for st in done) else 0)
 
 

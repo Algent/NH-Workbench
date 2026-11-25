@@ -9,7 +9,7 @@ import platformdirs
 import tomlkit
 import tomlkit.exceptions
 
-from . import APP_NAME
+from . import APP_NAME, OLD_APP_NAME
 
 
 class ConfigError(Exception):
@@ -69,12 +69,53 @@ class Config:
         return sorted((name, br) for name, repo in self.repos.items() for br in repo.keep_branches)
 
 
+def _config_dir(name: str) -> Path:
+    return Path(platformdirs.user_config_dir(name, appauthor=False, roaming=True))
+
+
+def _cache_dir(name: str) -> Path:
+    return Path(platformdirs.user_cache_dir(name, appauthor=False))
+
+
 def config_path() -> Path:
-    return Path(platformdirs.user_config_dir(APP_NAME, appauthor=False, roaming=True)) / "config.toml"
+    return _config_dir(APP_NAME) / "config.toml"
 
 
 def cache_dir() -> Path:
-    return Path(platformdirs.user_cache_dir(APP_NAME, appauthor=False))
+    return _cache_dir(APP_NAME)
+
+
+def move_old_dirs() -> list[tuple[Path, Path]]:
+    """Move the config and cache folders of the tool's old name to the new one, once: a folder is left alone when
+    the new one exists already. Returns (from, to) for what moved."""
+    moved = []
+    for old, new, is_config in (
+        (_config_dir(OLD_APP_NAME), _config_dir(APP_NAME), True),
+        (_cache_dir(OLD_APP_NAME), _cache_dir(APP_NAME), False),
+    ):
+        if old == new or not old.is_dir() or new.exists():
+            continue
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(old, new)
+        except OSError:
+            # Likely a copy still running under the old name holding a file open. The settings are what matters:
+            # copy them; the cache fills again on its own.
+            if is_config and (old / "config.toml").is_file():
+                try:
+                    new.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(old / "config.toml", new / "config.toml")
+                    moved.append((old / "config.toml", new / "config.toml"))
+                except OSError:
+                    pass
+            continue
+        moved.append((old, new))
+        if old.parent.name == OLD_APP_NAME:  # Windows: the cache is a Cache folder inside one named after the tool
+            try:
+                old.parent.rmdir()
+            except OSError:
+                pass
+    return moved
 
 
 def _shipped_sources() -> dict[str, dict]:

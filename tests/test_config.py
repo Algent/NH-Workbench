@@ -1,6 +1,7 @@
 import pytest
 
-from gtnh_devenv_tools import config
+from nh_workbench import APP_NAME, OLD_APP_NAME, config
+from nh_workbench.config import move_old_dirs  # the real one: conftest stubs config.move_old_dirs for other tests
 
 
 def test_save_setting_keeps_comments_and_nests(tmp_path):
@@ -77,3 +78,49 @@ def test_suggest_root_prefers_a_folder_with_repos(tmp_path):
     assert config.suggest_root(tmp_path) == tmp_path / "Projects"
     (tmp_path / "git" / "SomeMod" / ".git").mkdir(parents=True)
     assert config.suggest_root(tmp_path) == tmp_path / "git"
+
+
+def fake_dirs(monkeypatch, tmp_path):
+    """Folders laid out like on Windows: the config in its own folder, the cache in a Cache folder inside another."""
+    monkeypatch.setattr(config, "_config_dir", lambda name: tmp_path / "Roaming" / name)
+    monkeypatch.setattr(config, "_cache_dir", lambda name: tmp_path / "Local" / name / "Cache")
+
+
+def test_old_dirs_are_moved_once(tmp_path, monkeypatch):
+    fake_dirs(monkeypatch, tmp_path)
+    old_config, old_cache = tmp_path / "Roaming" / OLD_APP_NAME, tmp_path / "Local" / OLD_APP_NAME / "Cache"
+    old_config.mkdir(parents=True)
+    (old_config / "config.toml").write_text('root = "C:/somewhere"\n', encoding="utf-8")
+    (old_cache / "spark").mkdir(parents=True)
+    (old_cache / "org-prs.json").write_text("[]", encoding="utf-8")
+
+    assert move_old_dirs() == [(old_config, config._config_dir(APP_NAME)), (old_cache, config.cache_dir())]
+    assert config.load().root.as_posix() == "C:/somewhere"
+    assert (config.cache_dir() / "org-prs.json").is_file() and (config.cache_dir() / "spark").is_dir()
+    assert not old_config.exists() and not (tmp_path / "Local" / OLD_APP_NAME).exists()
+    assert move_old_dirs() == []  # nothing left to move
+
+
+def test_old_dirs_never_replace_new_ones(tmp_path, monkeypatch):
+    fake_dirs(monkeypatch, tmp_path)
+    for name, root in ((OLD_APP_NAME, "C:/old"), (APP_NAME, "C:/new")):
+        (tmp_path / "Roaming" / name).mkdir(parents=True)
+        (tmp_path / "Roaming" / name / "config.toml").write_text(f'root = "{root}"\n', encoding="utf-8")
+    assert move_old_dirs() == []
+    assert config.load().root.as_posix() == "C:/new"
+    assert (tmp_path / "Roaming" / OLD_APP_NAME / "config.toml").is_file()
+
+
+def test_old_config_is_copied_when_it_cannot_move(tmp_path, monkeypatch):
+    fake_dirs(monkeypatch, tmp_path)
+    old = tmp_path / "Roaming" / OLD_APP_NAME
+    old.mkdir(parents=True)
+    (old / "config.toml").write_text('root = "C:/somewhere"\n', encoding="utf-8")
+
+    def locked(src, dst):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(config.shutil, "move", locked)
+    new = config.config_path()
+    assert move_old_dirs() == [(old / "config.toml", new)]
+    assert config.load().root.as_posix() == "C:/somewhere" and (old / "config.toml").is_file()

@@ -3,8 +3,8 @@ import struct
 import pytest
 from typer.testing import CliRunner
 
-from gtnh_devenv_tools import spark
-from gtnh_devenv_tools.cli import app
+from nh_workbench import spark
+from nh_workbench.cli import app
 
 # --- a tiny protobuf writer for synthetic profiles ---
 

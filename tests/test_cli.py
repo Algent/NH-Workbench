@@ -2,9 +2,9 @@ import time
 
 from typer.testing import CliRunner
 
-from gtnh_devenv_tools import github
-from gtnh_devenv_tools.cli import app
-from gtnh_devenv_tools.models import PrInfo, ReviewItem
+from nh_workbench import github
+from nh_workbench.cli import app
+from nh_workbench.models import PrInfo, ReviewItem
 
 
 def org_items() -> list[ReviewItem]:

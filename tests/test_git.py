@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from gtnh_devenv_tools import git, ops, render
-from gtnh_devenv_tools.config import Config, RepoConfig
-from gtnh_devenv_tools.models import PrHead, PrInfo, RepoState
+from nh_workbench import git, ops, render
+from nh_workbench.config import Config, RepoConfig
+from nh_workbench.models import PrHead, PrInfo, RepoState
 
 
 def test_parse_status():
@@ -220,7 +220,7 @@ async def test_to_main_after_merged_pr(sandbox):
 
 
 async def test_release_branch_progress(sandbox):
-    from gtnh_devenv_tools import pack
+    from nh_workbench import pack
 
     branch = pack.release_branch("1.2.0")
     assert branch == "release/1.2.x" and pack.release_branch("2.9.0") == "release/2.9.x"
@@ -426,8 +426,8 @@ async def test_cleanup_offers_the_checked_out_branch_only_when_parked(sandbox):
 
 
 async def test_org_jobs_and_clone_all(sandbox):
-    from gtnh_devenv_tools.github import OrgRepo
-    from gtnh_devenv_tools.models import CloneJob
+    from nh_workbench.github import OrgRepo
+    from nh_workbench.models import CloneJob
 
     sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/repo.git")
     st = await ops.scan_repo(sandbox.cfg, sandbox.work)

@@ -5,18 +5,18 @@ description: Read a spark report of a Minecraft 1.7.10 / GT New Horizons server 
 
 # Reading spark profiles
 
-Run everything through the launcher in this skill's folder (it finds gtnh-devenv-tools on its own):
+Run everything through the launcher in this skill's folder (it finds NH Workbench on its own):
 
 ```
 uv run --no-project "<this skill's folder>/spark.py" summary https://spark.lucko.me/XXXXXXXXXX
 ```
 
-The arguments are those of `gtnh-dev tools spark`; `--help` after any command lists the options.
+The arguments are those of `nh-workbench tools spark`; `--help` after any command lists the options.
 
 ## First use
 
 If the launcher prints a note that no local checkout is set, it is running the published version from GitHub,
-which works. Ask the user once whether they have a gtnh-devenv-tools checkout to use instead (it may have newer
+which works. Ask the user once whether they have an NH Workbench checkout to use instead (it may have newer
 changes); if they give a path, save it, and do not ask again in later conversations:
 
 ```

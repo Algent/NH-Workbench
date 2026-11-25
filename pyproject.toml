@@ -1,5 +1,5 @@
 [project]
-name = "gtnh-devenv-tools"
+name = "nh-workbench"
 version = "0.1.0"
 description = "Keep track of many GTNH mod checkouts: fetch, safe pull, branches and PR status"
 readme = "README.md"
@@ -12,7 +12,9 @@ dependencies = [
 ]
 
 [project.scripts]
-gtnh-dev = "gtnh_devenv_tools.cli:app"
+nh-workbench = "nh_workbench.cli:app"
+nhwb = "nh_workbench.cli:app"
+gtnh-dev = "nh_workbench.cli:app"  # the old name, kept for existing setups
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
