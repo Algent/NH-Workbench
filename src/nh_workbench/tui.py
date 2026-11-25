@@ -262,34 +262,45 @@ def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
     return Group(*lines, table)
 
 
-def review_detail(item: ReviewItem, local: RepoState | None) -> RenderableType:
+def review_detail(
+    item: ReviewItem, local: RepoState | None, k: dict[str, str] = keys.DEFAULT_LETTERS
+) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
-    hint = Text(f"{item.pr.url}   Enter or w: open in the browser   t: show or hide team requests", "dim")
+    hint = f"Enter or {k['open_web']}: open in the browser   {k['toggle_team']}: show or hide team requests"
+    hint = Text(f"{item.pr.url}   {hint}", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
-def org_detail(item: ReviewItem, mark: str, local: RepoState | None) -> RenderableType:
+def org_detail(
+    item: ReviewItem, mark: str, local: RepoState | None, k: dict[str, str] = keys.DEFAULT_LETTERS
+) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
     concern = {"author": "your PR", "requested": "your review is requested", "reviewed": "you reviewed it"}
     where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
     if mark:
         where = Text.assemble((concern[mark], "bold"), "   ", where)
-    hint = Text(f"{item.pr.url}   Enter or w: open   c: check out   t: drafts   v: show only   r: search again", "dim")
+    hint = (
+        f"Enter or {k['open_web']}: open   {k['checkout']}: check out   {k['toggle_drafts']}: drafts   "
+        f"{k['pr_filters']}: show only   {k['reload_org']}: search again"
+    )
+    hint = Text(f"{item.pr.url}   {hint}", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
-def mine_detail(item: ReviewItem, local: tuple[RepoState, str] | None) -> RenderableType:
+def mine_detail(
+    item: ReviewItem, local: tuple[RepoState, str] | None, k: dict[str, str] = keys.DEFAULT_LETTERS
+) -> RenderableType:
     head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr))
     if local:
         where = Text(f"branch {local[1]} in {local[0].path}", "green")
     else:
         where = Text("branch not checked out here", "dim")
-    hint = Text(f"{item.pr.url}   Enter or w: open in the browser", "dim")
+    hint = Text(f"{item.pr.url}   Enter or {k['open_web']}: open in the browser", "dim")
     return Group(head, Text(item.pr.title), where, hint)
 
 
-def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
+def pack_detail(entry: PackEntry, info: PackInfo, k: dict[str, str] = keys.DEFAULT_LETTERS) -> RenderableType:
     release = f"{info.release or 'release'} {entry.release_version or '—'}"
     versions = f"  {entry.kind}  daily {entry.version or '—'}  {release}"
     lines = [render.pack_header(info), Text.assemble((entry.name, "bold"), versions)]
@@ -299,7 +310,8 @@ def pack_detail(entry: PackEntry, info: PackInfo) -> RenderableType:
     if entry.local:
         lines.append(Text(f"checked out at {entry.local.path}", "green"))
     elif entry.status == "missing":
-        lines.append(Text(f"press c to clone {entry.repo}" + (f" @ {entry.branch}" if entry.branch else ""), "yellow"))
+        at = f" @ {entry.branch}" if entry.branch else ""
+        lines.append(Text(f"press {k['clone']} to clone {entry.repo}{at}", "yellow"))
     return Group(*lines)
 
 
@@ -1031,15 +1043,16 @@ class RepoApp(App[None]):
             else:
                 detail.update(Text("nothing selected", "dim"))
             return
+        k = keys.letters(self.cfg)
         entry, st, review = self._selected_entry(), self._selected_repo(), self._selected_review()
         if review and self.view == "mine":
-            detail.update(mine_detail(review, self._local_branch(review)))
+            detail.update(mine_detail(review, self._local_branch(review), k))
         elif review and self.view == "org":
-            detail.update(org_detail(review, self._org_mark(review), st))
+            detail.update(org_detail(review, self._org_mark(review), st, k))
         elif review:
-            detail.update(review_detail(review, st))
+            detail.update(review_detail(review, st, k))
         elif entry and self.pack_info:
-            detail.update(pack_detail(entry, self.pack_info))
+            detail.update(pack_detail(entry, self.pack_info, k))
         elif st:
             detail.update(repo_detail(st, self.pack_info))
         else:
@@ -1451,6 +1464,7 @@ class RepoApp(App[None]):
         if not self._save_setting(("keys", action_id), value, rescan=False, quiet=True):
             return "Could not save it"
         self.set_keymap(keys.letters(self.cfg))
+        self._update_detail()
         return None
 
     async def _purge_jars(self) -> None:
@@ -1627,7 +1641,7 @@ class RepoApp(App[None]):
         if not await self.push_screen_wait(ConfirmScreen(f"Switch {len(candidates)} repos back to main?", body)):
             return
         if await self._batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
-            self.notify("Switched. Press d to delete the merged branches.")
+            self.notify(f"Switched. Press {keys.hint(self.cfg, 'cleanup')} to delete the merged branches.")
 
     @work(group="checkout")
     async def action_checkout(self) -> None:

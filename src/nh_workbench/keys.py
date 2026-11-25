@@ -47,6 +47,7 @@ ACTIONS = [
     KeyAction("quit", "Quit", "q", "Ctrl+Q", shown_as="-"),
 ]
 BY_ID = {a.id: a for a in ACTIONS}
+DEFAULT_LETTERS = {a.id: a.letter for a in ACTIONS}
 # Taken by keys that cannot be rebound: Tab and Esc in both UIs, Ctrl+Tab to change tabs in the desktop UI.
 FIXED_SHORTCUTS = {"Ctrl+Tab", "Ctrl+Shift+Tab", "Tab", "Shift+Tab", "Esc", "Ctrl+C"}
 

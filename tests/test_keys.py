@@ -29,3 +29,15 @@ def test_keys_are_read_from_the_config(tmp_path):
     path.write_text("[keys]\nfetch = 'g'\n[shortcuts]\nquit = ''\n")
     cfg = config.load(path=path)
     assert keys.letters(cfg)["fetch"] == "g" and keys.shortcuts(cfg)["quit"] == ""
+
+
+def test_detail_hints_name_the_current_keys():
+    from nh_workbench.models import PackEntry, PackInfo, PrInfo, ReviewItem
+    from nh_workbench.tui import org_detail, pack_detail
+
+    letters = keys.letters(config.Config(root=Path("."), keys={"open_web": "b", "clone": "k"}))
+    pr = PrInfo(1, "OPEN", False, None, None, "", "https://example.invalid/pull/1", "PR 1")
+    hint = org_detail(ReviewItem("o/m", pr, "bob", None, True), "", None, letters).renderables[-1].plain
+    assert "Enter or b: open   c: check out" in hint
+    entry = PackEntry("Missing", "github", "1", repo="o/m")
+    assert pack_detail(entry, PackInfo(entries=[entry]), letters).renderables[-1].plain == "press k to clone o/m"

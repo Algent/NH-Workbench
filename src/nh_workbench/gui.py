@@ -1494,15 +1494,15 @@ class MainWindow(QMainWindow):
         self._show_actions()  # Open in IntelliJ on a PR depends on its repo being here
         st, entry, item = self._selected(), self._selected_entry(), self._selected_pr()
         if item and self._view() == "mine":
-            content = mine_detail(item, local_branch(item, self.model.rows))
+            content = mine_detail(item, local_branch(item, self.model.rows), self.letters)
         elif item and self._view() == "org":
-            content = org_detail(item, self._org_mark(item), repo_for(item, self.model.rows))
+            content = org_detail(item, self._org_mark(item), repo_for(item, self.model.rows), self.letters)
         elif item:
-            content = review_detail(item, repo_for(item, self.model.rows))
+            content = review_detail(item, repo_for(item, self.model.rows), self.letters)
         elif st:
             content = repo_detail(st, self.wb.pack_info)
         elif entry and self.wb.pack_info:
-            content = pack_detail(entry, self.wb.pack_info)
+            content = pack_detail(entry, self.wb.pack_info, self.letters)
         elif self._selected_tool():
             tool = self.tools.current()
             status = tool_status(tool[0], self.cfg, self.pack.source.rows, self.model.rows)
@@ -1607,6 +1607,7 @@ class MainWindow(QMainWindow):
         self._notify(f"Saved to {path}")
         if any(keys[0] in ("keys", "shortcuts") for keys, _ in changes):
             self._apply_keys()
+            self._update_detail()
         if any(keys[0] in ("root", "repos") for keys, _ in changes):  # other repos, or other settings for them
             self._rescan()
         return True
