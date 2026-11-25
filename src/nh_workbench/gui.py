@@ -1937,7 +1937,7 @@ def run(cfg: Config, root_override: Path | None = None) -> int:
 
 
 def main() -> None:
-    """Entry point of the nh-workbench-desktop launcher (no console window on Windows)."""
+    """Entry point of nh-workbench-desktop and the desktop launchers: errors show in a window, not a console."""
     if config.move_old_dirs():  # as the CLI does: the tool was called gtnh-devenv-tools before
         skill.refresh_installed()
     try:
@@ -1948,3 +1948,7 @@ def main() -> None:
         app.quit()
         raise SystemExit(2) from e
     raise SystemExit(run(cfg))
+
+
+if __name__ == "__main__":  # python -m nh_workbench.gui, as the desktop launchers start it
+    main()
