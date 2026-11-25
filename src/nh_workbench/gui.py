@@ -25,6 +25,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QPoint,
     QRectF,
     QSize,
     QSortFilterProxyModel,
@@ -1004,6 +1005,13 @@ class HistoryMenu(QMenu):
         holder = QWidgetAction(self)
         holder.setDefaultWidget(self.list)
         self.addAction(holder)
+        self.anchor: QWidget | None = None  # opens above it, right edges lined up: the button sits in a corner
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self.anchor is not None:  # Qt puts a button's menu below it, off the window from the status bar
+            corner = self.anchor.mapToGlobal(QPoint(self.anchor.width(), 0))
+            self.move(corner.x() - self.width(), corner.y() - self.height())
 
     def fill(self, messages: list[tuple[str, str, bool]], warning: str, size: QSize) -> None:
         self.list.clear()
@@ -1291,6 +1299,7 @@ class MainWindow(QMainWindow):
         self.history_button.setToolTip("Earlier messages")
         self.history_button.setMenu(self.history_menu)
         self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.history_menu.anchor = self.history_button
         self.statusBar().addPermanentWidget(self.history_button)
         self._update_history_button()
         self._show_actions()

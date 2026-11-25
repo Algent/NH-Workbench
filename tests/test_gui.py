@@ -717,3 +717,19 @@ def test_settings_shows_the_pack_data(window):
     loaded(window)
     labels = [label.text() for label in SettingsDialog(window).findChildren(gui.QLabel)]
     assert any("Release" in text and "2.9.0" in text for text in labels)
+
+
+def test_history_opens_above_its_button(window):
+    from PySide6.QtCore import QPoint
+
+    window.resize(900, 500)
+    window.show()
+    wait_for(window.isVisible)
+    window.history_menu.aboutToShow.emit()
+    window.history_menu.popup(QPoint(0, 0))  # wherever Qt puts it, it moves above the button
+    wait_for(window.history_menu.isVisible)
+    button = window.history_button
+    corner = button.mapToGlobal(QPoint(button.width(), 0))
+    menu = window.history_menu.geometry()
+    assert menu.right() + 1 == corner.x() and 0 <= corner.y() - (menu.bottom() + 1) <= 4  # above, a frame apart
+    window.history_menu.close()
