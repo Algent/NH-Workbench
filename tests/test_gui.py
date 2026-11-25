@@ -355,3 +355,65 @@ def test_spark_window(window, monkeypatch):
         assert asked[1] == ("a.B.tick", True)
     finally:
         sw.close()
+
+
+def test_updates_keep_the_selected_line(window):
+    loaded(window)
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
+    window.pack.selectRow(window.pack.proxy.rowCount() - 1)
+    assert window.pack.current().name == "Thaumcraft"
+    closed = PackEntry("Thaumcraft", "external", "4.3", closed=True)
+    window.pack.source.set_rows([PackEntry("Aaa", "github", "1", repo="o/a"), closed])  # one new, one gone
+    assert [window.pack.proxy.index(r, 0).data() for r in range(2)] == ["Aaa", "Thaumcraft"]
+    assert window.pack.current() is closed
+
+
+def test_end_of_a_batch_keeps_a_newer_message(window):
+    loaded(window)
+    window._progress("Fetching", 0, 1)
+    window._notify("Searching all open PRs of o, this takes a while...")
+    window._progress("", 0, 0)
+    assert window.message.text().startswith("Searching")
+    window._progress("Fetching", 0, 1)
+    window._progress("", 0, 0)
+    assert window.message.text() == "1 repos"
+
+
+def test_closing_the_window_closes_the_spark_window(window):
+    window._open_tool("spark")
+    assert window.spark_window.isVisible()
+    window.close()
+    assert not window.spark_window.isVisible()
+
+
+def test_run_saves_the_picked_folder(sandbox, monkeypatch):
+    saved = []
+
+    class App:
+        def setApplicationName(self, name): ...
+        def setStyle(self, style): ...
+        def exec(self):
+            return 0
+
+    class Window:
+        def __init__(self, cfg): ...
+        def show(self): ...
+
+    monkeypatch.setattr(gui, "QApplication", type("Qa", (), {"instance": staticmethod(App)}))
+    monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: str(sandbox.root))
+    monkeypatch.setattr(gui, "MainWindow", Window)
+    monkeypatch.setattr(gui.config, "save_setting", lambda keys, value: saved.append((keys, value)))
+    cfg = gui.Config(root=sandbox.root / "missing")
+    assert gui.run(cfg) == 0
+    assert cfg.root == sandbox.root and saved == [(("root",), str(sandbox.root))]
+
+
+def test_desktop_launcher_moves_the_old_dirs(sandbox, monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(gui.config, "move_old_dirs", lambda: [("old", "new")])
+    monkeypatch.setattr(gui.skill, "refresh_installed", lambda: refreshed.append(True))
+    monkeypatch.setattr(gui.config, "load", lambda: sandbox.cfg)
+    monkeypatch.setattr(gui, "run", lambda cfg: 0)
+    with pytest.raises(SystemExit):
+        gui.main()
+    assert refreshed == [True]

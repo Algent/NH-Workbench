@@ -449,6 +449,8 @@ class AsyncLoop:
 
     def stop(self) -> None:
         """Cancel what is still running (a fetch when the window closes), let it clean up, then stop."""
+        if not self.loop.is_running():  # stopped already: the window was closed before
+            return
 
         async def shutdown() -> None:
             tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
@@ -477,6 +479,17 @@ class Bridge(QObject):
 # --- the tables -----------------------------------------------------------------
 
 
+def _runs(rows: list[int]) -> list[tuple[int, int]]:
+    """Sorted row numbers as (first, last) runs of consecutive ones."""
+    runs: list[tuple[int, int]] = []
+    for row in rows:
+        if runs and runs[-1][1] == row - 1:
+            runs[-1] = (runs[-1][0], row)
+        else:
+            runs.append((row, row))
+    return runs
+
+
 class RichModel(QAbstractTableModel):
     """Rows of objects shown as Rich text cells; subclasses say how to render, key and sort them."""
 
@@ -502,10 +515,30 @@ class RichModel(QAbstractTableModel):
         return [(t.plain, text_html(t, self.theme)) for t in self.cells(obj)]
 
     def set_rows(self, rows: list) -> None:
-        self.beginResetModel()
-        self.rows = list(rows)
-        self._cells = [self._render(obj) for obj in self.rows]
-        self.endResetModel()
+        """Update in place rather than reset, so the views keep their selection and scroll position.
+
+        The order of the rows here does not matter: the views sort them.
+        """
+        new = {self.key(obj): obj for obj in rows}
+        gone = [i for i, obj in enumerate(self.rows) if self.key(obj) not in new]
+        for first, last in reversed(_runs(gone)):
+            self.beginRemoveRows(QModelIndex(), first, last)
+            del self.rows[first : last + 1], self._cells[first : last + 1]
+            self.endRemoveRows()
+        at = {self.key(obj): i for i, obj in enumerate(self.rows)}
+        added = []
+        for key, obj in new.items():
+            if key in at:
+                self.rows[at[key]], self._cells[at[key]] = obj, self._render(obj)
+            else:
+                added.append(obj)
+        if self.rows:  # one signal for all: the views sort and filter the rows again
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(self.columns) - 1))
+        if added:
+            self.beginInsertRows(QModelIndex(), len(self.rows), len(self.rows) + len(added) - 1)
+            self.rows += added
+            self._cells += [self._render(obj) for obj in added]
+            self.endInsertRows()
 
     def set_headers(self, labels: dict[str, str]) -> None:
         self.headers = [labels.get(c, c) for c in self.columns]
@@ -766,15 +799,6 @@ class RichTable(QTableView):
         index = self.currentIndex()
         return index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
 
-    def select_key(self, key: object) -> bool:
-        for row in range(self.proxy.rowCount()):
-            index = self.proxy.index(row, 0)
-            if self.source.key(index.data(Qt.ItemDataRole.UserRole)) == key:
-                self.setCurrentIndex(index)
-                self.selectRow(row)
-                return True
-        return False
-
     def keyPressEvent(self, event) -> None:
         plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
         if plain and event.text().isalpha() and self.on_letter(event.text().lower()):
@@ -861,6 +885,7 @@ class MainWindow(QMainWindow):
 
     def _build(self) -> None:
         self.running = ""  # label of the batch in progress
+        self.progress_text = ""  # what the progress put in the status bar, replaced when it ends
         bar = QToolBar("Actions")
         bar.setMovable(False)
         self.addToolBar(bar)
@@ -1013,6 +1038,8 @@ class MainWindow(QMainWindow):
         future.add_done_callback(done)
 
     def closeEvent(self, event) -> None:
+        if self.spark_window is not None:  # a window of its own: it would outlive the loop it runs on
+            self.spark_window.close()
         self.loop.stop()
         super().closeEvent(event)
 
@@ -1031,11 +1058,10 @@ class MainWindow(QMainWindow):
             loaded.append((self.tables[key], prs.get(key, [])))
         first_rows = []
         for table, rows in loaded:
-            current = table.current()
             if rows and not table.source.rows:
                 first_rows.append(table)
-            table.source.set_rows(rows)
-            if not (current is not None and table.select_key(table.source.key(current))) and table.proxy.rowCount():
+            table.source.set_rows(rows)  # in place: the selected line stays selected unless it is gone
+            if not table.currentIndex().isValid() and table.proxy.rowCount():
                 table.selectRow(0)
         self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
         self._refresh_org()
@@ -1047,15 +1073,17 @@ class MainWindow(QMainWindow):
             self._busy(False)
             self.model.unmark()
             self.progress.hide()
-            if self.message.text().endswith("..."):
+            if self.progress_text and self.message.text() == self.progress_text:  # not a message shown since
                 self.message.setText(f"{len(self.model.rows)} repos")
+            self.progress_text = ""
             if self._view() == "tools":  # what a tool would act on may have changed
                 self._update_detail()
             return
         self.progress.setMaximum(total)
         self.progress.setValue(done)
         self.progress.show()
-        self.message.setText(f"{label}...")
+        self.progress_text = f"{label}..."
+        self._notify(self.progress_text)
 
     def _notify(self, text: str, warning: bool = False) -> None:
         self.message.setText(text)
@@ -1455,6 +1483,10 @@ def run(cfg: Config) -> int:
         if not folder:
             return 1
         cfg.root = Path(folder)
+        try:
+            config.save_setting(("root",), folder)
+        except config.ConfigError as e:
+            QMessageBox.warning(None, "NH Workbench", f"Could not save the folder, it is asked again next time: {e}")
     window = MainWindow(cfg)
     window.show()
     return app.exec()
@@ -1462,6 +1494,8 @@ def run(cfg: Config) -> int:
 
 def main() -> None:
     """Entry point of the nh-workbench-desktop launcher (no console window on Windows)."""
+    if config.move_old_dirs():  # as the CLI does: the tool was called gtnh-devenv-tools before
+        skill.refresh_installed()
     try:
         cfg = config.load()
     except config.ConfigError as e:
