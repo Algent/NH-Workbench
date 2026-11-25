@@ -21,7 +21,7 @@ jobs:
       - name: Libraries Qt needs on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
-      - run: uv sync --locked --extra desktop  # without it, the desktop UI's tests are skipped
+      - run: uv sync --locked --extra desktop --extra web  # without desktop, its UI tests are skipped
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest

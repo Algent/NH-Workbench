@@ -15,6 +15,7 @@
 | `nh-workbench clone NAME...` | Clone pack mods into the root |
 | `nh-workbench jars` | Download the jars of closed-source pack mods |
 | `nh-workbench gui` | Open the [desktop UI](Desktop-UI) (needs `uv sync --extra desktop`) |
+| `nh-workbench web [--port N] [--no-browser]` | Show the UI in a browser tab (needs `uv sync --extra web`) |
 | `nh-workbench tools spark ...` | Read a spark profile, see [spark profiles](Spark-Profiles) |
 | `nh-workbench tools install-skill [--for claude\|codex\|opencode\|all]` | Install the spark-profile skill for coding agents |
 

@@ -130,10 +130,9 @@ async def test_repo_menu_acts_on_one_repo(sandbox, offline):
 
 
 async def test_reviews_tab_opens_pr_in_browser(sandbox, offline, monkeypatch):
-    from nh_workbench import tui
 
     opened = []
-    monkeypatch.setattr(tui.webbrowser, "open", opened.append)
+    monkeypatch.setattr("webbrowser.open", opened.append)
 
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -320,10 +319,8 @@ async def test_footer_follows_the_view(sandbox, offline):
 async def test_my_prs_tab(sandbox, offline, monkeypatch):
     from rich.console import Console
 
-    from nh_workbench import tui
-
     opened = []
-    monkeypatch.setattr(tui.webbrowser, "open", opened.append)
+    monkeypatch.setattr("webbrowser.open", opened.append)
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
         await settle(app, pilot)

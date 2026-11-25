@@ -1,6 +1,5 @@
 import asyncio
 import time
-import webbrowser
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1472,7 +1471,7 @@ class RepoApp(App[None]):
     def action_open_web(self) -> None:
         review = self._selected_review()
         if review:
-            webbrowser.open(review.pr.url)
+            self.open_url(review.pr.url)  # also works when the UI is shown in a browser tab
         else:
             self._open_web(self._selected_repo(), self._selected_entry())
 
@@ -1484,7 +1483,7 @@ class RepoApp(App[None]):
         elif entry:
             url = entry.web_url
         if url:
-            webbrowser.open(url)
+            self.open_url(url)
 
     @work(group="dialog")
     async def action_cleanup(self) -> None:

@@ -25,6 +25,9 @@ nh-workbench-desktop = "nh_workbench.gui:main"  # errors in a window; for no con
 desktop = [
     "pyside6-essentials>=6.12.0",
 ]
+web = [
+    "textual-serve>=1.1.3",
+]
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]

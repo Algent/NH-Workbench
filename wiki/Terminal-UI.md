@@ -3,6 +3,9 @@
 Started by `nh-workbench` (or `nhwb`) without a command, or by the `nh-workbench.cmd` / `nh-workbench.sh`
 launchers. The same in a window: [Desktop UI](Desktop-UI).
 
+`nh-workbench web` shows the same UI in a browser tab instead (install it with `uv sync --extra web`). Each tab
+runs its own copy of the UI on this computer; links open in the browser, the IDE and folders open locally.
+
 ![The terminal UI on the All tab](images/terminal-ui.svg)
 
 ## Tabs

@@ -41,7 +41,7 @@ def main(
         err.print(f"[bold red]{e}")
         raise typer.Exit(2) from e
     # The UI asks for the folder itself; commands need it up front.
-    if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools", "gui"):
+    if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools", "gui", "web"):
         err.print(f'[bold red]Folder with your checkouts not found: "{cfg.root}"')
         err.print(
             f'Pass --root PATH, set root in "{config.config_path()}",'
@@ -436,6 +436,36 @@ def gui(ctx: typer.Context) -> None:
         raise typer.Exit(2) from e
     params = ctx.find_root().params
     raise typer.Exit(desktop.run(ctx.obj, params.get("root"), bool(params.get("verbose"))))
+
+
+@app.command()
+def web(
+    ctx: typer.Context,
+    port: Annotated[int, typer.Option("--port", help="Port to serve on.")] = 8740,
+    no_browser: Annotated[bool, typer.Option("--no-browser", help="Do not open the browser.")] = False,
+) -> None:
+    """Show the UI in a browser tab instead of the terminal (needs the web extra)."""
+    try:
+        from textual_serve.server import Server
+    except ImportError as e:
+        err.print("[bold red]The web UI needs textual-serve: uv sync --extra web")
+        raise typer.Exit(2) from e
+    import shlex
+    import subprocess
+    import threading
+    import webbrowser
+
+    # Each browser tab gets its own copy of the UI, started with this command.
+    args = [sys.executable, "-m", "nh_workbench"]
+    root = ctx.find_root().params.get("root")
+    if root:
+        args += ["--root", str(root)]
+    command = subprocess.list2cmdline(args) if sys.platform == "win32" else shlex.join(args)
+    url = f"http://localhost:{port}"
+    out.print(f"NH Workbench is at {url} (Ctrl+C to stop)")
+    if not no_browser:
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    Server(command, port=port, title="NH Workbench").serve()
 
 
 tools_app = typer.Typer(help="Tools that do not need the checkouts.", no_args_is_help=True)

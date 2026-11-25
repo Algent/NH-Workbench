@@ -24,6 +24,7 @@ Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.gi
 uv sync
 uv run nh-workbench          # terminal UI
 uv run --extra desktop nh-workbench gui   # desktop UI (installs Qt, about 100 MB)
+uv run --extra web nh-workbench web   # the same UI in a browser tab
 uv tool install -e .         # optional: puts `nh-workbench` and its short name `nhwb` on PATH
 ```
 
