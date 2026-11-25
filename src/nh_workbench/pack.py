@@ -117,6 +117,8 @@ def _new_entry(name: str, kind: str, asset: dict, source: dict) -> PackEntry:
             url=asset.get("repo_url"),
         )
     repo, branch = parse_github_url(asset.get("external_url"))
+    if not repo:  # downloaded from elsewhere (CurseForge, a forum), but DAXXL may still know the source
+        repo, branch = parse_github_url(asset.get("repo_url"))
     return PackEntry(
         name=name,
         kind=kind,

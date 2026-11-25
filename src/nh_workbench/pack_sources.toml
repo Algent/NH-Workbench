@@ -125,9 +125,3 @@ closed = true
 
 ["Gravitation-Suite-old"]
 closed = true
-
-["Compact Kinetic Generators"]
-repo = "PinkaLulan/CompactKineticGenerators"
-branch = "master"
-status = "legacy"
-note = "No commits since 2016 apart from an MIT licence added in March 2026."

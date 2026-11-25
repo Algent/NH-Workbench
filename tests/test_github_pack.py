@@ -280,12 +280,18 @@ def test_pack_entries_and_local_matching():
             "Biomes O' Plenty": {"version": "2.1"},
             "Thaumcraft": {"version": "4.2"},
             "Mystery": {"version": "1"},
+            "CoFH Core": {"version": "3.1"},
         },
     }
     assets = [
         {"name": "GT5-Unofficial", "repo_url": "https://github.com/GTNewHorizons/GT5-Unofficial", "private": False},
         {"name": "UniMixins", "external_url": "https://github.com/LegacyModdingMC/UniMixins", "license": "MIT"},
         {"name": "Thaumcraft", "external_url": "https://www.curseforge.com/x", "license": "ARR"},
+        {
+            "name": "CoFH Core",
+            "external_url": "https://www.curseforge.com/y",
+            "repo_url": "https://github.com/CoFH/CoFHCore-1.12-Legacy/tree/1.7.10",
+        },
     ]
     sources = {"biomes o' plenty": {"repo": "Example/BoP", "branch": "1.7.10"}, "thaumcraft": {"closed": True}}
     release = {"github_mods": {"GT5-Unofficial": {"version": "5.08"}, "OldMod": {"version": "1.0"}}}
@@ -308,8 +314,10 @@ def test_pack_entries_and_local_matching():
         "Biomes O' Plenty": "missing",
         "Thaumcraft": "closed",
         "Mystery": "unknown",
+        "CoFH Core": "missing",
     }
     assert (entries["Biomes O' Plenty"].repo, entries["Biomes O' Plenty"].branch) == ("Example/BoP", "1.7.10")
+    assert (entries["CoFH Core"].repo, entries["CoFH Core"].branch) == ("CoFH/CoFHCore-1.12-Legacy", "1.7.10")
     assert pack.find(entries.values(), "unimixins") is entries["UniMixins"]
     assert pack.find(entries.values(), "bop") is entries["Biomes O' Plenty"]
 

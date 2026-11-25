@@ -48,5 +48,6 @@ disappear.
 
 ## Pack mods outside the org
 
-Their source repo and branch are known for most of them; add or override one under
+Their source repo and branch are known for most of them, from the GitHub links in DreamAssemblerXXL or from
+a list shipped with NH Workbench; add or override one under
 `[pack.sources."<mod name>"]`.
