@@ -22,7 +22,7 @@ Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.gi
 ```
 uv sync
 uv run nh-workbench          # terminal UI
-uv run --extra desktop nh-workbench gui   # desktop UI, a preview: repo tabs, repo menu, fetch, pull
+uv run --extra desktop nh-workbench gui   # desktop UI, a preview: repo tabs, Pack tab, fetch, pull, clone
 uv tool install -e .         # optional: puts `nh-workbench` and its short name `nhwb` on PATH
 ```
 

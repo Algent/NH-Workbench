@@ -1,4 +1,4 @@
-"""Desktop UI on Qt (PySide6), a proof of concept: the repo tabs, the repo menu, fetch and pull.
+"""Desktop UI on Qt (PySide6), a proof of concept: the repo tabs, the Pack tab, the menus, fetch, pull and clone.
 
 The git, GitHub and pack work is the code the terminal UI runs. It runs on an asyncio loop in a background
 thread; results come back to the Qt thread through a signal. Cells and the detail pane reuse the Rich text the
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -52,20 +53,32 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from rich.console import Console, RenderableType
+from rich.segment import Segment
 from rich.terminal_theme import TerminalTheme
 from rich.text import Text
 
-from . import config, github, ops, pack, proc
+from . import config, github, ops, pack, proc, render
 from .config import Config
-from .models import PackInfo, RepoState
-from .tui import HEADER_SORT, REPO_COLUMNS, SORTS, VIEWS, repo_actions, repo_cells, repo_detail
+from .models import PackEntry, PackInfo, RepoState
+from .tui import (
+    HEADER_SORT,
+    PACK_COLUMNS,
+    REPO_COLUMNS,
+    SORTS,
+    VIEWS,
+    pack_detail,
+    repo_actions,
+    repo_cells,
+    repo_detail,
+)
 
 log = logging.getLogger(__name__)
 
 RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
-REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]  # the PR, pack and tools tabs come later
+REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
+VIEW_KEYS = [*REPO_VIEWS, "pack"]  # the PR and Tools tabs come later
 DONE_ACTIONS = {"fetch", "pull", "main", "ide", "web", "folder"}  # repo menu entries this preview handles
 
 # ANSI colors the Rich styles map to, picked to read well on a light or a dark window.
@@ -100,7 +113,10 @@ def _blend(a: tuple[int, int, int], b: tuple[int, int, int]) -> str:
 def text_html(text: Text, theme: TerminalTheme) -> str:
     """One line of Rich text as Qt rich text (colors, bold, italic, dim)."""
     parts = []
-    for seg in text.render(_CELLS):
+    segments = list(text.render(_CELLS))
+    if not text.spans and text.style:  # render() only applies the base style when there are spans
+        segments = [Segment(text.plain, _CELLS.get_style(text.style))]
+    for seg in segments:
         chunk = html.escape(seg.text).replace(" ", "&nbsp;")
         style = seg.style
         if not style or not chunk:
@@ -144,7 +160,7 @@ class Workbench:
         self,
         cfg: Config,
         on_repo: Callable[[RepoState], None],
-        on_change: Callable[[list[RepoState]], None],
+        on_change: Callable[[list[RepoState], list[PackEntry]], None],
         on_progress: Callable[[str, int, int], None],
         notify: Callable[[str, bool], None],
     ) -> None:
@@ -156,7 +172,8 @@ class Workbench:
         self.busy = ""
 
     def _changed(self) -> None:
-        self.on_change(sorted(self.states.values(), key=ops.by_repo))
+        entries = list(self.pack_info.entries) if self.pack_info else []
+        self.on_change(sorted(self.states.values(), key=ops.by_repo), entries)
 
     async def load(self, fetch: bool = False) -> None:
         worker = ops.fetch_repo if fetch else ops.scan_repo
@@ -215,13 +232,33 @@ class Workbench:
             await self._relink()
             self._changed()
 
-    async def _load_pack(self) -> None:
+    async def _load_pack(self, force: bool = False) -> None:
         try:
-            self.pack_info = await pack.load(self.cfg)
+            self.pack_info = await pack.load(self.cfg, force)
         except pack.PackError as e:
             self.notify(str(e), True)
         await self._relink()
         self._changed()
+
+    async def refresh_pack(self) -> None:
+        """Download the pack data again instead of using the copy cached for an hour."""
+        try:
+            await self._load_pack(force=True)
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def clone(self, entry: PackEntry) -> None:
+        """Clone a pack mod into the root, then scan it so it shows up with the other checkouts."""
+        try:
+            res = await pack.clone(entry, self.cfg.root, self.cfg.clone_protocol)
+            if not res.ok:
+                self.notify(f"{entry.name}: {res.message}", True)
+                return
+            job = pack.clone_job(entry, self.cfg.root, self.cfg.clone_protocol)
+            await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), [job.dest])
+            self.notify(f"Cloned {entry.repo} into {job.dest}", False)
+        finally:
+            self.on_progress("", 0, 0)
 
     async def _relink(self, paths: list[Path] | None = None) -> None:
         if not self.pack_info:
@@ -262,22 +299,101 @@ class Bridge(QObject):
         fn()
 
 
-# --- the table ------------------------------------------------------------------
+# --- the tables -----------------------------------------------------------------
 
 
-class RepoModel(QAbstractTableModel):
+class RichModel(QAbstractTableModel):
+    """Rows of objects shown as Rich text cells; subclasses say how to render, key and sort them."""
+
+    columns: tuple[str, ...] = ()
+
     def __init__(self, theme: TerminalTheme) -> None:
         super().__init__()
         self.theme = theme
-        self.rows: list[RepoState] = []
+        self.headers = list(self.columns)
+        self.rows: list = []
         self._cells: list[list[tuple[str, str]]] = []  # (plain, html) per column
+
+    def cells(self, obj) -> list[Text]:
+        raise NotImplementedError
+
+    def key(self, obj) -> object:
+        raise NotImplementedError
+
+    def sort_key(self, obj, column: str, plain: str) -> object:
+        return plain.lower()
+
+    def _render(self, obj) -> list[tuple[str, str]]:
+        return [(t.plain, text_html(t, self.theme)) for t in self.cells(obj)]
+
+    def set_rows(self, rows: list) -> None:
+        self.beginResetModel()
+        self.rows = list(rows)
+        self._cells = [self._render(obj) for obj in self.rows]
+        self.endResetModel()
+
+    def set_headers(self, labels: dict[str, str]) -> None:
+        self.headers = [labels.get(c, c) for c in self.columns]
+        self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self.columns) - 1)
+
+    def update_row(self, obj) -> None:
+        key = self.key(obj)
+        for i, old in enumerate(self.rows):
+            if self.key(old) == key:
+                self.rows[i], self._cells[i] = obj, self._render(obj)
+                self.dataChanged.emit(self.index(i, 0), self.index(i, len(self.columns) - 1))
+                return
+        self.beginInsertRows(QModelIndex(), len(self.rows), len(self.rows))
+        self.rows.append(obj)
+        self._cells.append(self._render(obj))
+        self.endInsertRows()
+
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
+        return 0 if parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
+        return 0 if parent.isValid() else len(self.columns)
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.headers[section]
+        return None
+
+    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        obj = self.rows[index.row()]
+        plain, rich = self._cells[index.row()][index.column()]
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
+            return plain
+        if role == HTML_ROLE:
+            return rich
+        if role == SORT_ROLE:
+            return self.sort_key(obj, self.columns[index.column()], plain)
+        if role == Qt.ItemDataRole.UserRole:
+            return obj
+        return None
+
+
+class RepoModel(RichModel):
+    columns = REPO_COLUMNS
+
+    def __init__(self, theme: TerminalTheme) -> None:
+        super().__init__(theme)
         self.pending: dict[Path, str] = {}  # repos a batch has not reached yet, and what it is doing
 
-    def _render(self, st: RepoState) -> list[tuple[str, str]]:
+    def cells(self, st: RepoState) -> list[Text]:
         cells = repo_cells(st)
         if st.path in self.pending:
             cells[RESULT] = Text(f"{self.pending[st.path].lower()}...", "dim italic")
-        return [(t.plain, text_html(t, self.theme)) for t in cells]
+        return cells
+
+    def key(self, st: RepoState) -> Path:
+        return st.path
+
+    def sort_key(self, st: RepoState, column: str, plain: str) -> object:
+        key = HEADER_SORT.get(column)
+        return SORTS[key][1](st) if key else plain.lower()
 
     def mark(self, paths: list[Path], label: str) -> None:
         """Show at once which repos a batch is about to work on."""
@@ -294,69 +410,34 @@ class RepoModel(QAbstractTableModel):
         if self.rows:
             self.dataChanged.emit(self.index(0, RESULT), self.index(len(self.rows) - 1, RESULT))
 
-    def set_rows(self, states: list[RepoState]) -> None:
-        self.beginResetModel()
-        self.rows = list(states)
-        self._cells = [self._render(st) for st in self.rows]
-        self.endResetModel()
-
     def update_row(self, st: RepoState) -> None:
         self.pending.pop(st.path, None)
-        for i, old in enumerate(self.rows):
-            if old.path == st.path:
-                self.rows[i], self._cells[i] = st, self._render(st)
-                self.dataChanged.emit(self.index(i, 0), self.index(i, len(REPO_COLUMNS) - 1))
-                return
-        self.beginInsertRows(QModelIndex(), len(self.rows), len(self.rows))
-        self.rows.append(st)
-        self._cells.append(self._render(st))
-        self.endInsertRows()
-
-    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
-        return 0 if parent.isValid() else len(self.rows)
-
-    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
-        return 0 if parent.isValid() else len(REPO_COLUMNS)
-
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return REPO_COLUMNS[section]
-        return None
-
-    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        st, column = self.rows[index.row()], REPO_COLUMNS[index.column()]
-        plain, rich = self._cells[index.row()][index.column()]
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
-            return plain
-        if role == HTML_ROLE:
-            return rich
-        if role == SORT_ROLE:
-            key = HEADER_SORT.get(column)
-            return SORTS[key][1](st) if key else plain.lower()
-        if role == Qt.ItemDataRole.UserRole:
-            return st
-        return None
+        super().update_row(st)
 
 
-class RepoFilter(QSortFilterProxyModel):
-    """The repo tabs (All, Off main, ...) and the name filter."""
+class PackModel(RichModel):
+    columns = PACK_COLUMNS
 
-    def __init__(self) -> None:
+    def cells(self, entry: PackEntry) -> list[Text]:
+        return render.pack_row(entry)
+
+    def key(self, entry: PackEntry) -> str:
+        return entry.name
+
+
+class RichFilter(QSortFilterProxyModel):
+    """Keeps the rows a tab and the name filter let through, and sorts by each model's own keys."""
+
+    def __init__(self, accept: Callable[[object], bool]) -> None:
         super().__init__()
-        self.view = "all"
-        self.needle = ""
+        self.accept = accept
 
-    def set_view(self, view: str, needle: str) -> None:
+    def refilter(self) -> None:
         self.beginFilterChange()
-        self.view, self.needle = view, needle.lower()
         self.endFilterChange()
 
     def filterAcceptsRow(self, row: int, parent: QModelIndex | QPersistentModelIndex) -> bool:
-        st = self.sourceModel().rows[row]
-        keep = VIEWS[self.view][1]
-        return bool(keep and keep(st)) and self.needle in st.name.lower()
+        return self.accept(self.sourceModel().rows[row])
 
     def lessThan(self, left: QModelIndex | QPersistentModelIndex, right: QModelIndex | QPersistentModelIndex) -> bool:
         return left.data(SORT_ROLE) < right.data(SORT_ROLE)
@@ -411,6 +492,51 @@ class RichDelegate(QStyledItemDelegate):
         return QSize(int(doc.idealWidth()) + 14, int(doc.size().height()) + 8)
 
 
+class RichTable(QTableView):
+    """A sortable, filterable table of a RichModel. Letter keys go to `on_letter`, like the TUI's keys."""
+
+    def __init__(self, model: RichModel, accept: Callable[[object], bool], row_height: int) -> None:
+        super().__init__()
+        self.source = model
+        self.proxy = RichFilter(accept)
+        self.proxy.setSourceModel(model)
+        self.on_letter: Callable[[str], bool] = lambda key: False
+        self.setModel(self.proxy)
+        self.setItemDelegate(RichDelegate(self))
+        self.setSortingEnabled(True)
+        self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setAlternatingRowColors(True)
+        self.setShowGrid(False)
+        self.setWordWrap(False)
+        self.verticalHeader().hide()
+        self.verticalHeader().setDefaultSectionSize(row_height)
+        self.horizontalHeader().setStretchLastSection(True)
+        self.horizontalHeader().setHighlightSections(False)
+        self.horizontalHeader().setResizeContentsPrecision(60)  # size columns from a sample: the pack has 250+ rows
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+    def current(self) -> object | None:
+        index = self.currentIndex()
+        return index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
+
+    def select_key(self, key: object) -> bool:
+        for row in range(self.proxy.rowCount()):
+            index = self.proxy.index(row, 0)
+            if self.source.key(index.data(Qt.ItemDataRole.UserRole)) == key:
+                self.setCurrentIndex(index)
+                self.selectRow(row)
+                return True
+        return False
+
+    def keyPressEvent(self, event) -> None:
+        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+        if plain and event.text().isalpha() and self.on_letter(event.text().lower()):
+            return
+        super().keyPressEvent(event)
+
+
 class KeyMenu(QMenu):
     """A menu whose entries also answer to their letter, like the terminal UI's menus."""
 
@@ -426,6 +552,29 @@ class KeyMenu(QMenu):
                 self.close()
                 return
         super().keyPressEvent(event)
+
+
+def pack_actions(entry: PackEntry, cfg: Config) -> list[tuple[str, str, str, str | None]]:
+    """(key, id, label, reason it is unavailable) for a pack mod, with the TUI's Pack tab keys."""
+    job = pack.clone_job(entry, cfg.root, cfg.clone_protocol)
+    no_clone = None
+    if entry.local:
+        no_clone = "already checked out"
+    elif entry.closed:
+        no_clone = "closed source"
+    elif not job:
+        no_clone = "source repository unknown"
+    elif job.dest.exists():
+        no_clone = f"{job.dest.name} already exists"
+    where = f"{entry.repo} @ {entry.branch}" if entry.branch else entry.repo or entry.name
+    on_web = "Open on GitHub" if entry.host == "github.com" and entry.repo else "Open web page"
+    return [
+        ("c", "clone", f"Clone {where}", no_clone),
+        ("w", "web", on_web, None if entry.web_url else "no web page known"),
+        ("e", "folder", "Open folder", None if entry.local else "not checked out"),
+        ("o", "ide", "Open in IntelliJ", None if entry.local and not cfg.ide_off else "not checked out"),
+        ("r", "refresh", "Download the pack data again", None),
+    ]
 
 
 # --- the window -----------------------------------------------------------------
@@ -487,43 +636,31 @@ class MainWindow(QMainWindow):
         self.tabs = QTabBar()
         self.tabs.setDrawBase(False)
         self.tabs.setExpanding(False)
-        for key in REPO_VIEWS:
+        for key in VIEW_KEYS:
             self.tabs.addTab(VIEWS[key][0])
         self.tabs.currentChanged.connect(lambda _: self._apply_view())
 
-        self.model = RepoModel(self.theme)
-        self.proxy = RepoFilter()
-        self.proxy.setSourceModel(self.model)
-        self.table = QTableView()
-        self.table.setModel(self.proxy)
-        self.table.setItemDelegate(RichDelegate(self.table))
-        self.table.setSortingEnabled(True)
-        self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.setShowGrid(False)
-        self.table.setWordWrap(False)
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(self.fontMetrics().height() + 10)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setHighlightSections(False)
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        menu_at = self.table.customContextMenuRequested
-        menu_at.connect(lambda pos: self._repo_menu(self.table.viewport().mapToGlobal(pos)))
-        self.table.activated.connect(lambda _: self._repo_menu())  # Enter or double click
-        self.table.selectionModel().currentRowChanged.connect(lambda *_: self._update_detail())
+        height = self.fontMetrics().height() + 10
+        self.repos = RichTable(RepoModel(self.theme), self._repo_shown, height)
+        self.pack = RichTable(PackModel(self.theme), self._entry_shown, height)
+        self.pack.on_letter = self._pack_letter
+        self.stack = QStackedWidget()
+        for table in (self.repos, self.pack):
+            table.customContextMenuRequested.connect(lambda pos, t=table: self._menu(t.viewport().mapToGlobal(pos)))
+            table.activated.connect(lambda _: self._menu())  # Enter or double click
+            table.selectionModel().currentRowChanged.connect(lambda *_: self._update_detail())
+            self.stack.addWidget(table)
 
         self.detail = QTextBrowser()
         self.detail.setOpenExternalLinks(True)
-        self.detail.setPlaceholderText("Select a repo")
+        self.detail.setPlaceholderText("Select a line")
 
         top = QWidget()
         layout = QVBoxLayout(top)
         layout.setContentsMargins(6, 4, 6, 0)
         layout.setSpacing(2)
         layout.addWidget(self.tabs)
-        layout.addWidget(self.table)
+        layout.addWidget(self.stack)
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(top)
         split.addWidget(self.detail)
@@ -538,6 +675,14 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.statusBar().addWidget(self.message, 1)
         self.statusBar().addPermanentWidget(self.progress)
+
+    @property
+    def model(self) -> RepoModel:
+        return self.repos.source
+
+    @property
+    def table(self) -> RichTable:
+        return self.pack if self._view() == "pack" else self.repos
 
     # --- plumbing between the two threads
 
@@ -567,15 +712,17 @@ class MainWindow(QMainWindow):
         if self._selected() and self._selected().path == st.path:
             self._update_detail()
 
-    def _all_loaded(self, states: list[RepoState]) -> None:
-        selected = self._selected()
-        self.model.set_rows(states)
+    def _all_loaded(self, states: list[RepoState], entries: list[PackEntry]) -> None:
+        for table, rows in ((self.repos, states), (self.pack, entries)):
+            current = table.current()
+            first = not table.source.rows
+            table.source.set_rows(rows)
+            if not (current is not None and table.select_key(table.source.key(current))) and table.proxy.rowCount():
+                table.selectRow(0)
+            if first and rows:
+                table.resizeColumnsToContents()
+        self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
         self._count_tabs()
-        if selected:
-            self._select(selected.path)
-        elif self.proxy.rowCount():
-            self.table.selectRow(0)
-        self.table.resizeColumnsToContents()
         self._update_detail()
 
     def _progress(self, label: str, done: int, total: int) -> None:
@@ -598,39 +745,52 @@ class MainWindow(QMainWindow):
     # --- view
 
     def _view(self) -> str:
-        return REPO_VIEWS[max(self.tabs.currentIndex(), 0)]
+        return VIEW_KEYS[max(self.tabs.currentIndex(), 0)]
+
+    def _needle(self) -> str:
+        return self.filter.text().lower()
+
+    def _repo_shown(self, st: RepoState) -> bool:
+        keep = VIEWS.get(self._view(), ("", None))[1]
+        return bool(keep and keep(st)) and self._needle() in st.name.lower()
+
+    def _entry_shown(self, entry: PackEntry) -> bool:
+        return self._needle() in entry.name.lower()
 
     def _apply_view(self) -> None:
-        self.proxy.set_view(self._view(), self.filter.text())
-        if not self._selected() and self.proxy.rowCount():
-            self.table.selectRow(0)
+        table = self.table
+        self.stack.setCurrentWidget(table)
+        table.proxy.refilter()
+        if table.current() is None and table.proxy.rowCount():
+            table.selectRow(0)
         self._update_detail()
 
     def _count_tabs(self) -> None:
-        for i, key in enumerate(REPO_VIEWS):
+        for i, key in enumerate(VIEW_KEYS):
             label, keep = VIEWS[key]
-            n = sum(1 for st in self.model.rows if keep and keep(st))
+            if key == "pack":
+                n = len(self.pack.source.rows)
+            else:
+                n = sum(1 for st in self.model.rows if keep and keep(st))
             self.tabs.setTabText(i, f"{label}  {n}")
 
     def _selected(self) -> RepoState | None:
-        index = self.table.currentIndex()
-        return index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
+        return self.repos.current() if self._view() != "pack" else None
 
-    def _select(self, path: Path) -> None:
-        for row in range(self.proxy.rowCount()):
-            index = self.proxy.index(row, 0)
-            if index.data(Qt.ItemDataRole.UserRole).path == path:
-                self.table.setCurrentIndex(index)
-                self.table.selectRow(row)
-                return
+    def _selected_entry(self) -> PackEntry | None:
+        return self.pack.current() if self._view() == "pack" else None
 
     def _update_detail(self) -> None:
-        st = self._selected()
-        if not st:
+        st, entry = self._selected(), self._selected_entry()
+        if st:
+            content = repo_detail(st, self.wb.pack_info)
+        elif entry and self.wb.pack_info:
+            content = pack_detail(entry, self.wb.pack_info)
+        else:
             self.detail.clear()
             return
         width = max(60, self.detail.viewport().width() // max(1, self.detail.fontMetrics().horizontalAdvance("M")))
-        self.detail.setHtml(rich_html(repo_detail(st, self.wb.pack_info), self.theme, width))
+        self.detail.setHtml(rich_html(content, self.theme, width))
 
     # --- actions
 
@@ -664,15 +824,26 @@ class MainWindow(QMainWindow):
         if self._start("Scanning", None) is not None:
             self.run(self.wb.load())
 
-    def _repo_menu(self, where=None) -> None:
-        st = self._selected()
-        if not st or st.error:
-            return
+    def _menu(self, where=None) -> None:
+        """The menu of the selected line: Enter, double click or right click."""
+        st, entry = self._selected(), self._selected_entry()
+        if st and not st.error:
+            actions = [
+                (key, id_, label, reason if id_ in DONE_ACTIONS else "not in the desktop preview yet")
+                for key, id_, label, reason in repo_actions(st, self.cfg.ide_off)
+            ]
+            chosen = self._ask(st.name, actions, where)
+            if chosen:
+                self._repo_action(chosen, st)
+        elif entry:
+            chosen = self._ask(entry.name, pack_actions(entry, self.cfg), where)
+            if chosen:
+                self._pack_action(chosen, entry)
+
+    def _ask(self, title: str, actions: list[tuple[str, str, str, str | None]], where=None) -> str | None:
         menu = KeyMenu(self)
-        menu.addSection(st.name)
-        for key, action_id, label, reason in repo_actions(st, self.cfg.ide_off):
-            if action_id not in DONE_ACTIONS:
-                reason = "not in the desktop preview yet"
+        menu.addSection(title)
+        for key, action_id, label, reason in actions:
             action = menu.addAction(f"{label}  ({reason})" if reason else label)
             action.setShortcut(QKeySequence(key))
             action.setEnabled(reason is None)
@@ -681,8 +852,34 @@ class MainWindow(QMainWindow):
             rect = self.table.visualRect(self.table.currentIndex())
             where = self.table.viewport().mapToGlobal(rect.bottomLeft())
         chosen = menu.exec(where) or menu.chosen
-        if chosen:
-            self._repo_action(chosen.data(), st)
+        return chosen.data() if chosen else None
+
+    def _pack_letter(self, key: str) -> bool:
+        """c, w, ... on the Pack tab act on the selected mod at once, as in the terminal UI."""
+        entry = self._selected_entry()
+        if not entry:
+            return False
+        for k, action_id, _, reason in pack_actions(entry, self.cfg):
+            if k == key:
+                if reason:
+                    self._notify(f"{entry.name}: {reason}", True)
+                else:
+                    self._pack_action(action_id, entry)
+                return True
+        return False
+
+    def _pack_action(self, action_id: str, entry: PackEntry) -> None:
+        if action_id == "clone":
+            if self._start(f"Cloning {entry.repo}", []) is not None:
+                self.run(self.wb.clone(entry))
+        elif action_id == "web":
+            if entry.web_url:
+                webbrowser.open(entry.web_url)
+        elif action_id == "refresh":
+            if self._start("Downloading the pack data", []) is not None:
+                self.run(self.wb.refresh_pack())
+        elif entry.local:  # open folder, open in the IDE: the same as for the checkout
+            self._repo_action(action_id, entry.local)
 
     def _repo_action(self, action_id: str, st: RepoState) -> None:
         if action_id == "fetch":
