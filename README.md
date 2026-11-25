@@ -69,3 +69,7 @@ uv run python scripts/gen_mod_packages.py "<2.9.0 client>/.minecraft/mods" "<2.9
 ```
 
 It prints the packages several mods share without a clear owner; decide those in its `OVERRIDES`.
+
+## License
+
+[LGPL-3.0](LICENSE).
