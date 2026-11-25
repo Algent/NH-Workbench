@@ -7,16 +7,16 @@ columns, resizable panes, right-click menus, and Textual's themes.
 
 ## Starting it
 
-It needs Qt, an optional extra of about 100 MB:
+It needs Qt, an optional extra of about 100 MB.
 
-```
-uv run --extra desktop nh-workbench gui
-```
+- `nh-workbench-desktop.cmd` (Windows) or `nh-workbench-desktop.sh` (Linux, macOS) in the checkout installs it
+  the first time, brings the environment up to date, and starts the desktop UI; on Windows no console window
+  stays open. Point a shortcut at it.
+- From a terminal: `uv run --extra desktop nh-workbench gui`. Once installed, `nh-workbench gui` (or `nhwb gui`),
+  where `--root PATH` works as for the other commands.
+- Installed as a tool, `uv tool install -e ".[desktop]"`, it is `nh-workbench-desktop` on the PATH.
 
-Once installed (`uv sync --extra desktop`, or `uv tool install -e ".[desktop]"`), `nh-workbench gui` (or
-`nhwb gui`) opens it, and so does `nh-workbench-desktop`, which on Windows starts without a console window: point
-a shortcut at it (`.venv\Scripts\nh-workbench-desktop.exe` in a checkout). `--root PATH` works as for the other
-commands.
+The terminal UI's launchers leave the extra installed, so both can be used from one checkout.
 
 ## Tabs and the detail pane
 

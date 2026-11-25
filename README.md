@@ -13,7 +13,7 @@ Keeps a folder full of GTNH mod checkouts under control:
 
 Works on Windows, Linux and macOS. Everything else is in the [wiki](https://github.com/Algent/NH-Workbench/wiki).
 
-![The terminal UI: one line per checkout with its branch, state, and pack versions, and details on the selected repo](wiki/images/terminal-ui.svg)
+<img src="wiki/images/terminal-ui.svg" width="800" alt="The terminal UI: one line per checkout with its branch, state, and pack versions, and details on the selected repo">
 
 ## Getting started
 
@@ -27,13 +27,14 @@ uv run --extra desktop nh-workbench gui   # desktop UI (installs Qt, about 100 M
 uv tool install -e .         # optional: puts `nh-workbench` and its short name `nhwb` on PATH
 ```
 
-The desktop UI is optional: `uv sync --extra desktop` installs it, then `nh-workbench gui` or
-`nh-workbench-desktop` (no console window on Windows) opens it. See [Desktop UI](https://github.com/Algent/NH-Workbench/wiki/Desktop-UI).
+`nh-workbench.cmd` (Windows) and `nh-workbench.sh` (Linux, macOS) start the terminal UI from anywhere,
+`nh-workbench-desktop.cmd` and `nh-workbench-desktop.sh` the desktop UI (installing its Qt the first time; on
+Windows, without a console window). Run them directly or point a shortcut at them; each brings the environment up
+to date first. The terminal UI's pass command-line arguments through.
 
-![The desktop UI: the same repo list, with Textual's dark theme](wiki/images/desktop-ui.png)
+<img src="wiki/images/desktop-ui.png" width="800" alt="The desktop UI: the same repo list in a window, with Textual's dark theme">
 
-`nh-workbench.cmd` (Windows) and `nh-workbench.sh` (Linux, macOS) start the terminal UI from anywhere: run them
-directly or point a shortcut at them. Command-line arguments are passed through.
+More on the desktop UI, and on installing it as a tool: [Desktop UI](https://github.com/Algent/NH-Workbench/wiki/Desktop-UI).
 
 Checkouts are read from `IdeaProjects` in your home folder; change it with `--root`, `root` in the config,
 or Settings in the UI.
