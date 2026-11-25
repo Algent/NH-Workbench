@@ -1,4 +1,4 @@
-"""Desktop UI on Qt (PySide6), a proof of concept: repo, My PRs, Reviews and Pack tabs, fetch, pull, clone, check out.
+"""Desktop UI on Qt (PySide6), a proof of concept: the repo, PR and Pack tabs, fetch, pull, clone, check out.
 
 The git, GitHub and pack work is the code the terminal UI runs. It runs on an asyncio loop in a background
 thread; results come back to the Qt thread through a signal. Cells and the detail pane reuse the Rich text the
@@ -12,6 +12,7 @@ import io
 import logging
 import sys
 import threading
+import time
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
@@ -69,6 +70,9 @@ from .tui import (
     action_shown,
     local_branch,
     mine_detail,
+    org_detail,
+    org_mark,
+    org_shown,
     pack_detail,
     pr_matches,
     repo_actions,
@@ -83,8 +87,10 @@ log = logging.getLogger(__name__)
 RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
+# Letters for toolbar actions on the tabs where they show, as in the terminal UI.
+TOOLBAR_LETTERS = {"toggle_team": "t", "toggle_drafts": "t", "pr_filters": "v", "reload_org": "r", "reload_prs": "r"}
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
-PR_TABS = ("mine", "reviews")  # All PRs comes later
+PR_TABS = ("mine", "reviews", "org")
 VIEW_KEYS = [key for key in VIEWS if key in REPO_VIEWS or key in (*PR_TABS, "pack")]  # Tools comes later
 DONE_ACTIONS = {"fetch", "pull", "main", "ide", "web", "folder"}  # repo menu entries this preview handles
 
@@ -179,11 +185,14 @@ class Workbench:
         self.mine: list[ReviewItem] = []
         self.reviews: list[ReviewItem] = []
         self.team_reviews = False  # also the requests that reach you through a team (slow to search)
+        self.org: github.OrgPrs | None = None  # every open PR of the org, searched when All PRs opens
+        self.org_searching = False
         self.busy = ""
 
     def _changed(self) -> None:
         entries = list(self.pack_info.entries) if self.pack_info else []
-        prs = {"mine": list(self.mine), "reviews": list(self.reviews)}  # PR tab -> its PRs
+        org = list(self.org.items) if self.org else []
+        prs = {"mine": list(self.mine), "reviews": list(self.reviews), "org": org}  # PR tab -> its PRs
         self.on_change(sorted(self.states.values(), key=ops.by_repo), entries, prs)
 
     async def load(self, fetch: bool = False) -> None:
@@ -257,6 +266,42 @@ class Workbench:
         if items or not error:
             self.reviews = items
             self._changed()
+
+    async def reload_prs(self) -> None:
+        """Load your PRs, review requests and branch PRs again, without rescanning the repos."""
+        try:
+            await asyncio.gather(self._load_prs(), self._load_mine(), self._load_reviews())
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def open_org(self) -> None:
+        """Show the saved org search at once; search again only when it is missing or old, like the TUI."""
+        if self.org_searching:
+            return
+        if self.org is None:
+            self.org = github.cached_org(self.cfg.org)
+            if self.org:
+                self._changed()
+        if self.org is None or time.time() - self.org.fetched > github.ORG_MAX_AGE:
+            await self.reload_org()
+
+    async def reload_org(self) -> None:
+        if self.org_searching:
+            self.notify(f"Still searching the PRs of {self.cfg.org}", False)
+            return
+        self.org_searching = True
+        self.notify(f"Searching all open PRs of {self.cfg.org}, this takes a while...", False)
+        try:
+            found = await github.fetch_org(self.cfg.org)
+        finally:
+            self.org_searching = False
+        if found.error:
+            self.notify(f"Org PRs: {found.error}", True)
+        if found.items or not found.error:
+            self.org = found
+            self._changed()
+            if not found.error:
+                self.notify(f"Searched all open PRs of {self.cfg.org}", False)
 
     async def toggle_team(self, on: bool) -> None:
         """Show or hide the review requests that reach you through a team, as t does in the terminal UI."""
@@ -520,6 +565,19 @@ class ReviewModel(PrModel):
         return render.review_row(item)
 
 
+class OrgModel(PrModel):
+    """Every open PR of the org, marked when you wrote it, are asked to review it, or reviewed it."""
+
+    columns = render.ORG_COLUMNS
+
+    def __init__(self, theme: TerminalTheme) -> None:
+        super().__init__(theme)
+        self.mark: Callable[[ReviewItem], str] = lambda item: ""
+
+    def cells(self, item: ReviewItem) -> list[Text]:
+        return render.org_row(item, self.mark(item))
+
+
 class RichFilter(QSortFilterProxyModel):
     """Keeps the rows a tab and the name filter let through, and sorts by each model's own keys."""
 
@@ -735,9 +793,13 @@ class MainWindow(QMainWindow):
                 "Fast-forward main if safe",
             ),
             ("rescan", "Rescan", "F5", self._rescan, "Read every repo again"),
+            ("reload_prs", "Refresh from GitHub", "F5", self._reload_prs, "Load your PRs and reviews again (r)"),
+            ("reload_org", "Search again", "F5", lambda: self.run(self.wb.reload_org()), "Search the org's PRs (r)"),
             ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
             ("checkout", "Check out", "Ctrl+Shift+K", lambda: self._act("checkout"), "Check out the selected PR (c)"),
             ("toggle_team", "Team reviews", "Ctrl+Shift+T", self._toggle_team, "Also requests made to your teams (t)"),
+            ("toggle_drafts", "Drafts", "Ctrl+Shift+D", self._refresh_org, "Also list draft PRs (t)"),
+            ("pr_filters", "Show only...", "Ctrl+Shift+V", self._pr_filters, "Only some of the org's PRs (v)"),
             ("open_web", "Open in browser", "Ctrl+Shift+G", lambda: self._act("web"), "PR or GitHub page of the line"),
             ("open_ide", "Open in IntelliJ", "Ctrl+Shift+O", lambda: self._act("ide"), "Open the checkout of the line"),
         ):
@@ -747,8 +809,10 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             bar.addAction(action)
             self.tab_actions[action_id] = action
-        self.tab_actions["toggle_team"].setCheckable(True)
-        batch = ("fetch", "pull", "rescan", "clone", "checkout", "toggle_team")
+        self.toolbar = bar
+        for key in ("toggle_team", "toggle_drafts"):
+            self.tab_actions[key].setCheckable(True)
+        batch = ("fetch", "pull", "rescan", "reload_prs", "clone", "checkout", "toggle_team")
         self.batch_actions = [self.tab_actions[k] for k in batch]
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -775,9 +839,12 @@ class MainWindow(QMainWindow):
         self.repos = RichTable(RepoModel(self.theme), self._repo_shown, height)
         self.mine = RichTable(MineModel(self.theme), self._pr_shown, height, sort_column="Updated")
         self.reviews = RichTable(ReviewModel(self.theme), self._pr_shown, height, sort_column="Updated")
+        self.org_urls: set[str] = set()  # the org PRs that pass the Drafts and Show only choices
+        self.org = RichTable(OrgModel(self.theme), self._org_pr_shown, height, sort_column="Updated")
+        self.org.source.mark = self._org_mark
         self.pack = RichTable(PackModel(self.theme), self._entry_shown, height)
         # Tabs with their own table; the repo tabs share one.
-        self.tables = {"mine": self.mine, "reviews": self.reviews, "pack": self.pack}
+        self.tables = {"mine": self.mine, "reviews": self.reviews, "org": self.org, "pack": self.pack}
         self.stack = QStackedWidget()
         for table in (self.repos, *self.tables.values()):
             table.customContextMenuRequested.connect(lambda pos, t=table: self._menu(t.viewport().mapToGlobal(pos)))
@@ -857,17 +924,18 @@ class MainWindow(QMainWindow):
         for key in PR_TABS:
             self.tables[key].source.states = states
             loaded.append((self.tables[key], prs.get(key, [])))
+        first_rows = []
         for table, rows in loaded:
             current = table.current()
-            first = not table.source.rows
+            if rows and not table.source.rows:
+                first_rows.append(table)
             table.source.set_rows(rows)
             if not (current is not None and table.select_key(table.source.key(current))) and table.proxy.rowCount():
                 table.selectRow(0)
-            if first and rows:
-                table.resizeColumnsToContents()
         self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
-        self._count_tabs()
-        self._update_detail()
+        self._refresh_org()
+        for table in first_rows:  # sized once filled and filtered (All PRs shows nothing before its filter runs)
+            table.resizeColumnsToContents()
 
     def _progress(self, label: str, done: int, total: int) -> None:
         if not label:
@@ -904,16 +972,38 @@ class MainWindow(QMainWindow):
     def _pr_shown(self, item: ReviewItem) -> bool:
         return pr_matches(item, self._needle())
 
+    def _org_pr_shown(self, item: ReviewItem) -> bool:
+        return item.pr.url in self.org_urls and pr_matches(item, self._needle())
+
+    def _org_mark(self, item: ReviewItem) -> str:
+        reviewed = self.wb.org.reviewed if self.wb.org else set()
+        return org_mark(item, self.mine.source.rows, self.reviews.source.rows, reviewed)
+
+    def _refresh_org(self) -> None:
+        """Apply the Drafts and Show only choices to the org PRs, by the terminal UI's rule."""
+        drafts = self.tab_actions["toggle_drafts"].isChecked()
+        states, entries = self.model.rows, self.pack.source.rows
+        shown = org_shown(self.org.source.rows, drafts, self.cfg.pr_filters, states, entries)
+        self.org_urls = {i.pr.url for i in shown}
+        self.org.proxy.refilter()
+        if self.org.current() is None and self.org.proxy.rowCount():
+            self.org.selectRow(0)
+        self._count_tabs()
+        self._update_detail()
+
     def _show_actions(self) -> None:
         """Keep the toolbar to what works on the current tab, by the terminal UI's own rule."""
         view = self._view()
         item = self._selected_pr()
-        has_repo = item is None or repo_for(item, self.model.rows) is not None
+        # Only asked on PR tabs: there, no selected PR means no checkout to open (as in the TUI).
+        has_repo = item is not None and repo_for(item, self.model.rows) is not None
         for action_id, action in self.tab_actions.items():
             action.setVisible(action_shown(action_id, view, self.cfg.ide_off, has_repo))
         self.filter_action.setVisible(action_shown("filter", view))
 
     def _apply_view(self) -> None:
+        if self._view() == "org":
+            self.run(self.wb.open_org())
         self._show_actions()
         table = self.table
         self.stack.setCurrentWidget(table)
@@ -927,11 +1017,13 @@ class MainWindow(QMainWindow):
             label, keep = VIEWS[key]
             if key == "reviews":  # as in the terminal UI: only the requests made to you personally
                 n = sum(1 for item in self.reviews.source.rows if item.direct)
+            elif key == "org":
+                n = len(self.org_urls) if self.wb.org else None  # not searched yet
             elif key in self.tables:
                 n = len(self.tables[key].source.rows)
             else:
                 n = sum(1 for st in self.model.rows if keep and keep(st))
-            self.tabs.setTabText(i, f"{label}  {n}")
+            self.tabs.setTabText(i, label if n is None else f"{label}  {n}")
 
     def _selected(self) -> RepoState | None:
         return self.repos.current() if self._view() in REPO_VIEWS else None
@@ -947,6 +1039,8 @@ class MainWindow(QMainWindow):
         st, entry, item = self._selected(), self._selected_entry(), self._selected_pr()
         if item and self._view() == "mine":
             content = mine_detail(item, local_branch(item, self.model.rows))
+        elif item and self._view() == "org":
+            content = org_detail(item, self._org_mark(item), repo_for(item, self.model.rows))
         elif item:
             content = review_detail(item, repo_for(item, self.model.rows))
         elif st:
@@ -1033,14 +1127,53 @@ class MainWindow(QMainWindow):
 
     def _letter(self, key: str) -> bool:
         """c, w, ... on the Pack and PR tabs act on the selected line at once, as in the terminal UI."""
-        if key == "t" and self.tab_actions["toggle_team"].isVisible():
-            self.tab_actions["toggle_team"].trigger()
-            return True
+        for action_id, letter in TOOLBAR_LETTERS.items():
+            action = self.tab_actions[action_id]
+            if key == letter and action.isVisible():
+                if action.isEnabled():
+                    action.trigger()
+                return True
         line = self._line()
         action_id = next((i for k, i, _, _ in line[1] if k == key), None) if line else None
         if action_id:
             self._act(action_id)
         return action_id is not None
+
+    def _reload_prs(self) -> None:
+        if self._start("Refreshing from GitHub", []) is not None:
+            self.run(self.wb.reload_prs())
+
+    def _pr_filters(self) -> None:
+        """Pick which org PRs to list, as v does in the terminal UI. Saved in the config file."""
+        wanted = set(self.cfg.pr_filters)
+        menu = KeyMenu(self)
+        menu.addSection("All PRs: show only")
+        for (key, label), letter in zip(github.PR_FILTERS.items(), "lpus", strict=True):
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key in wanted)
+            action.setShortcut(QKeySequence(letter))
+            action.setData(key)
+        everything = menu.addAction("Show all" if wanted else "Show all  (nothing filtered)")
+        everything.setShortcut(QKeySequence("n"))
+        everything.setEnabled(bool(wanted))
+        everything.setData("none")
+        button = self.toolbar.widgetForAction(self.tab_actions["pr_filters"])
+        chosen = menu.exec(button.mapToGlobal(button.rect().bottomLeft())) or menu.chosen
+        if not chosen:
+            return
+        choice = chosen.data()
+        wanted = set() if choice == "none" else wanted ^ {choice}
+        if choice == "unreviewed" and self.wb.org and any(i.pr.reviews is None for i in self.wb.org.items):
+            self._notify("Review counts come with the next search; until then no PR is left out for it")
+        picked = [f for f in github.PR_FILTERS if f in wanted]
+        try:
+            config.save_setting(("pr_filters",), picked or None)
+        except config.ConfigError as e:
+            self._notify(str(e), True)
+            return
+        self.cfg.pr_filters = tuple(picked)
+        self._refresh_org()
 
     def _toggle_team(self) -> None:
         on = self.tab_actions["toggle_team"].isChecked()

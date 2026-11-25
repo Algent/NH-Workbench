@@ -1072,6 +1072,29 @@ def test_action_shown_per_tab():
     assert action_shown("fetch", "all") and not action_shown("fetch", "pack") and not action_shown("fetch", "mine")
     assert action_shown("clone", "pack") and not action_shown("clone", "all")
     assert action_shown("reload_org", "org") and not action_shown("rescan", "org")
+    assert action_shown("reload_prs", "mine") and action_shown("reload_prs", "reviews")
+    assert not action_shown("rescan", "mine") and not action_shown("reload_prs", "all")
     assert not action_shown("open_ide", "all", ide_off=True)
     assert not action_shown("open_ide", "reviews", repo_selected=False) and action_shown("open_ide", "reviews")
     assert not action_shown("open_web", "tools") and not action_shown("filter", "tools")
+
+
+async def test_r_on_my_prs_refreshes_from_github(sandbox, offline, monkeypatch):
+    calls = []
+    real = github.fetch_mine
+
+    async def counted():
+        calls.append(1)
+        return await real()
+
+    monkeypatch.setattr(github, "fetch_mine", counted)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        scanned = app.last_loaded
+        app.query_one(Tabs).active = "view-mine"
+        await settle(app, pilot)
+        before = len(calls)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert len(calls) == before + 1 and app.last_loaded == scanned  # the PRs again, not the repos

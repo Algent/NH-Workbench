@@ -1,12 +1,13 @@
 import os
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 pytest.importorskip("PySide6", reason="the desktop UI is an optional extra: uv sync --extra desktop")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import Qt, QTimer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from rich.text import Text  # noqa: E402
@@ -16,6 +17,7 @@ from nh_workbench.models import PackEntry, PackInfo, PrHead, PrInfo, ReviewItem 
 from nh_workbench.proc import Result  # noqa: E402
 
 MY_PR = "https://example.invalid/pull/7"
+searches: list[str] = []
 
 
 @pytest.fixture
@@ -41,6 +43,20 @@ def window(sandbox, monkeypatch):
 
         return [item(1, True)] + ([item(2, False)] if team else []), None
 
+    async def fake_org(org):
+        searches.append(org)
+
+        def item(number: int, draft: bool = False, repo: str = "o/m", reviews: int = 0, days: int = 1) -> ReviewItem:
+            url = f"https://example.invalid/pull/{number}"
+            pr = PrInfo(number, "OPEN", draft, None, None, "", url, f"PR {number}", reviews=reviews)
+            return ReviewItem(repo, pr, "bob", datetime.now(UTC) - timedelta(days=days), True)
+
+        items = [item(1), item(7), item(20, draft=True), item(21, repo="o/other", reviews=2, days=90)]
+        return github.OrgPrs(items, {"https://example.invalid/pull/21"}, time.time())
+
+    searches.clear()
+    monkeypatch.setattr(github, "fetch_org", fake_org)
+    monkeypatch.setattr(github, "cached_org", lambda org: None)
     monkeypatch.setattr(github, "fetch_mine", fake_mine)
     monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(pack, "load", fake_pack)
@@ -134,9 +150,11 @@ def test_toolbar_follows_the_tab(window):
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
     assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
-    assert shown() == {"rescan", "open_web", "checkout"}  # no IntelliJ: o/m is not checked out here
+    assert shown() == {"reload_prs", "open_web", "checkout"}  # no IntelliJ: o/m is not checked out here
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("reviews"))
-    assert shown() == {"rescan", "open_web", "checkout", "toggle_team"}
+    assert shown() == {"reload_prs", "open_web", "checkout", "toggle_team"}
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("org"))
+    assert shown() == {"reload_org", "open_web", "checkout", "toggle_drafts", "pr_filters"}
     window.tabs.setCurrentIndex(0)
     assert "clone" not in shown() and "toggle_team" not in shown()
 
@@ -214,3 +232,53 @@ def test_reviews_tab_and_team_requests(window, monkeypatch):
     window.tab_actions["toggle_team"].trigger()
     wait_for(lambda: window.reviews.proxy.rowCount() == 1 and not window.running)
     assert not window.tab_actions["toggle_team"].isChecked()
+
+
+def test_refresh_from_github_on_pr_tabs(window, monkeypatch):
+    calls = []
+    real = github.fetch_mine
+
+    async def counted():
+        calls.append(1)
+        return await real()
+
+    loaded(window)
+    wait_for(lambda: window.mine.source.rows and not window.running)
+    monkeypatch.setattr(github, "fetch_mine", counted)
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.mine.setFocus()
+    QTest.keyClick(window.mine, Qt.Key.Key_R)  # as in the terminal UI: r refreshes the PRs, not the repos
+    wait_for(lambda: calls and not window.running)
+    assert window.mine.source.rows and window.message.text() != "Scanning..."
+
+
+def test_all_prs_tab(window, monkeypatch, tmp_path):
+    from nh_workbench import config
+
+    monkeypatch.setattr(config, "config_path", lambda: tmp_path / "config.toml")
+    loaded(window)
+    wait_for(lambda: window.mine.source.rows and window.reviews.source.rows)
+    org_tab = gui.VIEW_KEYS.index("org")
+    assert window.tabs.tabText(org_tab) == "All PRs"  # not searched yet
+    window.tabs.setCurrentIndex(org_tab)
+    wait_for(lambda: window.org.source.rows)
+    assert len(searches) == 1  # searched once the tab opened
+    assert window.tabs.tabText(org_tab).split() == ["All", "PRs", "3"]  # the draft is left out
+    marks = {window.org.proxy.index(r, 2).data().split()[0]: window.org.proxy.index(r, 0).data() for r in range(3)}
+    assert marks == {"#1": "requested", "#7": "author", "#21": "reviewed"}
+
+    window.org.setFocus()
+    QTest.keyClick(window.org, Qt.Key.Key_T)  # t: drafts too
+    assert window.tabs.tabText(org_tab).split() == ["All", "PRs", "4"]
+    QTest.keyClick(window.org, Qt.Key.Key_T)
+
+    QTimer.singleShot(200, lambda: QTest.keyClick(QApplication.activePopupWidget(), Qt.Key.Key_U))
+    QTest.keyClick(window.org, Qt.Key.Key_V)  # v: show only, u: PRs without reviews
+    assert window.cfg.pr_filters == ("unreviewed",) and window.org.proxy.rowCount() == 2
+    assert config.load(path=tmp_path / "config.toml").pr_filters == ("unreviewed",)
+
+    window.org.selectRow(0)
+    assert "Enter or w: open" in window.detail.toPlainText()
+    count = len(searches)
+    QTest.keyClick(window.org, Qt.Key.Key_R)  # r: search again
+    wait_for(lambda: len(searches) == count + 1 and not window.wb.org_searching)

@@ -121,6 +121,31 @@ def repo_for(item: ReviewItem, states: Iterable[RepoState]) -> RepoState | None:
     return None
 
 
+def org_mark(item: ReviewItem, mine: Iterable[ReviewItem], reviews: Iterable[ReviewItem], reviewed: set[str]) -> str:
+    """How you are involved in an org PR: author, requested (your review), reviewed, or not at all."""
+    url = item.pr.url
+    if any(i.pr.url == url for i in mine):
+        return "author"
+    if any(i.pr.url == url for i in reviews):
+        return "requested"
+    return "reviewed" if url in reviewed else ""
+
+
+def org_shown(
+    items: Iterable[ReviewItem],
+    drafts: bool,
+    filters: Iterable[str],
+    states: Iterable[RepoState],
+    entries: Iterable[PackEntry],
+) -> list[ReviewItem]:
+    """The org PRs the All PRs tab lists: drafts only when asked, then the "show only" filters."""
+    items = [i for i in items if drafts or not i.pr.draft]
+    filters = list(filters)
+    if not filters:
+        return items
+    return github.filter_prs(items, filters, ops.local_slugs(states), pack.pack_slugs(entries))
+
+
 def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: bool = True) -> bool:
     """Whether an action belongs on a tab. The terminal UI's footer and the desktop UI's toolbar both ask this,
     so a tab or an action added later shows up the same way in both.
@@ -142,7 +167,9 @@ def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: b
     if action in ("toggle_drafts", "pr_filters"):
         return view == "org"
     if action == "rescan":
-        return view != "org"
+        return view not in PR_VIEWS
+    if action == "reload_prs":
+        return view in ("mine", "reviews")
     if action == "reload_org":
         return view == "org"
     if action == "open_ide":
@@ -444,6 +471,7 @@ class RepoApp(App[None]):
         Binding("P", "pull(True)", "Pull one", show=False),
         Binding("r", "rescan", "Rescan"),
         Binding("r", "reload_org", "Search again"),
+        Binding("r", "reload_prs", "Refresh from GitHub"),
         Binding("slash", "filter", "Filter"),
         Binding("o", "open_ide", "IDE"),
         Binding("w", "open_web", "Web"),
@@ -667,20 +695,10 @@ class RepoApp(App[None]):
 
     def _org_shown(self) -> list[ReviewItem]:
         items = self.org.items if self.org else []
-        if not self.org_drafts:
-            items = [i for i in items if not i.pr.draft]
-        if not self.cfg.pr_filters:
-            return items
-        local = ops.local_slugs(self.states.values())
-        return github.filter_prs(items, self.cfg.pr_filters, local, pack.pack_slugs(self.entries))
+        return org_shown(items, self.org_drafts, self.cfg.pr_filters, self.states.values(), self.entries)
 
     def _org_mark(self, item: ReviewItem) -> str:
-        url = item.pr.url
-        if any(i.pr.url == url for i in self.mine):
-            return "author"
-        if any(i.pr.url == url for i in self.reviews):
-            return "requested"
-        return "reviewed" if self.org and url in self.org.reviewed else ""
+        return org_mark(item, self.mine, self.reviews, self.org.reviewed if self.org else set())
 
     async def _load_pack(self, force: bool = False) -> None:
         try:
@@ -1150,6 +1168,14 @@ class RepoApp(App[None]):
         if not self._modal() and self.view == "org":
             self.org_drafts = not self.org_drafts
             self._refresh()
+
+    @work(group="prs", exclusive=True)
+    async def action_reload_prs(self) -> None:
+        """Load your PRs, review requests and branch PRs again, without rescanning the repos."""
+        if self._modal() or self.view not in ("mine", "reviews"):
+            return
+        self.notify("Refreshing from GitHub...")
+        await asyncio.gather(self._load_prs(), self._load_reviews(), self._load_mine())
 
     def action_reload_org(self) -> None:
         if not self._modal() and self.view == "org":

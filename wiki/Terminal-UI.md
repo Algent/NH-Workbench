@@ -28,7 +28,7 @@ commits waiting on the release branch.
 | `/` | Filter by name. On PR tabs, `<200` keeps PRs under 200 changed lines |
 | `s`, click on a header | Sort. PR tabs: last update, smallest, largest, repo |
 | `f` / `p` | Fetch all / pull all where safe (`F` / `P`: selected repo only) |
-| `r` | Rescan (on All PRs: search GitHub again) |
+| `r` | Rescan (on My PRs and Reviews: refresh them from GitHub; on All PRs: search GitHub again) |
 | `m` | Switch repos parked on a merged PR branch back to main |
 | `d` | Delete merged branches |
 | `o` / `w` | Open in IntelliJ / open the PR or GitHub page |
