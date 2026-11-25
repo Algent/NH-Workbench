@@ -91,6 +91,35 @@ NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
 
 
+def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: bool = True) -> bool:
+    """Whether an action belongs on a tab. The terminal UI's footer and the desktop UI's toolbar both ask this,
+    so a tab or an action added later shows up the same way in both.
+
+    repo_selected: a local checkout goes with the selected line (on PR tabs, the PR's repo is checked out here).
+    """
+    if view == "tools" and action in NOT_ON_TOOLS:
+        return False
+    if action in REPO_ONLY_ACTIONS:
+        return view not in TABLES
+    if action == "sort":
+        return view != "pack"
+    if action == "clone":
+        return view == "pack"
+    if action == "checkout":
+        return view in PR_VIEWS
+    if action == "toggle_team":
+        return view == "reviews"
+    if action in ("toggle_drafts", "pr_filters"):
+        return view == "org"
+    if action == "rescan":
+        return view != "org"
+    if action == "reload_org":
+        return view == "org"
+    if action == "open_ide":
+        return not ide_off and (view not in PR_VIEWS or repo_selected)
+    return True
+
+
 def repo_cells(st: RepoState) -> list[Text]:
     return [
         render.name_text(st),
@@ -948,29 +977,10 @@ class RepoApp(App[None]):
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Keep the footer to what works in the current view."""
-        if self.view == "tools" and action in NOT_ON_TOOLS:
-            return False
         if action in ("extras", "cycle_view") and len(self.screen_stack) > 1:
             return False  # a tool screen is open
-        if action in REPO_ONLY_ACTIONS:
-            return self.view not in TABLES
-        if action == "sort":
-            return self.view != "pack"
-        if action == "clone":
-            return self.view == "pack"
-        if action == "checkout":
-            return self.view in PR_VIEWS
-        if action == "toggle_team":
-            return self.view == "reviews"
-        if action in ("toggle_drafts", "pr_filters"):
-            return self.view == "org"
-        if action == "rescan":
-            return self.view != "org"
-        if action == "reload_org":
-            return self.view == "org"
-        if action == "open_ide":
-            return not self.cfg.ide_off and (self.view not in PR_VIEWS or self._selected_repo() is not None)
-        return True
+        selected = action != "open_ide" or self._selected_repo() is not None  # looked up only when it matters
+        return action_shown(action, self.view, self.cfg.ide_off, selected)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.needle = event.value.strip().lower()

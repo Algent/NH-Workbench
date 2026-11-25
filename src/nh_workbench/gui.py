@@ -66,6 +66,7 @@ from .tui import (
     REPO_COLUMNS,
     SORTS,
     VIEWS,
+    action_shown,
     pack_detail,
     repo_actions,
     repo_cells,
@@ -603,22 +604,39 @@ class MainWindow(QMainWindow):
         self._rescan()
 
     def _build(self) -> None:
-        self.batch_actions: list[QAction] = []
         self.running = ""  # label of the batch in progress
         bar = QToolBar("Actions")
         bar.setMovable(False)
         self.addToolBar(bar)
-        for label, keys, slot, tip in (
-            ("Fetch all", "Ctrl+Shift+F", lambda: self._operate("Fetching", ops.fetch_repo), "Fetch every repo"),
-            ("Pull safe", "Ctrl+Shift+P", lambda: self._operate("Pulling", ops.pull_repo), "Fast-forward main if safe"),
-            ("Rescan", "F5", self._rescan, "Read every repo again"),
+        # Named like the terminal UI's actions: action_shown() decides on which tabs each one appears.
+        self.tab_actions: dict[str, QAction] = {}
+        for action_id, label, keys, slot, tip in (
+            (
+                "fetch",
+                "Fetch all",
+                "Ctrl+Shift+F",
+                lambda: self._operate("Fetching", ops.fetch_repo),
+                "Fetch every repo",
+            ),
+            (
+                "pull",
+                "Pull safe",
+                "Ctrl+Shift+P",
+                lambda: self._operate("Pulling", ops.pull_repo),
+                "Fast-forward main if safe",
+            ),
+            ("rescan", "Rescan", "F5", self._rescan, "Read every repo again"),
+            ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
+            ("open_web", "Open in browser", "Ctrl+Shift+G", lambda: self._act("web"), "PR or GitHub page of the line"),
+            ("open_ide", "Open in IntelliJ", "Ctrl+Shift+O", lambda: self._act("ide"), "Open the checkout of the line"),
         ):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(keys))
             action.setToolTip(f"{tip} ({keys})")
             action.triggered.connect(slot)
             bar.addAction(action)
-            self.batch_actions.append(action)
+            self.tab_actions[action_id] = action
+        self.batch_actions = [self.tab_actions[k] for k in ("fetch", "pull", "rescan", "clone")]
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
@@ -627,7 +645,7 @@ class MainWindow(QMainWindow):
         self.filter.setClearButtonEnabled(True)
         self.filter.setFixedWidth(260)
         self.filter.textChanged.connect(lambda _: self._apply_view())
-        bar.addWidget(self.filter)
+        self.filter_action = bar.addWidget(self.filter)
         find = QAction(self)
         find.setShortcut(QKeySequence.StandardKey.Find)
         find.triggered.connect(lambda: (self.filter.setFocus(), self.filter.selectAll()))
@@ -675,6 +693,7 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.statusBar().addWidget(self.message, 1)
         self.statusBar().addPermanentWidget(self.progress)
+        self._show_actions()
 
     @property
     def model(self) -> RepoModel:
@@ -757,7 +776,15 @@ class MainWindow(QMainWindow):
     def _entry_shown(self, entry: PackEntry) -> bool:
         return self._needle() in entry.name.lower()
 
+    def _show_actions(self) -> None:
+        """Keep the toolbar to what works on the current tab, by the terminal UI's own rule."""
+        view = self._view()
+        for action_id, action in self.tab_actions.items():
+            action.setVisible(action_shown(action_id, view, self.cfg.ide_off))
+        self.filter_action.setVisible(action_shown("filter", view))
+
     def _apply_view(self) -> None:
+        self._show_actions()
         table = self.table
         self.stack.setCurrentWidget(table)
         table.proxy.refilter()
@@ -857,16 +884,26 @@ class MainWindow(QMainWindow):
     def _pack_letter(self, key: str) -> bool:
         """c, w, ... on the Pack tab act on the selected mod at once, as in the terminal UI."""
         entry = self._selected_entry()
-        if not entry:
-            return False
-        for k, action_id, _, reason in pack_actions(entry, self.cfg):
-            if k == key:
-                if reason:
-                    self._notify(f"{entry.name}: {reason}", True)
-                else:
-                    self._pack_action(action_id, entry)
-                return True
-        return False
+        action_id = next((i for k, i, _, _ in pack_actions(entry, self.cfg) if k == key), None) if entry else None
+        if action_id:
+            self._act(action_id)
+        return action_id is not None
+
+    def _act(self, action_id: str) -> None:
+        """Run a menu action on the selected line, from the toolbar or a letter key; say why when it cannot."""
+        st, entry = self._selected(), self._selected_entry()
+        if entry:
+            reason = next((r for _, i, _, r in pack_actions(entry, self.cfg) if i == action_id), "not for pack mods")
+            if reason:
+                self._notify(f"{entry.name}: {reason}", True)
+            else:
+                self._pack_action(action_id, entry)
+        elif st:
+            reason = next((r for _, i, _, r in repo_actions(st, self.cfg.ide_off) if i == action_id), None)
+            if reason:
+                self._notify(f"{st.name}: {reason}", True)
+            else:
+                self._repo_action(action_id, st)
 
     def _pack_action(self, action_id: str, entry: PackEntry) -> None:
         if action_id == "clone":

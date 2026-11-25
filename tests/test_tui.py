@@ -1064,3 +1064,14 @@ async def test_tool_updates_itself(sandbox, offline, monkeypatch):
 
     monkeypatch.setattr(tui, "tool_checkout", lambda: None)
     assert RepoApp(sandbox.cfg)._tool_entry()[1].startswith("installed as a package")
+
+
+def test_action_shown_per_tab():
+    from nh_workbench.tui import action_shown
+
+    assert action_shown("fetch", "all") and not action_shown("fetch", "pack") and not action_shown("fetch", "mine")
+    assert action_shown("clone", "pack") and not action_shown("clone", "all")
+    assert action_shown("reload_org", "org") and not action_shown("rescan", "org")
+    assert not action_shown("open_ide", "all", ide_off=True)
+    assert not action_shown("open_ide", "reviews", repo_selected=False) and action_shown("open_ide", "reviews")
+    assert not action_shown("open_web", "tools") and not action_shown("filter", "tools")

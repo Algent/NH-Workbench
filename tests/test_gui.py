@@ -105,3 +105,16 @@ def test_pack_tab_lists_mods_and_clones(window, sandbox, monkeypatch):
     window.pack.selectRow(0)
     QTest.keyClick(window.pack, Qt.Key.Key_C)
     assert cloned == ["o/m"] and "closed source" in window.message.text()
+
+
+def test_toolbar_follows_the_tab(window):
+    loaded(window)
+
+    def shown() -> set[str]:
+        return {key for key, action in window.tab_actions.items() if action.isVisible()}
+
+    assert shown() == {"fetch", "pull", "rescan", "open_web", "open_ide"}
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
+    assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
+    window.tabs.setCurrentIndex(0)
+    assert "clone" not in shown()
