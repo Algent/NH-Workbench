@@ -112,6 +112,7 @@ QWidget {{ font-size: {points:g}pt; }}
 QToolButton#cog {{ font-size: {points * 1.6:.1f}pt; }}
 QLabel#title {{ font-size: {points * 1.15:.1f}pt; font-weight: 600; }}
 QTabBar::tab:disabled {{ background: transparent; border: none; padding: 4px 2px; }}  /* the group dividers */
+QToolButton#history-button::menu-indicator {{ image: none; width: 0; }}
 """
 
 

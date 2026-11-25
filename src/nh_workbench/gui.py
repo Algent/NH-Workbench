@@ -25,7 +25,6 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
-    QPoint,
     QRectF,
     QSize,
     QSortFilterProxyModel,
@@ -72,6 +71,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 from rich.console import Console, Group, RenderableType
 from rich.segment import Segment
@@ -991,30 +991,36 @@ def pr_actions(item: ReviewItem, st: RepoState | None, cfg: Config) -> list[tupl
     ]
 
 
-class HistoryPopup(QListWidget):
-    """The status bar's earlier messages, newest first. Closes on Esc or a click elsewhere; Ctrl+C copies."""
+class HistoryMenu(QMenu):
+    """The status bar's earlier messages, newest first, as the History button's menu: a click elsewhere, on the
+    button again or Esc closes it, as any menu. Ctrl+C copies the selected lines."""
 
-    def __init__(self, parent: QWidget, messages: list[tuple[str, str, bool]], warning: str) -> None:
+    def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.Popup)
-        self.setObjectName("history")  # framed, by the style sheet
-        self.setWordWrap(True)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.list = QListWidget()
+        self.list.setObjectName("history")  # framed, by the style sheet
+        self.list.setWordWrap(True)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        holder = QWidgetAction(self)
+        holder.setDefaultWidget(self.list)
+        self.addAction(holder)
+
+    def fill(self, messages: list[tuple[str, str, bool]], warning: str, size: QSize) -> None:
+        self.list.clear()
         for when, text, warned in reversed(messages):
             item = QListWidgetItem(f"{when}  {text}")
             if warned:
                 item.setForeground(QColor(warning))
-            self.addItem(item)
+            self.list.addItem(item)
         if not messages:
             item = QListWidgetItem("No messages yet")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.addItem(item)
+            self.list.addItem(item)
+        self.list.setFixedSize(size)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Escape:
-            self.close()
-        elif event.matches(QKeySequence.StandardKey.Copy):
-            QApplication.clipboard().setText("\n".join(item.text() for item in self.selectedItems()))
+        if event.matches(QKeySequence.StandardKey.Copy):
+            QApplication.clipboard().setText("\n".join(item.text() for item in self.list.selectedItems()))
         else:
             super().keyPressEvent(event)
 
@@ -1277,11 +1283,14 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress)
         self.history: list[tuple[str, str, bool]] = []  # (time, text, warning), oldest first
         self.unseen_warnings = 0
-        self.history_popup: HistoryPopup | None = None
+        self.history_menu = HistoryMenu(self)
+        self.history_menu.aboutToShow.connect(self._fill_history)
         self.history_button = QToolButton()
+        self.history_button.setObjectName("history-button")  # no menu arrow, by the style sheet
         self.history_button.setAutoRaise(True)
         self.history_button.setToolTip("Earlier messages")
-        self.history_button.clicked.connect(self._show_history)
+        self.history_button.setMenu(self.history_menu)
+        self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.statusBar().addPermanentWidget(self.history_button)
         self._update_history_button()
         self._show_actions()
@@ -1403,17 +1412,11 @@ class MainWindow(QMainWindow):
         n = self.unseen_warnings
         self.history_button.setText(f"History  ⚠ {n}" if n else "History")
 
-    def _show_history(self) -> None:
+    def _fill_history(self) -> None:
+        """Just before the History menu opens: the messages as they are now, and the warnings counted as seen."""
         self.unseen_warnings = 0
         self._update_history_button()
-        popup = HistoryPopup(self, self.history, self.warning_color())
-        width, height = min(820, self.width() - 40), 340
-        button = self.history_button
-        popup.resize(width, height)
-        popup.move(button.mapToGlobal(QPoint(button.width() - width, -height)))
-        popup.show()
-        popup.setFocus()
-        self.history_popup = popup  # kept, or it is collected at once
+        self.history_menu.fill(self.history, self.warning_color(), QSize(min(820, self.width() - 40), 340))
 
     # --- view
 

@@ -644,14 +644,14 @@ def test_message_history(window, monkeypatch):
     assert "Fetching..." not in [text for _, text, _ in window.history]
     assert window.history_button.text() == "History  ⚠ 1"
 
-    window._show_history()
-    popup = window.history_popup
-    assert [popup.item(i).text().split("  ", 1)[1] for i in range(3)] == ["last", "it broke", "first"]  # newest first
+    assert window.history_button.menu() is window.history_menu  # a menu: closes on a click elsewhere or on the button
+    window.history_menu.aboutToShow.emit()
+    shown = window.history_menu.list
+    assert [shown.item(i).text().split("  ", 1)[1] for i in range(3)] == ["last", "it broke", "first"]  # newest first
     assert window.history_button.text() == "History"  # seen
-    popup.item(1).setSelected(True)
-    QTest.keySequence(popup, QKeySequence.StandardKey.Copy)
+    shown.item(1).setSelected(True)
+    QTest.keySequence(window.history_menu, QKeySequence.StandardKey.Copy)
     assert QApplication.clipboard().text().endswith("it broke")
-    popup.close()
 
     for i in range(gui.HISTORY_SIZE + 5):
         window._notify(f"m{i}")
