@@ -12,8 +12,10 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from rich.text import Text  # noqa: E402
 
 from nh_workbench import github, gui, pack  # noqa: E402
-from nh_workbench.models import PackEntry, PackInfo  # noqa: E402
+from nh_workbench.models import PackEntry, PackInfo, PrHead, PrInfo, ReviewItem  # noqa: E402
 from nh_workbench.proc import Result  # noqa: E402
+
+MY_PR = "https://example.invalid/pull/7"
 
 
 @pytest.fixture
@@ -25,7 +27,12 @@ def window(sandbox, monkeypatch):
         closed = PackEntry("Thaumcraft", "external", "4.2", closed=True)
         return PackInfo(entries=[closed, PackEntry("Missing", "github", "1", repo="o/m")], release="2.9.0")
 
+    async def fake_mine():
+        pr = PrInfo(7, "OPEN", False, "REVIEW_REQUIRED", "FAILURE", "", MY_PR, "My change", 120, 30)
+        return [ReviewItem("o/m", pr, "me", None, True)], None
+
     monkeypatch.setattr(github, "fetch_prs", no_prs)
+    monkeypatch.setattr(github, "fetch_mine", fake_mine)
     monkeypatch.setattr(pack, "load", fake_pack)
     QApplication.instance() or QApplication([])
     win = gui.MainWindow(sandbox.cfg)
@@ -116,5 +123,55 @@ def test_toolbar_follows_the_tab(window):
     assert shown() == {"fetch", "pull", "rescan", "open_web", "open_ide"}
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
     assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    assert shown() == {"rescan", "open_web", "checkout"}  # no IntelliJ: o/m is not checked out here
     window.tabs.setCurrentIndex(0)
     assert "clone" not in shown()
+
+
+def test_my_prs_tab_lists_and_opens(window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    loaded(window)
+    wait_for(lambda: window.mine.source.rows)
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["My", "PRs", "1"]
+    assert window.table is window.mine and window._selected_pr().pr.number == 7
+    cells = [window.mine.proxy.index(0, c).data() for c in range(len(window.mine.source.columns))]
+    assert cells[0] == "m" and "#7 open" in cells[1] and cells[4] == "\u2014"
+    assert "branch not checked out here" in window.detail.toPlainText()
+
+    window.filter.setText("<100")  # the TUI's size filter: 150 changed lines is too many
+    assert window.mine.proxy.rowCount() == 0
+    window.filter.setText("my change")
+    assert window.mine.proxy.rowCount() == 1
+
+    window.mine.selectRow(0)
+    window.mine.activated.emit(window.mine.currentIndex())  # Enter or double click opens the PR, as in the TUI
+    assert opened == [MY_PR]
+    window.mine.setFocus()
+    QTest.keyClick(window.mine, Qt.Key.Key_C)
+    assert "o/m is not checked out here" in window.message.text()
+
+
+def test_my_prs_check_out(window, sandbox, monkeypatch):
+    from test_git import make_fork
+
+    fork, tip = make_fork(sandbox)
+    sandbox.git(sandbox.work, "remote", "add", "gh", "https://github.com/o/m.git")  # matches the PR's repo
+
+    async def fake_head(base, number, protocol="https"):
+        return PrHead(number, base, "feature", "someone/m", str(fork)), None
+
+    monkeypatch.setattr(github, "pr_head", fake_head)
+    loaded(window)
+    window._rescan()  # the remote was added after the first scan
+    wait_for(lambda: not window.running and "gh" in window.model.rows[0].remotes and window.mine.source.rows)
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.mine.selectRow(0)
+    assert window.tab_actions["open_ide"].isVisible()  # its repo is checked out here now
+    window.tab_actions["checkout"].trigger()
+    wait_for(lambda: window.model.rows[0].current and window.model.rows[0].current.pr)  # linked once checked out
+    st = window.model.rows[0]
+    assert st.head_sha == tip and st.current.pr and st.current.pr.number == 7
+    assert window.mine.source.rows and "PR-7" in window.mine.proxy.index(0, 4).data()  # its local branch now

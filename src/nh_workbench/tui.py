@@ -1,7 +1,7 @@
 import asyncio
 import time
 import webbrowser
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -89,6 +89,36 @@ TOOLS = [
 ]
 NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
+
+
+def pr_matches(item: ReviewItem, needle: str) -> bool:
+    """The PR filter: a name, title or author, or a size like <200 for PRs under 200 changed lines."""
+    if needle.startswith("<") and needle[1:].strip().isdigit():
+        return item.pr.size < int(needle[1:])
+    return needle in f"{item.repo} {item.pr.title} {item.author}".lower()
+
+
+def local_branch(item: ReviewItem, states: Iterable[RepoState]) -> tuple[RepoState, str] | None:
+    """The checkout and local branch a pull request was opened from, when it is here."""
+    for st in states:
+        for br in st.branches:
+            if br.pr and br.pr.url == item.pr.url:
+                return st, br.name
+    return None
+
+
+def repo_for(item: ReviewItem, states: Iterable[RepoState]) -> RepoState | None:
+    """The checkout a pull request belongs to: the one with its branch, or any with its repo as a remote."""
+    states = list(states)
+    local = local_branch(item, states)
+    if local:
+        return local[0]
+    wanted = item.repo.lower()
+    # Any remote counts: a PR to an upstream repo still belongs to the fork checked out here.
+    for st in sorted(states, key=lambda s: s.worktree_of is not None):
+        if any((r.slug or "").lower() == wanted for r in st.remotes.values()) or (st.slug or "").lower() == wanted:
+            return st
+    return None
 
 
 def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: bool = True) -> bool:
@@ -746,23 +776,10 @@ class RepoApp(App[None]):
         return next((i for i in items if i.pr.url == key), None)
 
     def _local_branch(self, item: ReviewItem) -> tuple[RepoState, str] | None:
-        """The checkout and local branch a pull request was opened from, when it is here."""
-        for st in self.states.values():
-            for br in st.branches:
-                if br.pr and br.pr.url == item.pr.url:
-                    return st, br.name
-        return None
+        return local_branch(item, self.states.values())
 
     def _repo_for(self, item: ReviewItem) -> RepoState | None:
-        local = self._local_branch(item)
-        if local:
-            return local[0]
-        wanted = item.repo.lower()
-        # Any remote counts: a PR to an upstream repo still belongs to the fork checked out here.
-        for st in sorted(self.states.values(), key=lambda s: s.worktree_of is not None):
-            if any((r.slug or "").lower() == wanted for r in st.remotes.values()) or (st.slug or "").lower() == wanted:
-                return st
-        return None
+        return repo_for(item, self.states.values())
 
     def _selected_entry(self) -> PackEntry | None:
         key = self._cursor_key()
@@ -838,12 +855,7 @@ class RepoApp(App[None]):
 
     def _pr_items(self, items: list[ReviewItem]) -> list[ReviewItem]:
         """PRs matching the filter, in the chosen order. A filter like <200 keeps PRs under 200 changed lines."""
-        needle = self.needle
-        if needle.startswith("<") and needle[1:].strip().isdigit():
-            limit = int(needle[1:])
-            shown = [i for i in items if i.pr.size < limit]
-        else:
-            shown = [i for i in items if needle in f"{i.repo} {i.pr.title} {i.author}".lower()]
+        shown = [i for i in items if pr_matches(i, self.needle)]
         key = PR_SORTS[self.pr_sort][1]
         return sorted(shown, key=key) if key else shown
 
