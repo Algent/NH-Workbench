@@ -15,6 +15,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Awaitable, Callable, Coroutine
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -22,6 +23,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QPoint,
     QRectF,
     QSize,
     QSortFilterProxyModel,
@@ -33,6 +35,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QAction,
+    QColor,
     QIcon,
     QKeySequence,
     QPalette,
@@ -129,6 +132,8 @@ ASC, DESC = Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder
 PR_SORT_COLUMNS = {"updated": ("Updated", ASC), "small": ("Size", ASC), "large": ("Size", DESC), "repo": ("Repo", ASC)}
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
 PR_TABS = ("mine", "reviews", "org")
+FAILURES_SHOWN = 5  # failures told one by one before the summary, as the terminal UI's notifications
+HISTORY_SIZE = 300  # messages kept for the status bar's history
 VIEW_KEYS = list(VIEWS)  # the same tabs as the terminal UI, in the same order
 
 # ANSI colors the Rich styles map to, picked to read well on a light or a dark window.
@@ -375,8 +380,9 @@ class Workbench:
             cloned = [j.dest for j in jobs if j.dest.is_dir() and j not in failed_jobs]
             if cloned:
                 await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), cloned)
-            why = f", {len(failed)} failed (first: {failed[0][0].name}: {failed[0][1]})" if failed else ""
-            self.notify(f"Cloned {len(cloned)} repos{why}", bool(failed))
+            for job, why in failed[:FAILURES_SHOWN]:
+                self.notify(f"{job.name}: {why}", True)
+            self.notify(f"Cloned {len(cloned)} repos" + (f", {len(failed)} failed" if failed else ""), bool(failed))
         finally:
             self.on_progress("", 0, 0)
 
@@ -386,15 +392,18 @@ class Workbench:
             entries = self.pack_info.entries if self.pack_info else []
             folder = self.cfg.root / pack.JAR_FOLDER
             report = await pack.download_closed(entries, folder)
-            why = f", {len(report.failed)} failed (first: {report.failed[0]})" if report.failed else ""
-            self.notify(f"{report.summary} in {folder}{why}", bool(report.failed))
+            for line in report.failed:
+                self.notify(line, True)
+            self.notify(f"{report.summary} in {folder}", bool(report.failed))
         finally:
             self.on_progress("", 0, 0)
 
     async def delete_jars(self, files: list[Path]) -> None:
         try:
             freed, failed = await asyncio.to_thread(ops.delete_files, files)
-            more = f", {len(failed)} could not be deleted (in use?): {failed[0]}" if failed else ""
+            for line in failed[:FAILURES_SHOWN]:
+                self.notify(line, True)
+            more = f", {len(failed)} could not be deleted (in use?)" if failed else ""
             self.notify(f"Freed {render.megabytes(freed)}{more}", bool(failed))
         finally:
             self.on_progress("", 0, 0)
@@ -991,6 +1000,34 @@ def pr_actions(item: ReviewItem, st: RepoState | None, cfg: Config) -> list[tupl
     ]
 
 
+class HistoryPopup(QListWidget):
+    """The status bar's earlier messages, newest first. Closes on Esc or a click elsewhere; Ctrl+C copies."""
+
+    def __init__(self, parent: QWidget, messages: list[tuple[str, str, bool]], warning: str) -> None:
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Popup)
+        self.setObjectName("history")  # framed, by the style sheet
+        self.setWordWrap(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        for when, text, warned in reversed(messages):
+            item = QListWidgetItem(f"{when}  {text}")
+            if warned:
+                item.setForeground(QColor(warning))
+            self.addItem(item)
+        if not messages:
+            item = QListWidgetItem("No messages yet")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.addItem(item)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+        elif event.matches(QKeySequence.StandardKey.Copy):
+            QApplication.clipboard().setText("\n".join(item.text() for item in self.selectedItems()))
+        else:
+            super().keyPressEvent(event)
+
+
 class ConfirmDialog(QDialog):
     """Yes or no on a list (HTML), with an optional checkbox. No is the default: Enter alone never confirms."""
 
@@ -1247,6 +1284,15 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.statusBar().addWidget(self.message, 1)
         self.statusBar().addPermanentWidget(self.progress)
+        self.history: list[tuple[str, str, bool]] = []  # (time, text, warning), oldest first
+        self.unseen_warnings = 0
+        self.history_popup: HistoryPopup | None = None
+        self.history_button = QToolButton()
+        self.history_button.setAutoRaise(True)
+        self.history_button.setToolTip("Earlier messages")
+        self.history_button.clicked.connect(self._show_history)
+        self.statusBar().addPermanentWidget(self.history_button)
+        self._update_history_button()
         self._show_actions()
 
     @property
@@ -1325,7 +1371,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(done)
         self.progress.show()
         self.progress_text = f"{label}..."
-        self._notify(self.progress_text)
+        self._show_message(self.progress_text)  # passing state, not kept in the history
 
     def warning_color(self) -> str:
         return gui_theme.warning_color(self.theme_name)
@@ -1351,8 +1397,32 @@ class MainWindow(QMainWindow):
         self._update_detail()
 
     def _notify(self, text: str, warning: bool = False) -> None:
+        """Show a message in the status bar and keep it in the history."""
+        self._show_message(text, warning)
+        self.history = [*self.history[-(HISTORY_SIZE - 1) :], (datetime.now().strftime("%H:%M:%S"), text, warning)]
+        if warning:
+            self.unseen_warnings += 1
+        self._update_history_button()
+
+    def _show_message(self, text: str, warning: bool = False) -> None:
         self.message.setText(text)
-        self.statusBar().setStyleSheet(f"color: {self.warning_color()};" if warning else "")
+        self.message.setStyleSheet(f"color: {self.warning_color()};" if warning else "")
+
+    def _update_history_button(self) -> None:
+        n = self.unseen_warnings
+        self.history_button.setText(f"History  ⚠ {n}" if n else "History")
+
+    def _show_history(self) -> None:
+        self.unseen_warnings = 0
+        self._update_history_button()
+        popup = HistoryPopup(self, self.history, self.warning_color())
+        width, height = min(820, self.width() - 40), 340
+        button = self.history_button
+        popup.resize(width, height)
+        popup.move(button.mapToGlobal(QPoint(button.width() - width, -height)))
+        popup.show()
+        popup.setFocus()
+        self.history_popup = popup  # kept, or it is collected at once
 
     # --- view
 

@@ -34,6 +34,9 @@ Columns size themselves to their contents until you drag one. Clicking a header 
   group, hide the repo. On a pack mod or a PR: clone, check out, open.
 - **Cleanup** and **To main** list what they will do and ask first; `No` is the default.
 - Tools tab: `Enter` on a tool runs it. spark profiles open in a window of their own.
+- **History**, at the right of the status bar: earlier messages, newest first, with the time. It counts the
+  warnings you have not seen yet; when a clone or download fails for several mods, each failure is there.
+  `Ctrl+C` copies the selected lines.
 
 ## Keys
 

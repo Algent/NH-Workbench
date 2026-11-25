@@ -8,6 +8,7 @@ pytest.importorskip("PySide6", reason="the desktop UI is an optional extra: uv s
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt, QTimer  # noqa: E402
+from PySide6.QtGui import QKeySequence  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 from rich.text import Text  # noqa: E402
@@ -582,7 +583,7 @@ def test_themes(window, sandbox, monkeypatch, tmp_path):
         assert QApplication.palette().color(QPalette.ColorRole.Base).name() == "#2b2e3b"
         assert any("#50fa7b" in rich for _, rich in window.model._cells[0])  # Dracula's green in the table
         window._notify("oops", True)
-        assert "#fe5555" in window.statusBar().styleSheet().lower()
+        assert "#fe5555" in window.message.styleSheet().lower()
 
         dialog = SettingsDialog(window)
         assert dialog.theme.currentData() == "dracula"
@@ -607,3 +608,27 @@ def test_cells_are_not_cut_short(window):
     st.subject = "x" * 120
     window.model.update_row(st)
     assert "x" * 120 in window.model._cells[0][gui.REPO_COLUMNS.index("Last commit")][0]
+
+
+def test_message_history(window, monkeypatch):
+    loaded(window)
+    window._progress("Fetching", 0, 3)  # passing state: shown, not kept
+    window._notify("first")
+    window._notify("it broke", True)
+    window._notify("last")
+    assert [text for _, text, _ in window.history][-3:] == ["first", "it broke", "last"]
+    assert "Fetching..." not in [text for _, text, _ in window.history]
+    assert window.history_button.text() == "History  ⚠ 1"
+
+    window._show_history()
+    popup = window.history_popup
+    assert [popup.item(i).text().split("  ", 1)[1] for i in range(3)] == ["last", "it broke", "first"]  # newest first
+    assert window.history_button.text() == "History"  # seen
+    popup.item(1).setSelected(True)
+    QTest.keySequence(popup, QKeySequence.StandardKey.Copy)
+    assert QApplication.clipboard().text().endswith("it broke")
+    popup.close()
+
+    for i in range(gui.HISTORY_SIZE + 5):
+        window._notify(f"m{i}")
+    assert len(window.history) == gui.HISTORY_SIZE and window.history[-1][1] == f"m{gui.HISTORY_SIZE + 4}"

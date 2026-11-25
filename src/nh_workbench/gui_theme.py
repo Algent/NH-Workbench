@@ -101,6 +101,7 @@ QSplitter::handle {{ background: {v["panel"]}; }}
 QProgressBar {{ background: {v["surface"]}; border: none; text-align: center; color: {v["foreground"]}; }}
 QProgressBar::chunk {{ background: {v["primary"]}; }}
 QToolTip {{ background: {v["panel"]}; color: {v["foreground"]}; border: 1px solid {v["primary"]}; }}
+QListWidget#history {{ border: 1px solid {v["primary"]}; padding: 4px; }}
 """
 
 
