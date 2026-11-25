@@ -1,4 +1,4 @@
-"""Desktop UI on Qt (PySide6), a proof of concept: every tab of the terminal UI, fetch, pull, clone, check out.
+"""Desktop UI on Qt (PySide6): the terminal UI's tabs, actions and keys in a window.
 
 The git, GitHub and pack work is the code the terminal UI runs. It runs on an asyncio loop in a background
 thread; results come back to the Qt thread through a signal. Cells and the detail pane reuse the Rich text the
@@ -551,6 +551,7 @@ class AsyncLoop:
             self.loop.stop()
 
         asyncio.run_coroutine_threadsafe(shutdown(), self.loop)
+        self.thread.join(timeout=3)  # git and gh processes killed before the app exits, not left behind
 
 
 class Bridge(QObject):
@@ -866,7 +867,8 @@ class RichTable(QTableView):
     ) -> None:
         super().__init__()
         self.source = model
-        self.fitted = False  # columns sized to the contents once
+        self.dragged = False  # a column was sized by hand: the contents no longer size them
+        self._fitting = False
         self.proxy = RichFilter(accept)
         self.proxy.setSourceModel(model)
         self.on_key: Callable[[str], bool] = lambda key: False  # a printable key, or tab, backtab, escape
@@ -885,15 +887,24 @@ class RichTable(QTableView):
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setHighlightSections(False)
         self.horizontalHeader().setResizeContentsPrecision(-1)  # every row: a long name far down must fit too
+        self.horizontalHeader().sectionResized.connect(self._resized)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
     def fit_columns(self) -> None:
         """Size the columns to their contents, the last one still taking the width that is left."""
-        self.fitted = True
-        self.resizeColumnsToContents()
-        header = self.horizontalHeader()
-        header.setStretchLastSection(False)  # sizing the last section turns its stretch off until set again
-        header.setStretchLastSection(True)
+        self._fitting = True
+        try:
+            self.resizeColumnsToContents()
+            header = self.horizontalHeader()
+            header.setStretchLastSection(False)  # sizing the last section turns its stretch off until set again
+            header.setStretchLastSection(True)
+        finally:
+            self._fitting = False
+
+    def _resized(self, section: int, old: int, new: int) -> None:
+        # The last column follows the window's width; any other one changing outside fit_columns was dragged.
+        if not self._fitting and section != len(self.source.columns) - 1:
+            self.dragged = True
 
     def current(self) -> object | None:
         index = self.currentIndex()
@@ -1292,8 +1303,8 @@ class MainWindow(QMainWindow):
         self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
         self._refresh_org()
         for table, _ in loaded:
-            # Sized once filled and filtered (All PRs shows nothing before its filter runs), then left as dragged.
-            if not table.fitted and table.proxy.rowCount():
+            # Sized to what they hold now (pack versions come after the repos), until a column is dragged.
+            if not table.dragged and table.proxy.rowCount():
                 table.fit_columns()
 
     def _progress(self, label: str, done: int, total: int) -> None:
@@ -1332,7 +1343,7 @@ class MainWindow(QMainWindow):
         height = gui_theme.row_height(size)
         for table in (self.repos, *self.tables.values()):
             table.verticalHeader().setDefaultSectionSize(height)
-            if table.fitted or table is self.tools:
+            if not table.dragged:
                 table.fit_columns()
         self._update_detail()
 
