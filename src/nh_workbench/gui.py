@@ -34,9 +34,15 @@ from PySide6.QtGui import QAbstractTextDocumentLayout, QAction, QIcon, QKeySeque
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -97,7 +103,6 @@ TOOLBAR_LETTERS = {"toggle_team": "t", "toggle_drafts": "t", "pr_filters": "v", 
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
 PR_TABS = ("mine", "reviews", "org")
 VIEW_KEYS = list(VIEWS)  # the same tabs as the terminal UI, in the same order
-DONE_ACTIONS = {"fetch", "pull", "main", "ide", "web", "folder"}  # repo menu entries this preview handles
 
 # ANSI colors the Rich styles map to, picked to read well on a light or a dark window.
 _DARK = (
@@ -402,6 +407,35 @@ class Workbench:
         finally:
             self.on_progress("", 0, 0)
 
+    async def find_cleanup(self, states: list[RepoState], then: Callable[[list, list], None]) -> None:
+        """Merged branches safe to delete, and kept ones, handed to `then`, as the cleanup asks before deleting."""
+        try:
+            safe, unpushed = await ops.cleanup_candidates(states, parked=True)
+        finally:
+            self.on_progress("", 0, 0)
+        then(safe, unpushed)
+
+    async def cleanup(self, safe: list, parked: dict[Path, RepoState], switch: bool) -> None:
+        """Delete merged branches; with switch, the parked repos go back to main first so theirs can go too."""
+        try:
+            if parked and switch:
+                await self.batch("Switching", lambda p: ops.to_main(self.cfg, parked[p]), list(parked))
+            # Whatever is still checked out (unticked, or the switch failed) stays.
+            safe = [(st, br) for st, br in safe if self.states.get(str(st.path), st).head != br.name]
+            if not safe:
+                self.notify("Nothing deleted: the merged branches are still checked out", False)
+                return
+            report = await ops.cleanup(safe)
+            note, failed = tui.finish_cleanup(report)
+            await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), list({st.path for st, _ in safe}))
+            self.notify(note, failed)
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def to_main_many(self, candidates: dict[Path, RepoState]) -> None:
+        if await self.batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
+            self.notify("Switched. Cleanup deletes the merged branches.", False)
+
     async def check_tool(self) -> None:
         """Fetch the tool's own checkout once per start, and say when it has new commits."""
         path = tui.tool_checkout()
@@ -466,14 +500,16 @@ class AsyncLoop:
         self.loop = asyncio.new_event_loop()  # a proactor loop on Windows: subprocesses work
         self.thread = threading.Thread(target=self.loop.run_forever, name="nhwb-async", daemon=True)
         self.thread.start()
+        self.stopping = False
 
     def submit(self, coro: Coroutine) -> concurrent.futures.Future:
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     def stop(self) -> None:
         """Cancel what is still running (a fetch when the window closes), let it clean up, then stop."""
-        if not self.loop.is_running():  # stopped already: the window was closed before
+        if self.stopping:  # the window was closed before
             return
+        self.stopping = True
 
         async def shutdown() -> None:
             tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
@@ -881,6 +917,68 @@ def pr_actions(item: ReviewItem, st: RepoState | None, cfg: Config) -> list[tupl
     ]
 
 
+class ConfirmDialog(QDialog):
+    """Yes or no on a list (HTML), with an optional checkbox. No is the default: Enter alone never confirms."""
+
+    def __init__(self, parent: QWidget, title: str, body: str, option: str = "", checked: bool = True) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("NH Workbench")
+        self.resize(820, 440)
+        head = QLabel(title)
+        font = head.font()
+        font.setBold(True)
+        font.setPointSizeF(font.pointSizeF() * 1.15)
+        head.setFont(font)
+        text = QTextBrowser()
+        text.setHtml(body)
+        self.option = QCheckBox(option)
+        self.option.setChecked(checked)
+        self.option.setVisible(bool(option))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Yes).setAutoDefault(False)
+        no = buttons.button(QDialogButtonBox.StandardButton.No)
+        no.setDefault(True)
+        no.setFocus()
+        layout = QVBoxLayout(self)
+        layout.addWidget(head)
+        layout.addWidget(text, 1)
+        layout.addWidget(self.option)
+        layout.addWidget(buttons)
+
+    def checked(self) -> bool:
+        return self.option.isChecked()
+
+
+class KeepDialog(QDialog):
+    """Tick the branches of a repo that the cleanup must never delete."""
+
+    def __init__(self, parent: QWidget, st: RepoState, kept: tuple[str, ...]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Protect branches of {st.name}")
+        self.resize(460, 380)
+        self.list = QListWidget()
+        local = [b.name for b in st.branches]
+        for name in local + [k for k in kept if k not in local]:
+            item = QListWidgetItem(name if name in local else f"{name}  (no local branch)")
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in kept else Qt.CheckState.Unchecked)
+            self.list.addItem(item)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Ticked branches are never deleted by the cleanup."))
+        layout.addWidget(self.list, 1)
+        layout.addWidget(buttons)
+
+    def chosen(self) -> list[str]:
+        items = [self.list.item(i) for i in range(self.list.count())]
+        return [i.data(Qt.ItemDataRole.UserRole) for i in items if i.checkState() == Qt.CheckState.Checked]
+
+
 # --- the window -----------------------------------------------------------------
 
 
@@ -935,6 +1033,20 @@ class MainWindow(QMainWindow):
                 lambda: self._operate("Pulling", ops.pull_repo),
                 "Fast-forward main if safe",
             ),
+            (
+                "to_main",
+                "To main",
+                "Ctrl+Shift+M",
+                lambda: self._to_main_all(),
+                "Switch repos parked on a merged PR branch back to main",
+            ),
+            (
+                "cleanup",
+                "Cleanup",
+                "Ctrl+Shift+Del",
+                lambda: self._cleanup(list(self.model.rows)),
+                "Delete merged local branches",
+            ),
             ("rescan", "Rescan", "F5", lambda: self._rescan(), "Read every repo again"),
             ("reload_prs", "Refresh from GitHub", "F5", self._reload_prs, "Load your PRs and reviews again (r)"),
             ("reload_org", "Search again", "F5", lambda: self.run(self.wb.reload_org()), "Search the org's PRs (r)"),
@@ -955,7 +1067,7 @@ class MainWindow(QMainWindow):
         self.toolbar = bar
         for key in ("toggle_team", "toggle_drafts"):
             self.tab_actions[key].setCheckable(True)
-        batch = ("fetch", "pull", "rescan", "reload_prs", "clone", "checkout", "toggle_team")
+        batch = ("fetch", "pull", "to_main", "cleanup", "rescan", "reload_prs", "clone", "checkout", "toggle_team")
         self.batch_actions = [self.tab_actions[k] for k in batch]
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -1331,11 +1443,7 @@ class MainWindow(QMainWindow):
         if entry:
             return entry.name, pack_actions(entry, self.cfg), lambda a: self._pack_action(a, entry)
         if st and not st.error:
-            actions = [
-                (key, id_, label, reason if id_ in DONE_ACTIONS else "not in the desktop preview yet")
-                for key, id_, label, reason in repo_actions(st, self.cfg.ide_off)
-            ]
-            return st.name, actions, lambda a: self._repo_action(a, st)
+            return st.name, repo_actions(st, self.cfg.ide_off), lambda a: self._repo_action(a, st)
         return None
 
     def _menu(self, where=None) -> None:
@@ -1452,6 +1560,78 @@ class MainWindow(QMainWindow):
         if choice and self._start("Installing the skill", []) is not None:
             self.run(self.wb.install_skill(list(skill.AGENTS) if choice == "all" else [choice]))
 
+    def _cleanup(self, states: list[RepoState]) -> None:
+        """Delete merged branches, after saying which: d in the terminal UI (all repos) or its repo menu (one)."""
+        if self._start("Looking for merged branches", []) is not None:
+            self.run(self.wb.find_cleanup(states, self._later(self._confirm_cleanup)))
+
+    def _confirm_cleanup(self, safe: list, unpushed: list) -> None:
+        if not safe:
+            self._notify(tui.no_cleanup_note(unpushed))
+            return
+        parked = {st.path: st for st, br in safe if br.name == st.head}  # checked out: needs a switch to main
+        option = f"Switch {len(parked)} repos to main first (unticked: keep their branch)" if parked else ""
+        body = rich_html(tui.cleanup_body(safe, parked), self.theme, 120)
+        title = f"Delete {len(safe)} merged local branches?"
+        dialog = ConfirmDialog(self, title, body, option, self.cfg.cleanup_to_main)
+        if not dialog.exec():
+            return
+        switch = bool(parked) and dialog.checked()
+        if parked and dialog.checked() != self.cfg.cleanup_to_main:
+            self.cfg.cleanup_to_main = dialog.checked()
+            try:
+                config.save_setting(("cleanup_to_main",), dialog.checked())
+            except config.ConfigError as e:
+                self._notify(str(e), True)
+        if self._start("Cleaning up", list({st.path for st, _ in safe})) is not None:
+            self.run(self.wb.cleanup(safe, parked, switch))
+
+    def _to_main_all(self) -> None:
+        candidates = {st.path: st for st in ops.to_main_candidates(self.model.rows)}
+        if not candidates:
+            self._notify("No repo is parked on a merged branch with a clean working tree")
+            return
+        body = rich_html(tui.to_main_body(candidates.values()), self.theme, 120)
+        if not ConfirmDialog(self, f"Switch {len(candidates)} repos back to main?", body).exec():
+            return
+        if self._start("Switching", list(candidates)) is not None:
+            self.run(self.wb.to_main_many(candidates))
+
+    def _repo_setting(self, action_id: str, st: RepoState) -> None:
+        """The repo menu entries that change the config file for one repo."""
+        repo = self.cfg.repo(st.name)
+        if action_id == "keep":
+            dialog = KeepDialog(self, st, repo.keep_branches)
+            if dialog.exec() and dialog.chosen() != list(repo.keep_branches):
+                self.apply_settings([(("repos", st.name, "keep_branches"), dialog.chosen() or None)])
+        elif action_id == "main_branch":
+            current = repo.tracked_branch or ""
+            names = ["", *(b.name for b in st.branches)]
+            if current not in names:
+                names.append(current)
+            label = "Branch to keep up to date (empty: the automatic choice)"
+            branch, ok = QInputDialog.getItem(
+                self, f"Main branch for {st.name}", label, names, names.index(current), True
+            )
+            branch = branch.strip()
+            if (
+                ok
+                and branch != current
+                and self.apply_settings([(("repos", st.name, "tracked_branch"), branch or None)])
+            ):
+                if branch and st.branch(branch) is None:
+                    self._notify(f"No local branch {branch} yet: pull will say so until it exists", True)
+        elif action_id == "group":
+            groups = sorted({s.group for s in self.model.rows} | {st.group})
+            label = "Group (empty: the automatic one)"
+            group, ok = QInputDialog.getItem(self, f"Group for {st.name}", label, groups, groups.index(st.group), True)
+            if ok and group.strip() != st.group:
+                self.apply_settings([(("repos", st.name, "group"), group.strip() or None)])
+        elif action_id == "hide":
+            text = f"Adds ignore = true for {st.name} to the config file. Settings can show it again."
+            if self._confirm(f"Hide {st.name} from the tool?", text):
+                self.apply_settings([(("repos", st.name, "ignore"), True)])
+
     def _reload_prs(self) -> None:
         if self._start("Refreshing from GitHub", []) is not None:
             self.run(self.wb.reload_prs())
@@ -1544,6 +1724,10 @@ class MainWindow(QMainWindow):
                 webbrowser.open(url)
         elif action_id == "folder":
             proc.open_path(st.path)
+        elif action_id == "cleanup":
+            self._cleanup([st])
+        elif action_id in ("keep", "main_branch", "group", "hide"):
+            self._repo_setting(action_id, st)
         elif action_id == "ide":
             ide = config.find_ide(self.cfg)
             if not ide or not config.runnable(ide):

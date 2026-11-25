@@ -61,7 +61,7 @@ def window(sandbox, monkeypatch):
     monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(pack, "load", fake_pack)
     QApplication.instance() or QApplication([])
-    win = gui.MainWindow(sandbox.cfg)
+    win = gui.MainWindow(sandbox.cfg, sandbox.root)  # a reloaded config keeps to the sandbox
     yield win
     win.close()
 
@@ -146,7 +146,7 @@ def test_toolbar_follows_the_tab(window):
     def shown() -> set[str]:
         return {key for key, action in window.tab_actions.items() if action.isVisible()}
 
-    assert shown() == {"fetch", "pull", "rescan", "open_web", "open_ide"}
+    assert shown() == {"fetch", "pull", "to_main", "cleanup", "rescan", "open_web", "open_ide"}
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
     assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
@@ -460,3 +460,61 @@ def test_auto_refresh(window):
     window._auto_refresh()
     assert window.running == "Fetching"
     wait_for(lambda: not window.running)
+
+
+def test_to_main_and_cleanup(window, sandbox, monkeypatch, tmp_path):
+    from nh_workbench import config
+
+    monkeypatch.setattr(config, "config_path", lambda: tmp_path / "config.toml")
+    loaded(window)
+    for name in ("algent/one", "algent/two"):
+        sandbox.git(sandbox.work, "checkout", "-q", "-b", name, "master")
+        sandbox.commit(sandbox.work, name.replace("/", "-"))
+    tips = {name: sandbox.sha(sandbox.work, name) for name in ("algent/one", "algent/two")}
+
+    async def merged(states):
+        data = github.PrData()
+        for number, (name, tip) in enumerate(tips.items(), 1):
+            data.prs[("repo", name)] = PrInfo(number, "MERGED", False, None, None, tip, "", "")
+        return data
+
+    monkeypatch.setattr(github, "fetch_prs", merged)
+    monkeypatch.setattr(gui.ConfirmDialog, "exec", lambda self: True)
+    window._rescan()
+    wait_for(lambda: not window.running and window.model.rows[0].current and window.model.rows[0].current.pr)
+    assert window.model.rows[0].head == "algent/two"
+
+    window._to_main_all()
+    wait_for(lambda: window.message.text().startswith("Switched"))
+    assert window.model.rows[0].head == "master"
+
+    window._cleanup(list(window.model.rows))
+    wait_for(lambda: window.message.text().startswith("Deleted"))
+    assert [b.name for b in window.model.rows[0].branches] == ["master"]
+    assert "algent/one" in (tmp_path / "cache" / "nh-workbench" / "deleted-branches.log").read_text()
+
+
+def test_repo_menu_settings(window, sandbox, monkeypatch, tmp_path):
+    from nh_workbench import config
+
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: path)
+    loaded(window)
+    st = window.model.rows[0]
+    answers = iter([("master", True), ("extra", True)])
+    monkeypatch.setattr(gui.QInputDialog, "getItem", lambda *a: next(answers))
+    window._repo_action("main_branch", st)
+    wait_for(lambda: not window.running)
+    window._repo_action("group", window.model.rows[0])
+    wait_for(lambda: not window.running and window.model.rows[0].group == "extra")
+    assert config.load().repo("repo") == config.RepoConfig(tracked_branch="master", group="extra")
+
+    dialog = gui.KeepDialog(window, window.model.rows[0], ("gone",))
+    assert [dialog.list.item(i).text() for i in range(dialog.list.count())] == ["master", "gone  (no local branch)"]
+    dialog.list.item(0).setCheckState(Qt.CheckState.Checked)
+    assert dialog.chosen() == ["master", "gone"]
+
+    monkeypatch.setattr(window, "_confirm", lambda *a: True)
+    window._repo_action("hide", window.model.rows[0])
+    wait_for(lambda: not window.running and not window.model.rows)
+    assert config.load().hidden == ["repo"]

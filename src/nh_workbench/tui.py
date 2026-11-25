@@ -19,7 +19,7 @@ from textual.widgets.option_list import Option
 
 from . import config, git, github, ops, pack, proc, render, skill
 from .config import Config
-from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
+from .models import Branch, CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 
 VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "all": ("All", lambda st: True),
@@ -502,6 +502,48 @@ async def update_tool(cfg: Config, st: RepoState | None) -> tuple[RepoState | No
         )
     latest = f": {subjects[0]}" + (f" and {len(subjects) - 1} more" if len(subjects) > 1 else "") if subjects else ""
     return new, f"Updated{latest}. Restart the tool to use it.", True
+
+
+def no_cleanup_note(unpushed: list) -> str:
+    kept = f" ({len(unpushed)} merged ones kept: local commits not in their PR)" if unpushed else ""
+    return f"No merged branches to clean up{kept}"
+
+
+def cleanup_body(safe: list[tuple[RepoState, Branch]], parked: dict[Path, RepoState]) -> Text:
+    """The branches and remotes a cleanup deletes, one per line."""
+    body = Text("\n").join(
+        Text.assemble(
+            (st.name, "bold"),
+            f"  {br.name}",
+            (f"  PR #{br.pr.number}" if br.pr else "", "dim"),
+            (f"  checked out, switches to {st.tracked} first" if st.path in parked else "", "yellow"),
+        )
+        for st, br in safe
+    )
+    for st, remote in ops.orphaned_remotes(safe):
+        body.append("\n").append_text(
+            Text.assemble((st.name, "bold"), f"  remote {remote.name}", ("  no longer tracked", "dim"))
+        )
+    return body
+
+
+def finish_cleanup(report: ops.CleanupReport) -> tuple[str, bool]:
+    """Append the undo commands to the log; what to tell after a cleanup, and whether something failed."""
+    log_file = config.cache_dir() / "deleted-branches.log"
+    if report.restore:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("a", encoding="utf-8") as f:
+            f.writelines(f"{datetime.now():%Y-%m-%d %H:%M} {line}\n" for line in report.restore)
+    note = f"Deleted {report.branches} branches and {report.remotes} remotes, undo commands in {log_file}"
+    failed = len(report.failed)
+    return note + (f"; {failed} failed" if failed else ""), bool(failed)
+
+
+def to_main_body(candidates: Iterable[RepoState]) -> Text:
+    return Text("\n").join(
+        Text.assemble((st.name, "bold"), f"  {st.head} → {st.tracked}", (f"  PR #{st.current.pr.number}", "dim"))
+        for st in candidates
+    )
 
 
 class ExtrasMenu(MenuScreen):
@@ -1447,23 +1489,10 @@ class RepoApp(App[None]):
             return
         safe, unpushed = await ops.cleanup_candidates(states, parked=True)
         if not safe:
-            kept = f" ({len(unpushed)} merged ones kept: local commits not in their PR)" if unpushed else ""
-            self.notify(f"No merged branches to clean up{kept}")
+            self.notify(no_cleanup_note(unpushed))
             return
         parked = {st.path: st for st, br in safe if br.name == st.head}  # checked out: needs a switch to main
-        body = Text("\n").join(
-            Text.assemble(
-                (st.name, "bold"),
-                f"  {br.name}",
-                (f"  PR #{br.pr.number}", "dim"),
-                (f"  checked out, switches to {st.tracked} first" if st.path in parked else "", "yellow"),
-            )
-            for st, br in safe
-        )
-        for st, remote in ops.orphaned_remotes(safe):
-            body.append("\n").append_text(
-                Text.assemble((st.name, "bold"), f"  remote {remote.name}", ("  no longer tracked", "dim"))
-            )
+        body = cleanup_body(safe, parked)
         option = f"Switch {len(parked)} repos to main first (unticked: keep their branch)" if parked else None
         screen = ConfirmScreen(f"Delete {len(safe)} merged local branches?", body, option, self.cfg.cleanup_to_main)
         if not await self.push_screen_wait(screen):
@@ -1483,15 +1512,9 @@ class RepoApp(App[None]):
                 self.notify("Nothing deleted: the merged branches are still checked out")
                 return
         report = await ops.cleanup(safe)
-        log_file = config.cache_dir() / "deleted-branches.log"
-        if report.restore:
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            with log_file.open("a", encoding="utf-8") as f:
-                f.writelines(f"{datetime.now():%Y-%m-%d %H:%M} {line}\n" for line in report.restore)
+        note, failed = finish_cleanup(report)
         await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), list({st.path for st, _ in safe}))
-        note = f"Deleted {report.branches} branches and {report.remotes} remotes, undo commands in {log_file}"
-        failed = len(report.failed)
-        self.notify(note + (f"; {failed} failed" if failed else ""), severity="warning" if failed else "information")
+        self.notify(note, severity="warning" if failed else "information")
 
     @work(group="dialog")
     async def action_to_main(self) -> None:
@@ -1501,10 +1524,7 @@ class RepoApp(App[None]):
         if not candidates:
             self.notify("No repo is parked on a merged branch with a clean working tree")
             return
-        body = Text("\n").join(
-            Text.assemble((st.name, "bold"), f"  {st.head} → {st.tracked}", (f"  PR #{st.current.pr.number}", "dim"))
-            for st in candidates.values()
-        )
+        body = to_main_body(candidates.values())
         if not await self.push_screen_wait(ConfirmScreen(f"Switch {len(candidates)} repos back to main?", body)):
             return
         if await self._batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
