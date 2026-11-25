@@ -26,6 +26,7 @@ from PySide6.QtCore import (
     QSize,
     QSortFilterProxyModel,
     Qt,
+    QTimer,
     Signal,
     Slot,
 )
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QTableView,
     QTextBrowser,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -58,7 +60,7 @@ from rich.segment import Segment
 from rich.terminal_theme import TerminalTheme
 from rich.text import Text
 
-from . import config, github, ops, pack, proc, render, skill
+from . import config, github, ops, pack, proc, render, skill, tui
 from .config import Config
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 from .tui import (
@@ -191,6 +193,8 @@ class Workbench:
         self.org: github.OrgPrs | None = None  # every open PR of the org, searched when All PRs opens
         self.org_searching = False
         self.busy = ""
+        self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
+        self.tool_updated = False
 
     def _changed(self) -> None:
         entries = list(self.pack_info.entries) if self.pack_info else []
@@ -395,6 +399,25 @@ class Workbench:
                     github.attach([new], self.prs)
                     self._changed()
                 self.notify(f"{st.name}: {new.note.text}", new.note.kind == "failed")
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def check_tool(self) -> None:
+        """Fetch the tool's own checkout once per start, and say when it has new commits."""
+        path = tui.tool_checkout()
+        if path is None:
+            return
+        self.tool = await ops.fetch_repo(self.cfg, path)
+        behind = tui.tool_behind(self.tool)
+        if behind:
+            self.notify(f"NH Workbench has {behind} new commit(s): Settings (⚙) updates it", False)
+
+    async def update_tool(self) -> None:
+        try:
+            self.tool, message, updated = await tui.update_tool(self.cfg, self.tool)
+            self.tool_updated = self.tool_updated or updated
+            if message:
+                self.notify(message, True)
         finally:
             self.on_progress("", 0, 0)
 
@@ -862,9 +885,10 @@ def pr_actions(item: ReviewItem, st: RepoState | None, cfg: Config) -> list[tupl
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, root_override: Path | None = None) -> None:
         super().__init__()
         self.cfg = cfg
+        self.root_override = root_override  # --root: wins over the config file until the folder is changed
         self.bridge = Bridge()
         self.loop = AsyncLoop()
         self.theme = theme_for(self.palette())
@@ -882,10 +906,15 @@ class MainWindow(QMainWindow):
         self._build()
         self.resize(1400, 820)
         self._rescan()
+        self.run(self.wb.check_tool())
+        self.refresh_timer = QTimer(self)  # checked every minute, so a new interval applies without a restart
+        self.refresh_timer.timeout.connect(self._auto_refresh)
+        self.refresh_timer.start(60_000)
 
     def _build(self) -> None:
         self.running = ""  # label of the batch in progress
         self.progress_text = ""  # what the progress put in the status bar, replaced when it ends
+        self.last_loaded = 0.0  # time.monotonic() of the last rescan, for auto-refresh
         bar = QToolBar("Actions")
         bar.setMovable(False)
         self.addToolBar(bar)
@@ -906,7 +935,7 @@ class MainWindow(QMainWindow):
                 lambda: self._operate("Pulling", ops.pull_repo),
                 "Fast-forward main if safe",
             ),
-            ("rescan", "Rescan", "F5", self._rescan, "Read every repo again"),
+            ("rescan", "Rescan", "F5", lambda: self._rescan(), "Read every repo again"),
             ("reload_prs", "Refresh from GitHub", "F5", self._reload_prs, "Load your PRs and reviews again (r)"),
             ("reload_org", "Search again", "F5", lambda: self.run(self.wb.reload_org()), "Search the org's PRs (r)"),
             ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
@@ -941,6 +970,19 @@ class MainWindow(QMainWindow):
         find.setShortcut(QKeySequence.StandardKey.Find)
         find.triggered.connect(lambda: (self.filter.setFocus(), self.filter.selectAll()))
         self.addAction(find)
+        cog = QToolButton()
+        cog.setText("⚙")
+        font = cog.font()
+        font.setPointSizeF(font.pointSizeF() * 1.6)
+        cog.setFont(font)
+        cog.setAutoRaise(True)
+        cog.setToolTip("Settings (Ctrl+,)")
+        cog.clicked.connect(lambda: self.open_settings())
+        bar.addWidget(cog)
+        settings = QAction(self)
+        settings.setShortcut(QKeySequence("Ctrl+,"))
+        settings.triggered.connect(lambda: self.open_settings())
+        self.addAction(settings)
 
         self.tabs = QTabBar()
         self.tabs.setDrawBase(False)
@@ -1226,9 +1268,55 @@ class MainWindow(QMainWindow):
         if paths is not None:
             self.run(self.wb.batch(label, lambda p: worker(self.cfg, p), paths))
 
-    def _rescan(self) -> None:
-        if self._start("Scanning", None) is not None:
-            self.run(self.wb.load())
+    def _rescan(self, fetch: bool = False) -> None:
+        if self._start("Fetching" if fetch else "Scanning", None) is not None:
+            self.last_loaded = time.monotonic()
+            self.run(self.wb.load(fetch))
+
+    def _auto_refresh(self) -> None:
+        """Rescan like Rescan does once the interval has passed, unless something else is going on."""
+        minutes = self.cfg.refresh_minutes
+        if not minutes or self.running or QApplication.activeModalWidget() or QApplication.activePopupWidget():
+            return
+        if time.monotonic() - self.last_loaded >= minutes * 60:
+            self._rescan(fetch=self.cfg.refresh_fetch)
+
+    # --- settings
+
+    def open_settings(self, focus: str = "") -> None:
+        from .gui_settings import SettingsDialog
+
+        SettingsDialog(self, focus).exec()
+
+    def apply_settings(self, changes: list) -> bool:
+        """Write the Settings dialog's changes to the config file and reload it. False when that failed."""
+        if not changes:
+            return True
+        new_root = any(keys == ("root",) for keys, _ in changes)
+        try:
+            for keys, value in changes:
+                path = config.save_setting(keys, value)
+            cfg = config.load(None if new_root else self.root_override)
+        except config.ConfigError as e:
+            QMessageBox.warning(self, "Settings", str(e))
+            return False
+        if new_root:
+            self.root_override = None
+        self.cfg = self.wb.cfg = cfg
+        self.setWindowTitle(f"NH Workbench - {cfg.root}")
+        self._show_actions()
+        self._notify(f"Saved to {path}")
+        if any(keys[0] in ("root", "repos") for keys, _ in changes):  # other repos, or other settings for them
+            self._rescan()
+        return True
+
+    def refresh_pack(self) -> None:
+        if self._start("Downloading the pack data", []) is not None:
+            self.run(self.wb.refresh_pack())
+
+    def update_tool(self) -> None:
+        if self._start("Updating NH Workbench", []) is not None:
+            self.run(self.wb.update_tool())
 
     def _line(self) -> tuple[str, list[tuple[str, str, str, str | None]], Callable[[str], None]] | None:
         """The selected line's name, its actions, and what runs one: the menu, toolbar and letters all use it."""
@@ -1437,8 +1525,7 @@ class MainWindow(QMainWindow):
             if entry.web_url:
                 webbrowser.open(entry.web_url)
         elif action_id == "refresh":
-            if self._start("Downloading the pack data", []) is not None:
-                self.run(self.wb.refresh_pack())
+            self.refresh_pack()
         elif entry.local:  # open folder, open in the IDE: the same as for the checkout
             self._repo_action(action_id, entry.local)
 
@@ -1460,7 +1547,14 @@ class MainWindow(QMainWindow):
         elif action_id == "ide":
             ide = config.find_ide(self.cfg)
             if not ide or not config.runnable(ide):
-                self._notify("No IntelliJ launcher found: set ide_command in the config file", True)
+                why = f"{ide} cannot be found." if ide else "No IntelliJ launcher found (Toolbox script, idea on PATH)."
+                box = QMessageBox(QMessageBox.Icon.Warning, "NH Workbench", why, parent=self)
+                box.setInformativeText("Set it in Settings, or turn the IDE actions off there.")
+                go = box.addButton("Open Settings", QMessageBox.ButtonRole.AcceptRole)
+                box.addButton(QMessageBox.StandardButton.Cancel)
+                box.exec()
+                if box.clickedButton() is go:
+                    self.open_settings(focus="ide")
                 return
             try:
                 proc.launch(ide, str(st.path))
@@ -1470,7 +1564,7 @@ class MainWindow(QMainWindow):
             self._notify(f"Opening {st.name}")
 
 
-def run(cfg: Config) -> int:
+def run(cfg: Config, root_override: Path | None = None) -> int:
     if sys.platform == "win32":  # its own taskbar entry and icon, not Python's
         import ctypes
 
@@ -1487,7 +1581,7 @@ def run(cfg: Config) -> int:
             config.save_setting(("root",), folder)
         except config.ConfigError as e:
             QMessageBox.warning(None, "NH Workbench", f"Could not save the folder, it is asked again next time: {e}")
-    window = MainWindow(cfg)
+    window = MainWindow(cfg, root_override)
     window.show()
     return app.exec()
 

@@ -396,7 +396,7 @@ def test_run_saves_the_picked_folder(sandbox, monkeypatch):
             return 0
 
     class Window:
-        def __init__(self, cfg): ...
+        def __init__(self, cfg, root_override=None): ...
         def show(self): ...
 
     monkeypatch.setattr(gui, "QApplication", type("Qa", (), {"instance": staticmethod(App)}))
@@ -417,3 +417,46 @@ def test_desktop_launcher_moves_the_old_dirs(sandbox, monkeypatch):
     with pytest.raises(SystemExit):
         gui.main()
     assert refreshed == [True]
+
+
+def test_settings_dialog_saves_and_reloads(window, sandbox, monkeypatch, tmp_path):
+    from nh_workbench import config
+    from nh_workbench.gui_settings import SettingsDialog
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        f"root = '{sandbox.root.as_posix()}'\n[repos.Hidden]\nignore = true\n[repos.repo]\nkeep_branches = ['a', 'b']\n"
+    )
+    monkeypatch.setattr(config, "config_path", lambda: path)
+    window.cfg = window.wb.cfg = config.load()
+    loaded(window)
+
+    dialog = SettingsDialog(window)
+    dialog.minutes.setValue(5)
+    dialog.protocol.setCurrentIndex(dialog.protocol.findData("https"))
+    dialog.ide_off.setChecked(True)
+    dialog.hidden.takeItem(0)
+    dialog.kept.takeItem(0)  # repo  a
+    dialog.accept()
+    wait_for(lambda: not window.running)
+    cfg = config.load()
+    assert (cfg.refresh_minutes, cfg.clone_protocol, cfg.ide_off) == (5, "https", True)
+    assert cfg.hidden == [] and cfg.kept == [("repo", "b")]
+    assert window.cfg.ide_off and not window.tab_actions["open_ide"].isVisible()
+
+    errors = []
+    dialog = SettingsDialog(window)
+    monkeypatch.setattr(dialog, "_error", errors.append)
+    dialog.root.setText(str(tmp_path / "nope"))
+    assert dialog.changes() is None and errors[0].startswith("Not a folder")
+
+
+def test_auto_refresh(window):
+    loaded(window)
+    window.cfg.refresh_minutes, window.cfg.refresh_fetch = 1, True
+    window._auto_refresh()
+    assert not window.running  # not yet a minute since the last scan
+    window.last_loaded -= 61
+    window._auto_refresh()
+    assert window.running == "Fetching"
+    wait_for(lambda: not window.running)

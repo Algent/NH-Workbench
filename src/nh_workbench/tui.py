@@ -459,6 +459,51 @@ def tool_checkout() -> Path | None:
     return skill.own_checkout()
 
 
+def tool_behind(st: RepoState | None) -> int:
+    """New commits for the tool's own checkout (st: that checkout, fetched)."""
+    if st is None or st.error:
+        return 0
+    return st.main_behind if st.off_main else st.behind
+
+
+def tool_entry(st: RepoState | None, updated: bool) -> tuple[str, str | None]:
+    """Label of the Settings entry that updates the tool, and why it cannot be used now."""
+    label = "Update NH Workbench"
+    if tool_checkout() is None:
+        return label, "installed as a package: uv tool upgrade or uvx --refresh"
+    if updated:
+        return label, "updated: restart the tool to use it"
+    if st is None:
+        return label, "checking for updates"
+    if st.error or (st.note and st.note.kind == "failed"):
+        return label, f"could not check: {st.error or st.note.text}"
+    behind = tool_behind(st)
+    if behind:
+        return f"{label} ({behind} new commit{'s' if behind > 1 else ''})", None
+    return label, f"up to date, {st.head or 'detached'} at {st.head_sha[:7]}"
+
+
+async def update_tool(cfg: Config, st: RepoState | None) -> tuple[RepoState | None, str, bool]:
+    """Pull the tool's own checkout. Returns its new state, what to tell (a warning), and whether it updated."""
+    path = tool_checkout()
+    if path is None or st is None or not st.tracked:
+        return st, "", False
+    subjects = await git.subjects_between(path, st.tracked, f"{st.tracked}@{{u}}") or []
+    new = await ops.pull_repo(cfg, path)
+    note = new.note
+    if not note or note.kind != "updated":
+        return new, f"Not updated: {note.text if note else 'nothing to pull'}", False
+    if new.off_main:
+        return (
+            new,
+            f"{new.tracked} updated in {path}, but the checkout is on {new.head}:"
+            f" switch to {new.tracked} and restart the tool to use it",
+            True,
+        )
+    latest = f": {subjects[0]}" + (f" and {len(subjects) - 1} more" if len(subjects) > 1 else "") if subjects else ""
+    return new, f"Updated{latest}. Restart the tool to use it.", True
+
+
 class ExtrasMenu(MenuScreen):
     def __init__(self, cfg: Config, info: PackInfo | None, update: tuple[str, str | None]) -> None:
         lines = [Text(f"Root: {cfg.root}", "dim"), Text(f"Config: {config.config_path()}", "dim")]
@@ -595,52 +640,16 @@ class RepoApp(App[None]):
             self.notify(f"NH Workbench has {behind} new commit(s): Settings (x) updates it", timeout=10)
 
     def _tool_behind(self) -> int:
-        st = self.tool
-        if st is None or st.error:
-            return 0
-        return st.main_behind if st.off_main else st.behind
+        return tool_behind(self.tool)
 
     def _tool_entry(self) -> tuple[str, str | None]:
-        """Label of the Settings entry that updates the tool, and why it cannot be used now."""
-        label = "Update NH Workbench"
-        st = self.tool
-        if tool_checkout() is None:
-            return label, "installed as a package: uv tool upgrade or uvx --refresh"
-        if self.tool_updated:
-            return label, "updated: restart the tool to use it"
-        if st is None:
-            return label, "checking for updates"
-        if st.error or (st.note and st.note.kind == "failed"):
-            return label, f"could not check: {st.error or st.note.text}"
-        behind = self._tool_behind()
-        if behind:
-            return f"{label} ({behind} new commit{'s' if behind > 1 else ''})", None
-        return label, f"up to date, {st.head or 'detached'} at {st.head_sha[:7]}"
+        return tool_entry(self.tool, self.tool_updated)
 
     async def _update_tool(self) -> None:
-        path, st = tool_checkout(), self.tool
-        if path is None or st is None or not st.tracked:
-            return
-        subjects = await git.subjects_between(path, st.tracked, f"{st.tracked}@{{u}}") or []
-        new = await ops.pull_repo(self.cfg, path)
-        self.tool = new
-        note = new.note
-        if not note or note.kind != "updated":
-            self.notify(f"Not updated: {note.text if note else 'nothing to pull'}", severity="warning", timeout=15)
-            return
-        self.tool_updated = True
-        if new.off_main:
-            self.notify(
-                f"{new.tracked} updated in {path}, but the checkout is on {new.head}:"
-                f" switch to {new.tracked} and restart the tool to use it",
-                severity="warning",
-                timeout=30,
-            )
-            return
-        latest = (
-            f": {subjects[0]}" + (f" and {len(subjects) - 1} more" if len(subjects) > 1 else "") if subjects else ""
-        )
-        self.notify(f"Updated{latest}. Restart the tool to use it.", severity="warning", timeout=30)
+        self.tool, message, updated = await update_tool(self.cfg, self.tool)
+        self.tool_updated = self.tool_updated or updated
+        if message:
+            self.notify(message, severity="warning", timeout=30 if updated else 15)
 
     def _save_theme(self, theme) -> None:
         """Keep the theme picked in the command palette for the next start."""

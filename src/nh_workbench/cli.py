@@ -434,7 +434,7 @@ def gui(ctx: typer.Context) -> None:
     except ImportError as e:
         err.print("[bold red]The desktop UI needs PySide6: uv sync --extra desktop")
         raise typer.Exit(2) from e
-    raise typer.Exit(desktop.run(ctx.obj))
+    raise typer.Exit(desktop.run(ctx.obj, ctx.find_root().params.get("root")))
 
 
 tools_app = typer.Typer(help="Tools that do not need the checkouts.", no_args_is_help=True)
