@@ -32,7 +32,17 @@ def window(sandbox, monkeypatch):
         return [ReviewItem("o/m", pr, "me", None, True)], None
 
     monkeypatch.setattr(github, "fetch_prs", no_prs)
+
+    async def fake_reviews(team=False):
+        def item(number: int, direct: bool) -> ReviewItem:
+            url = f"https://example.invalid/pull/{number}"
+            pr = PrInfo(number, "OPEN", False, None, None, "", url, f"PR {number}", 500 if direct else 10, 1)
+            return ReviewItem("o/m", pr, "ann", None, direct)
+
+        return [item(1, True)] + ([item(2, False)] if team else []), None
+
     monkeypatch.setattr(github, "fetch_mine", fake_mine)
+    monkeypatch.setattr(github, "fetch_reviews", fake_reviews)
     monkeypatch.setattr(pack, "load", fake_pack)
     QApplication.instance() or QApplication([])
     win = gui.MainWindow(sandbox.cfg)
@@ -125,8 +135,10 @@ def test_toolbar_follows_the_tab(window):
     assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
     assert shown() == {"rescan", "open_web", "checkout"}  # no IntelliJ: o/m is not checked out here
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("reviews"))
+    assert shown() == {"rescan", "open_web", "checkout", "toggle_team"}
     window.tabs.setCurrentIndex(0)
-    assert "clone" not in shown()
+    assert "clone" not in shown() and "toggle_team" not in shown()
 
 
 def test_my_prs_tab_lists_and_opens(window, monkeypatch):
@@ -175,3 +187,30 @@ def test_my_prs_check_out(window, sandbox, monkeypatch):
     st = window.model.rows[0]
     assert st.head_sha == tip and st.current.pr and st.current.pr.number == 7
     assert window.mine.source.rows and "PR-7" in window.mine.proxy.index(0, 4).data()  # its local branch now
+
+
+def test_reviews_tab_and_team_requests(window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(gui.webbrowser, "open", opened.append)
+    loaded(window)
+    wait_for(lambda: window.reviews.source.rows)
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("reviews"))
+    assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["Reviews", "1"]
+    assert window.table is window.reviews and window.reviews.proxy.rowCount() == 1  # team ones not loaded
+    cells = [window.reviews.proxy.index(0, c).data() for c in range(len(window.reviews.source.columns))]
+    assert cells[:3] == ["you", "m", cells[2]] and cells[4] == "ann" and "#1 open" in cells[2]
+    assert "not checked out" in window.detail.toPlainText()
+
+    window.reviews.setFocus()
+    QTest.keyClick(window.reviews, Qt.Key.Key_T)  # as in the terminal UI: t adds the team requests
+    wait_for(lambda: window.reviews.proxy.rowCount() == 2 and not window.running)
+    assert window.tab_actions["toggle_team"].isChecked()
+    assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["Reviews", "1"]  # still only yours
+
+    window.reviews.selectRow(1)
+    window.reviews.activated.emit(window.reviews.currentIndex())  # Enter opens the PR
+    assert opened == ["https://example.invalid/pull/2"]
+
+    window.tab_actions["toggle_team"].trigger()
+    wait_for(lambda: window.reviews.proxy.rowCount() == 1 and not window.running)
+    assert not window.tab_actions["toggle_team"].isChecked()

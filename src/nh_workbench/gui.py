@@ -1,4 +1,4 @@
-"""Desktop UI on Qt (PySide6), a proof of concept: the repo, My PRs and Pack tabs, fetch, pull, clone, check out.
+"""Desktop UI on Qt (PySide6), a proof of concept: repo, My PRs, Reviews and Pack tabs, fetch, pull, clone, check out.
 
 The git, GitHub and pack work is the code the terminal UI runs. It runs on an asyncio loop in a background
 thread; results come back to the Qt thread through a signal. Cells and the detail pane reuse the Rich text the
@@ -75,6 +75,7 @@ from .tui import (
     repo_cells,
     repo_detail,
     repo_for,
+    review_detail,
 )
 
 log = logging.getLogger(__name__)
@@ -83,7 +84,8 @@ RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
-VIEW_KEYS = [key for key in VIEWS if key in REPO_VIEWS or key in ("mine", "pack")]  # Reviews, All PRs, Tools: later
+PR_TABS = ("mine", "reviews")  # All PRs comes later
+VIEW_KEYS = [key for key in VIEWS if key in REPO_VIEWS or key in (*PR_TABS, "pack")]  # Tools comes later
 DONE_ACTIONS = {"fetch", "pull", "main", "ide", "web", "folder"}  # repo menu entries this preview handles
 
 # ANSI colors the Rich styles map to, picked to read well on a light or a dark window.
@@ -165,7 +167,7 @@ class Workbench:
         self,
         cfg: Config,
         on_repo: Callable[[RepoState], None],
-        on_change: Callable[[list[RepoState], list[PackEntry], list[ReviewItem]], None],
+        on_change: Callable[[list[RepoState], list[PackEntry], dict[str, list[ReviewItem]]], None],
         on_progress: Callable[[str, int, int], None],
         notify: Callable[[str, bool], None],
     ) -> None:
@@ -175,18 +177,21 @@ class Workbench:
         self.prs = github.PrData()
         self.pack_info: PackInfo | None = None
         self.mine: list[ReviewItem] = []
+        self.reviews: list[ReviewItem] = []
+        self.team_reviews = False  # also the requests that reach you through a team (slow to search)
         self.busy = ""
 
     def _changed(self) -> None:
         entries = list(self.pack_info.entries) if self.pack_info else []
-        self.on_change(sorted(self.states.values(), key=ops.by_repo), entries, list(self.mine))
+        prs = {"mine": list(self.mine), "reviews": list(self.reviews)}  # PR tab -> its PRs
+        self.on_change(sorted(self.states.values(), key=ops.by_repo), entries, prs)
 
     async def load(self, fetch: bool = False) -> None:
         worker = ops.fetch_repo if fetch else ops.scan_repo
         if not await self.batch("Fetching" if fetch else "Scanning", lambda p: worker(self.cfg, p), reset=True):
             return
         # Independent sources: none of them should hold the others up.
-        await asyncio.gather(self._load_prs(), self._load_pack(), self._load_mine())
+        await asyncio.gather(self._load_prs(), self._load_pack(), self._load_mine(), self._load_reviews(quiet=True))
 
     async def batch(
         self,
@@ -244,6 +249,22 @@ class Workbench:
         if items or not error:
             self.mine = items
             self._changed()
+
+    async def _load_reviews(self, quiet: bool = False) -> None:
+        items, error = await github.fetch_reviews(self.team_reviews)
+        if error and not quiet:
+            self.notify(f"Review requests: {error}", True)
+        if items or not error:
+            self.reviews = items
+            self._changed()
+
+    async def toggle_team(self, on: bool) -> None:
+        """Show or hide the review requests that reach you through a team, as t does in the terminal UI."""
+        try:
+            self.team_reviews = on
+            await self._load_reviews()
+        finally:
+            self.on_progress("", 0, 0)
 
     async def checkout(self, item: ReviewItem, st: RepoState) -> None:
         """Check out a pull request in its local repo, as c does on the terminal UI's PR tabs."""
@@ -457,23 +478,17 @@ class PackModel(RichModel):
         return entry.name
 
 
-class MineModel(RichModel):
-    """Your open PRs, with the local branch each one comes from."""
-
-    columns = render.MINE_COLUMNS
+class PrModel(RichModel):
+    """Pull requests in the order GitHub gives them (newest update first), sortable by size like the TUI."""
 
     def __init__(self, theme: TerminalTheme) -> None:
         super().__init__(theme)
-        self.states: list[RepoState] = []  # to find the local branch of each PR
-        self.order: dict[str, int] = {}  # GitHub's order, newest update first
+        self.states: list[RepoState] = []  # the checkouts, for what a PR has here
+        self.order: dict[str, int] = {}
 
     def set_rows(self, rows: list) -> None:
         self.order = {item.pr.url: i for i, item in enumerate(rows)}
         super().set_rows(rows)
-
-    def cells(self, item: ReviewItem) -> list[Text]:
-        local = local_branch(item, self.states)
-        return render.mine_row(item, local[1] if local else "")
 
     def key(self, item: ReviewItem) -> str:
         return item.pr.url
@@ -484,6 +499,25 @@ class MineModel(RichModel):
         if column == "Size":
             return item.pr.size
         return plain.lower()
+
+
+class MineModel(PrModel):
+    """Your open PRs, with the local branch each one comes from."""
+
+    columns = render.MINE_COLUMNS
+
+    def cells(self, item: ReviewItem) -> list[Text]:
+        local = local_branch(item, self.states)
+        return render.mine_row(item, local[1] if local else "")
+
+
+class ReviewModel(PrModel):
+    """Open PRs waiting on your review, yours personally or through a team."""
+
+    columns = render.REVIEW_COLUMNS
+
+    def cells(self, item: ReviewItem) -> list[Text]:
+        return render.review_row(item)
 
 
 class RichFilter(QSortFilterProxyModel):
@@ -703,6 +737,7 @@ class MainWindow(QMainWindow):
             ("rescan", "Rescan", "F5", self._rescan, "Read every repo again"),
             ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
             ("checkout", "Check out", "Ctrl+Shift+K", lambda: self._act("checkout"), "Check out the selected PR (c)"),
+            ("toggle_team", "Team reviews", "Ctrl+Shift+T", self._toggle_team, "Also requests made to your teams (t)"),
             ("open_web", "Open in browser", "Ctrl+Shift+G", lambda: self._act("web"), "PR or GitHub page of the line"),
             ("open_ide", "Open in IntelliJ", "Ctrl+Shift+O", lambda: self._act("ide"), "Open the checkout of the line"),
         ):
@@ -712,7 +747,9 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             bar.addAction(action)
             self.tab_actions[action_id] = action
-        self.batch_actions = [self.tab_actions[k] for k in ("fetch", "pull", "rescan", "clone", "checkout")]
+        self.tab_actions["toggle_team"].setCheckable(True)
+        batch = ("fetch", "pull", "rescan", "clone", "checkout", "toggle_team")
+        self.batch_actions = [self.tab_actions[k] for k in batch]
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
@@ -737,18 +774,21 @@ class MainWindow(QMainWindow):
         height = self.fontMetrics().height() + 10
         self.repos = RichTable(RepoModel(self.theme), self._repo_shown, height)
         self.mine = RichTable(MineModel(self.theme), self._pr_shown, height, sort_column="Updated")
+        self.reviews = RichTable(ReviewModel(self.theme), self._pr_shown, height, sort_column="Updated")
         self.pack = RichTable(PackModel(self.theme), self._entry_shown, height)
-        self.tables = {"mine": self.mine, "pack": self.pack}  # tabs with their own table; the rest share repos
+        # Tabs with their own table; the repo tabs share one.
+        self.tables = {"mine": self.mine, "reviews": self.reviews, "pack": self.pack}
         self.stack = QStackedWidget()
-        for table in (self.repos, self.mine, self.pack):
+        for table in (self.repos, *self.tables.values()):
             table.customContextMenuRequested.connect(lambda pos, t=table: self._menu(t.viewport().mapToGlobal(pos)))
             table.selectionModel().currentRowChanged.connect(lambda *_: self._update_detail())
             self.stack.addWidget(table)
-        for table in (self.mine, self.pack):  # letters act at once there, as in the terminal UI
+        for table in self.tables.values():  # letters act at once there, as in the terminal UI
             table.on_letter = self._letter
         self.repos.activated.connect(lambda _: self._menu())  # Enter or double click
         self.pack.activated.connect(lambda _: self._menu())
-        self.mine.activated.connect(lambda _: self._act("web"))  # as in the terminal UI: Enter opens the PR
+        for key in PR_TABS:  # as in the terminal UI: Enter opens the PR
+            self.tables[key].activated.connect(lambda _: self._act("web"))
 
         self.detail = QTextBrowser()
         self.detail.setOpenExternalLinks(True)
@@ -812,9 +852,12 @@ class MainWindow(QMainWindow):
         if self._selected() and self._selected().path == st.path:
             self._update_detail()
 
-    def _all_loaded(self, states: list[RepoState], entries: list[PackEntry], mine: list[ReviewItem]) -> None:
-        self.mine.source.states = states
-        for table, rows in ((self.repos, states), (self.pack, entries), (self.mine, mine)):
+    def _all_loaded(self, states: list[RepoState], entries: list[PackEntry], prs: dict[str, list[ReviewItem]]) -> None:
+        loaded = [(self.repos, states), (self.pack, entries)]
+        for key in PR_TABS:
+            self.tables[key].source.states = states
+            loaded.append((self.tables[key], prs.get(key, [])))
+        for table, rows in loaded:
             current = table.current()
             first = not table.source.rows
             table.source.set_rows(rows)
@@ -882,7 +925,9 @@ class MainWindow(QMainWindow):
     def _count_tabs(self) -> None:
         for i, key in enumerate(VIEW_KEYS):
             label, keep = VIEWS[key]
-            if key in self.tables:
+            if key == "reviews":  # as in the terminal UI: only the requests made to you personally
+                n = sum(1 for item in self.reviews.source.rows if item.direct)
+            elif key in self.tables:
                 n = len(self.tables[key].source.rows)
             else:
                 n = sum(1 for st in self.model.rows if keep and keep(st))
@@ -892,7 +937,7 @@ class MainWindow(QMainWindow):
         return self.repos.current() if self._view() in REPO_VIEWS else None
 
     def _selected_pr(self) -> ReviewItem | None:
-        return self.mine.current() if self._view() == "mine" else None
+        return self.tables[self._view()].current() if self._view() in PR_TABS else None
 
     def _selected_entry(self) -> PackEntry | None:
         return self.pack.current() if self._view() == "pack" else None
@@ -900,8 +945,10 @@ class MainWindow(QMainWindow):
     def _update_detail(self) -> None:
         self._show_actions()  # Open in IntelliJ on a PR depends on its repo being here
         st, entry, item = self._selected(), self._selected_entry(), self._selected_pr()
-        if item:
+        if item and self._view() == "mine":
             content = mine_detail(item, local_branch(item, self.model.rows))
+        elif item:
+            content = review_detail(item, repo_for(item, self.model.rows))
         elif st:
             content = repo_detail(st, self.wb.pack_info)
         elif entry and self.wb.pack_info:
@@ -986,11 +1033,22 @@ class MainWindow(QMainWindow):
 
     def _letter(self, key: str) -> bool:
         """c, w, ... on the Pack and PR tabs act on the selected line at once, as in the terminal UI."""
+        if key == "t" and self.tab_actions["toggle_team"].isVisible():
+            self.tab_actions["toggle_team"].trigger()
+            return True
         line = self._line()
         action_id = next((i for k, i, _, _ in line[1] if k == key), None) if line else None
         if action_id:
             self._act(action_id)
         return action_id is not None
+
+    def _toggle_team(self) -> None:
+        on = self.tab_actions["toggle_team"].isChecked()
+        label = "Loading team review requests, this takes a few seconds" if on else "Loading review requests"
+        if self._start(label, []) is None:
+            self.tab_actions["toggle_team"].setChecked(not on)  # another batch is running: nothing changed
+            return
+        self.run(self.wb.toggle_team(on))
 
     def _act(self, action_id: str) -> None:
         """Run an action on the selected line, from the toolbar or a letter key; say why when it cannot."""
