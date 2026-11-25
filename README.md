@@ -12,6 +12,8 @@ Keeps a folder full of GTNH mod checkouts under control:
 
 Works on Windows, Linux and macOS. Everything else is in the [wiki](https://github.com/Algent/NH-Workbench/wiki).
 
+![The terminal UI: one line per checkout with its branch, state, and pack versions, and details on the selected repo](wiki/images/terminal-ui.svg)
+
 ## Getting started
 
 Needs [uv](https://docs.astral.sh/uv/), `git`, and the [`gh` CLI](https://cli.github.com/) logged in
@@ -59,6 +61,7 @@ GitHub Actions runs all three on Linux, Windows and macOS for every push and pul
 
 The wiki is generated from the `wiki` folder: edit the pages there, and every push to master that changes them
 publishes them (`.github/workflows/sync-wiki.yml`). Pages edited on GitHub are overwritten by the next sync.
+Pictures go in `wiki/images`; the screenshot is the UI's own export (`Ctrl+P`, then Screenshot).
 
 spark reports name the mod of each class from a table of package prefixes, `src/nh_workbench/mod_packages.toml`,
 generated from a pack's jars (classes of mixins count for the mod that wrote them). After mods were added or

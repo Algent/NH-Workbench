@@ -3,6 +3,8 @@
 Started by `nh-workbench` (or `nhwb`) without a command, or by the `nh-workbench.cmd` / `nh-workbench.sh`
 launchers.
 
+![The terminal UI on the All tab](images/terminal-ui.svg)
+
 ## Tabs
 
 | Tab | Shows |
