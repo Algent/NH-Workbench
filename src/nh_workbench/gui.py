@@ -62,6 +62,7 @@ from .tui import HEADER_SORT, REPO_COLUMNS, SORTS, VIEWS, repo_actions, repo_cel
 
 log = logging.getLogger(__name__)
 
+RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]  # the PR, pack and tools tabs come later
@@ -270,9 +271,28 @@ class RepoModel(QAbstractTableModel):
         self.theme = theme
         self.rows: list[RepoState] = []
         self._cells: list[list[tuple[str, str]]] = []  # (plain, html) per column
+        self.pending: dict[Path, str] = {}  # repos a batch has not reached yet, and what it is doing
 
     def _render(self, st: RepoState) -> list[tuple[str, str]]:
-        return [(t.plain, text_html(t, self.theme)) for t in repo_cells(st)]
+        cells = repo_cells(st)
+        if st.path in self.pending:
+            cells[RESULT] = Text(f"{self.pending[st.path].lower()}...", "dim italic")
+        return [(t.plain, text_html(t, self.theme)) for t in cells]
+
+    def mark(self, paths: list[Path], label: str) -> None:
+        """Show at once which repos a batch is about to work on."""
+        self.pending = dict.fromkeys(paths, label)
+        self._rerender()
+
+    def unmark(self) -> None:
+        if self.pending:
+            self.pending = {}
+            self._rerender()
+
+    def _rerender(self) -> None:
+        self._cells = [self._render(st) for st in self.rows]
+        if self.rows:
+            self.dataChanged.emit(self.index(0, RESULT), self.index(len(self.rows) - 1, RESULT))
 
     def set_rows(self, states: list[RepoState]) -> None:
         self.beginResetModel()
@@ -281,6 +301,7 @@ class RepoModel(QAbstractTableModel):
         self.endResetModel()
 
     def update_row(self, st: RepoState) -> None:
+        self.pending.pop(st.path, None)
         for i, old in enumerate(self.rows):
             if old.path == st.path:
                 self.rows[i], self._cells[i] = st, self._render(st)
@@ -430,22 +451,25 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon)))
         self._build()
         self.resize(1400, 820)
-        self.run(self.wb.load())
+        self._rescan()
 
     def _build(self) -> None:
+        self.batch_actions: list[QAction] = []
+        self.running = ""  # label of the batch in progress
         bar = QToolBar("Actions")
         bar.setMovable(False)
         self.addToolBar(bar)
         for label, keys, slot, tip in (
             ("Fetch all", "Ctrl+Shift+F", lambda: self._operate("Fetching", ops.fetch_repo), "Fetch every repo"),
             ("Pull safe", "Ctrl+Shift+P", lambda: self._operate("Pulling", ops.pull_repo), "Fast-forward main if safe"),
-            ("Rescan", "F5", lambda: self.run(self.wb.load()), "Read every repo again"),
+            ("Rescan", "F5", self._rescan, "Read every repo again"),
         ):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(keys))
             action.setToolTip(f"{tip} ({keys})")
             action.triggered.connect(slot)
             bar.addAction(action)
+            self.batch_actions.append(action)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
@@ -556,6 +580,8 @@ class MainWindow(QMainWindow):
 
     def _progress(self, label: str, done: int, total: int) -> None:
         if not label:
+            self._busy(False)
+            self.model.unmark()
             self.progress.hide()
             if self.message.text().endswith("..."):
                 self.message.setText(f"{len(self.model.rows)} repos")
@@ -608,9 +634,35 @@ class MainWindow(QMainWindow):
 
     # --- actions
 
+    def _busy(self, busy: bool) -> None:
+        if not busy:
+            self.running = ""
+        for action in self.batch_actions:
+            action.setEnabled(not busy)
+
+    def _start(self, label: str, paths: list[Path] | None) -> list[Path] | None:
+        """Show the batch right away: a fetch only reports its first repo after a network round trip.
+
+        Returns the paths to work on, or None when another batch is still running.
+        """
+        if self.running:  # set here, not in the worker, so two quick clicks cannot both get through
+            self._notify(f"{self.running} is still running", True)
+            return None
+        paths = paths if paths is not None else ops.discover(self.cfg)
+        self.running = label
+        self._busy(True)
+        self.model.mark(paths, label)
+        self._progress(label, 0, len(paths))
+        return paths
+
     def _operate(self, label: str, worker: Callable[[Config, Path], Awaitable[RepoState]], st=None) -> None:
-        paths = [st.path] if st else None
-        self.run(self.wb.batch(label, lambda p: worker(self.cfg, p), paths))
+        paths = self._start(label, [st.path] if st else None)
+        if paths is not None:
+            self.run(self.wb.batch(label, lambda p: worker(self.cfg, p), paths))
+
+    def _rescan(self) -> None:
+        if self._start("Scanning", None) is not None:
+            self.run(self.wb.load())
 
     def _repo_menu(self, where=None) -> None:
         st = self._selected()
@@ -638,7 +690,8 @@ class MainWindow(QMainWindow):
         elif action_id == "pull":
             self._operate("Pulling", ops.pull_repo, st)
         elif action_id == "main":
-            self.run(self.wb.batch("Switching", lambda p: ops.to_main(self.cfg, st), [st.path]))
+            if self._start("Switching", [st.path]) is not None:
+                self.run(self.wb.batch("Switching", lambda p: ops.to_main(self.cfg, st), [st.path]))
         elif action_id == "web":
             pr = st.current.pr if st.current else None
             url = pr.url if pr else (f"https://github.com/{st.slug}" if st.slug else None)
