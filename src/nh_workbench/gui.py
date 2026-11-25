@@ -68,6 +68,7 @@ from rich.text import Text
 
 from . import config, github, ops, pack, proc, render, skill, tui
 from .config import Config
+from .gui_settings import open_folder
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 from .tui import (
     HEADER_SORT,
@@ -99,7 +100,25 @@ RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 # Letters for toolbar actions on the tabs where they show, as in the terminal UI.
-TOOLBAR_LETTERS = {"toggle_team": "t", "toggle_drafts": "t", "pr_filters": "v", "reload_org": "r", "reload_prs": "r"}
+# The terminal UI's keys, each to the toolbar action it is on a tab: the first one shown there wins.
+LETTERS = [
+    ("f", "fetch"),
+    ("p", "pull"),
+    ("m", "to_main"),
+    ("d", "cleanup"),
+    ("r", "rescan"),
+    ("r", "reload_prs"),
+    ("r", "reload_org"),
+    ("c", "clone"),
+    ("c", "checkout"),
+    ("t", "toggle_team"),
+    ("t", "toggle_drafts"),
+    ("v", "pr_filters"),
+    ("w", "open_web"),
+    ("o", "open_ide"),
+]
+ASC, DESC = Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder
+PR_SORT_COLUMNS = {"updated": ("Updated", ASC), "small": ("Size", ASC), "large": ("Size", DESC), "repo": ("Repo", ASC)}
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
 PR_TABS = ("mine", "reviews", "org")
 VIEW_KEYS = list(VIEWS)  # the same tabs as the terminal UI, in the same order
@@ -827,7 +846,7 @@ class RichDelegate(QStyledItemDelegate):
 
 
 class RichTable(QTableView):
-    """A sortable, filterable table of a RichModel. Letter keys go to `on_letter`, like the TUI's keys."""
+    """A sortable, filterable table of a RichModel. Keys go to `on_key`, for the TUI's keys."""
 
     def __init__(
         self, model: RichModel, accept: Callable[[object], bool], row_height: int, sort_column: str = ""
@@ -836,7 +855,7 @@ class RichTable(QTableView):
         self.source = model
         self.proxy = RichFilter(accept)
         self.proxy.setSourceModel(model)
-        self.on_letter: Callable[[str], bool] = lambda key: False
+        self.on_key: Callable[[str], bool] = lambda key: False  # a printable key, or tab, backtab, escape
         self.setModel(self.proxy)
         self.setItemDelegate(RichDelegate(self))
         self.setSortingEnabled(True)
@@ -859,10 +878,31 @@ class RichTable(QTableView):
         return index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
 
     def keyPressEvent(self, event) -> None:
-        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
-        if plain and event.text().isalpha() and self.on_letter(event.text().lower()):
-            return
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier):
+            named = {Qt.Key.Key_Tab: "tab", Qt.Key.Key_Backtab: "backtab", Qt.Key.Key_Escape: "escape"}
+            text = event.text()
+            key = named.get(event.key()) or (text if text.isprintable() and text.strip() else "")
+            if key and self.on_key(key):
+                return
         super().keyPressEvent(event)
+
+
+class FilterBox(QLineEdit):
+    """The name filter: Esc clears it, Enter or Down goes back to the list, as in the terminal UI."""
+
+    def __init__(self, leave: Callable[[], None]) -> None:
+        super().__init__()
+        self.leave = leave
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.clear()
+            self.leave()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Down):
+            self.leave()
+        else:
+            super().keyPressEvent(event)
 
 
 class KeyMenu(QMenu):
@@ -1024,30 +1064,30 @@ class MainWindow(QMainWindow):
                 "Fetch all",
                 "Ctrl+Shift+F",
                 lambda: self._operate("Fetching", ops.fetch_repo),
-                "Fetch every repo",
+                "Fetch every repo (f; F: the selected one)",
             ),
             (
                 "pull",
                 "Pull safe",
                 "Ctrl+Shift+P",
                 lambda: self._operate("Pulling", ops.pull_repo),
-                "Fast-forward main if safe",
+                "Fast-forward main if safe (p; P: the selected one)",
             ),
             (
                 "to_main",
                 "To main",
                 "Ctrl+Shift+M",
                 lambda: self._to_main_all(),
-                "Switch repos parked on a merged PR branch back to main",
+                "Switch repos parked on a merged PR branch back to main (m)",
             ),
             (
                 "cleanup",
                 "Cleanup",
                 "Ctrl+Shift+Del",
                 lambda: self._cleanup(list(self.model.rows)),
-                "Delete merged local branches",
+                "Delete merged local branches (d)",
             ),
-            ("rescan", "Rescan", "F5", lambda: self._rescan(), "Read every repo again"),
+            ("rescan", "Rescan", "F5", lambda: self._rescan(), "Read every repo again (r)"),
             ("reload_prs", "Refresh from GitHub", "F5", self._reload_prs, "Load your PRs and reviews again (r)"),
             ("reload_org", "Search again", "F5", lambda: self.run(self.wb.reload_org()), "Search the org's PRs (r)"),
             ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
@@ -1055,8 +1095,20 @@ class MainWindow(QMainWindow):
             ("toggle_team", "Team reviews", "Ctrl+Shift+T", self._toggle_team, "Also requests made to your teams (t)"),
             ("toggle_drafts", "Drafts", "Ctrl+Shift+D", self._refresh_org, "Also list draft PRs (t)"),
             ("pr_filters", "Show only...", "Ctrl+Shift+V", self._pr_filters, "Only some of the org's PRs (v)"),
-            ("open_web", "Open in browser", "Ctrl+Shift+G", lambda: self._act("web"), "PR or GitHub page of the line"),
-            ("open_ide", "Open in IntelliJ", "Ctrl+Shift+O", lambda: self._act("ide"), "Open the checkout of the line"),
+            (
+                "open_web",
+                "Open in browser",
+                "Ctrl+Shift+G",
+                lambda: self._act("web"),
+                "PR or GitHub page of the line (w)",
+            ),
+            (
+                "open_ide",
+                "Open in IntelliJ",
+                "Ctrl+Shift+O",
+                lambda: self._act("ide"),
+                "Open the checkout of the line (o)",
+            ),
         ):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(keys))
@@ -1072,7 +1124,7 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
-        self.filter = QLineEdit()
+        self.filter = FilterBox(lambda: self.table.setFocus())
         self.filter.setPlaceholderText("Filter by name (Ctrl+F)")
         self.filter.setClearButtonEnabled(True)
         self.filter.setFixedWidth(260)
@@ -1088,13 +1140,19 @@ class MainWindow(QMainWindow):
         font.setPointSizeF(font.pointSizeF() * 1.6)
         cog.setFont(font)
         cog.setAutoRaise(True)
-        cog.setToolTip("Settings (Ctrl+,)")
+        cog.setToolTip("Settings (x, Ctrl+,)")
         cog.clicked.connect(lambda: self.open_settings())
         bar.addWidget(cog)
-        settings = QAction(self)
-        settings.setShortcut(QKeySequence("Ctrl+,"))
-        settings.triggered.connect(lambda: self.open_settings())
-        self.addAction(settings)
+        for keys, slot in (
+            ("Ctrl+,", lambda: self.open_settings()),
+            ("Ctrl+Tab", lambda: self._cycle_view(1)),
+            ("Ctrl+Shift+Tab", lambda: self._cycle_view(-1)),
+            ("Ctrl+Q", self.close),
+        ):
+            shortcut = QAction(self)
+            shortcut.setShortcut(QKeySequence(keys))
+            shortcut.triggered.connect(slot)
+            self.addAction(shortcut)
 
         self.tabs = QTabBar()
         self.tabs.setDrawBase(False)
@@ -1125,9 +1183,8 @@ class MainWindow(QMainWindow):
             table.customContextMenuRequested.connect(lambda pos, t=table: self._menu(t.viewport().mapToGlobal(pos)))
             table.selectionModel().currentRowChanged.connect(lambda *_: self._update_detail())
             self.stack.addWidget(table)
-        for key, table in self.tables.items():  # letters act at once there, as in the terminal UI
-            if key != "tools":
-                table.on_letter = self._letter
+        for table in (self.repos, *self.tables.values()):
+            table.on_key = self._key
         self.repos.activated.connect(lambda _: self._menu())  # Enter or double click
         self.pack.activated.connect(lambda _: self._menu())
         self.tools.activated.connect(lambda _: self._open_tool(self._selected_tool()))  # as in the TUI: Enter runs it
@@ -1469,14 +1526,67 @@ class MainWindow(QMainWindow):
         chosen = menu.exec(where) or menu.chosen
         return chosen.data() if chosen else None
 
+    def _key(self, key: str) -> bool:
+        """The terminal UI's keys, on every tab. True when the key was taken."""
+        view = self._view()
+        if key in ("tab", "backtab"):
+            self._cycle_view(-1 if key == "backtab" else 1)
+            return True
+        if key == "escape":
+            if not self.filter.text():
+                return False
+            self.filter.clear()
+            return True
+        anywhere = {
+            "/": ("filter", lambda: (self.filter.setFocus(), self.filter.selectAll())),
+            "s": ("sort", self._cycle_sort),
+            "x": ("", self.open_settings),
+            "C": ("", lambda: open_folder("config")),
+            "L": ("", lambda: open_folder("logs")),
+            "q": ("", self.close),
+        }
+        if key in anywhere:
+            shown_as, run = anywhere[key]
+            if not shown_as or action_shown(shown_as, view):
+                run()
+            return True
+        if key in ("F", "P") and view in REPO_VIEWS:  # the selected repo only
+            st = self._selected()
+            if st:
+                self._repo_action("fetch" if key == "F" else "pull", st)
+            return True
+        return self._letter(key)
+
+    def _cycle_view(self, step: int) -> None:
+        self.tabs.setCurrentIndex((self.tabs.currentIndex() + step) % self.tabs.count())
+        self.table.setFocus()
+
+    def _cycle_sort(self) -> None:
+        """s: the terminal UI's sort orders in turn. A click on a header picks one too."""
+        if self._view() in PR_TABS:
+            cycle = [(*PR_SORT_COLUMNS[key], label) for key, (label, _) in render.PR_SORTS.items()]
+        else:
+            by_key = {key: column for column, key in HEADER_SORT.items()}
+            cycle = [(by_key[key], ASC, label) for key, (label, _) in SORTS.items()]
+        table = self.table
+        header, columns = table.horizontalHeader(), table.source.columns
+        section = header.sortIndicatorSection()
+        now = (columns[section], header.sortIndicatorOrder()) if 0 <= section < len(columns) else None
+        at = next((i for i, (column, order, _) in enumerate(cycle) if (column, order) == now), -1)
+        column, order, label = cycle[(at + 1) % len(cycle)]
+        table.sortByColumn(columns.index(column), order)
+        self._notify(f"Sorted by {label}")
+
     def _letter(self, key: str) -> bool:
-        """c, w, ... on the Pack and PR tabs act on the selected line at once, as in the terminal UI."""
-        for action_id, letter in TOOLBAR_LETTERS.items():
+        """A toolbar action's letter; on the Pack and PR tabs, also the selected line's (c, w, e...) at once."""
+        for letter, action_id in LETTERS:
             action = self.tab_actions[action_id]
             if key == letter and action.isVisible():
                 if action.isEnabled():
                     action.trigger()
                 return True
+        if self._view() in REPO_VIEWS:  # as in the terminal UI: the repo menu's other letters only in the menu
+            return False
         line = self._line()
         action_id = next((i for k, i, _, _ in line[1] if k == key), None) if line else None
         if action_id:

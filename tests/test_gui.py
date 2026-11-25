@@ -518,3 +518,42 @@ def test_repo_menu_settings(window, sandbox, monkeypatch, tmp_path):
     window._repo_action("hide", window.model.rows[0])
     wait_for(lambda: not window.running and not window.model.rows)
     assert config.load().hidden == ["repo"]
+
+
+def test_terminal_ui_keys_on_every_tab(window, sandbox, monkeypatch):
+    loaded(window)
+    window.show()  # focus moves only in a shown, active window
+    window.activateWindow()
+    wait_for(window.isActiveWindow)
+    window.repos.setFocus()
+    tip = sandbox.push_upstream("second")
+    QTest.keyClick(window.repos, Qt.Key.Key_F)  # f: fetch all
+    assert window.running == "Fetching"
+    wait_for(lambda: not window.running)
+    QTest.keyClick(window.repos, Qt.Key.Key_P, Qt.KeyboardModifier.ShiftModifier)  # P: pull the selected repo
+    wait_for(lambda: not window.running and sandbox.sha(sandbox.work) == tip)
+
+    QTest.keyClick(window.repos, Qt.Key.Key_S)  # s: the next sort, as the TUI's
+    assert window.message.text() == "Sorted by last commit"
+    assert window.repos.horizontalHeader().sortIndicatorSection() == gui.REPO_COLUMNS.index("Last commit")
+
+    QTest.keyClick(window.repos, Qt.Key.Key_Slash)
+    assert window.filter.hasFocus()
+    QTest.keyClicks(window.filter, "zzz")
+    assert window.repos.proxy.rowCount() == 0
+    QTest.keyClick(window.filter, Qt.Key.Key_Escape)  # clears it and goes back to the list
+    assert window.filter.text() == "" and window.repos.proxy.rowCount() == 1
+
+    QTest.keyClick(window.repos, Qt.Key.Key_Tab)  # the next tab
+    assert window._view() == gui.VIEW_KEYS[1]
+    QTest.keyClick(window.table, Qt.Key.Key_Backtab)
+    assert window._view() == gui.VIEW_KEYS[0]
+
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    QTest.keyClick(window.mine, Qt.Key.Key_S)
+    assert window.message.text() == "Sorted by smallest first"
+
+    opened = []
+    monkeypatch.setattr(window, "open_settings", lambda: opened.append("settings"))
+    QTest.keyClick(window.mine, Qt.Key.Key_X)
+    assert opened == ["settings"]
