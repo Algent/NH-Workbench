@@ -91,6 +91,9 @@ def sync_text(st: RepoState) -> Text:
     return text
 
 
+NO_CLIP = 10_000  # a width that cuts nothing: the desktop UI's columns cut text themselves
+
+
 def clip(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
@@ -310,19 +313,19 @@ def version_text(version: str) -> Text:
     return Text(clip(version, 24)) if version else Text("—", "dim")
 
 
-def pack_row(entry: PackEntry) -> list[Text]:
+def pack_row(entry: PackEntry, width: int = 56) -> list[Text]:
     source = entry.repo or ""
     if source and entry.host != "github.com":
         source = f"{entry.host}/{source}"
     if entry.branch:
         source += f" @ {entry.branch}"
     return [
-        Text(clip(entry.name, 36), "bold"),
+        Text(clip(entry.name, max(36, width)), "bold"),
         Text(entry.kind, "" if entry.kind == "github" else "cyan"),
         version_text(entry.version),
         release_text(entry.local) if entry.local else version_text(entry.release_version),
         pack_status_text(entry),
-        Text(clip(source or (entry.url or ""), 56), "dim"),
+        Text(clip(source or (entry.url or ""), width), "dim"),
     ]
 
 

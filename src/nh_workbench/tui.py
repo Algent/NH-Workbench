@@ -200,7 +200,7 @@ def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: b
     return True
 
 
-def repo_cells(st: RepoState) -> list[Text]:
+def repo_cells(st: RepoState, width: int = 48) -> list[Text]:
     return [
         render.name_text(st),
         Text(st.group, "dim"),
@@ -210,7 +210,7 @@ def repo_cells(st: RepoState) -> list[Text]:
         render.daily_text(st),
         render.release_text(st),
         render.note_text(st.note),
-        render.last_text(st),
+        render.last_text(st, width),
     ]
 
 

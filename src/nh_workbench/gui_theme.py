@@ -4,20 +4,26 @@ The theme setting is shared with the terminal UI: one picked in either applies t
 colours (the terminal UI then shows its default).
 """
 
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QFontMetrics, QPalette
 from PySide6.QtWidgets import QApplication
 from textual.color import Color
 from textual.theme import BUILTIN_THEMES
 
 SYSTEM = "system"
 DEFAULT = "textual-dark"  # the terminal UI's default too
-THEMES = {"textual-dark": "Textual dark", "dracula": "Dracula", SYSTEM: "System colours"}  # offered in Settings
+# Offered in Settings: Textual's themes, but not the ANSI ones, made of the terminal's own colours.
+THEMES = (
+    {DEFAULT: "Textual dark"}
+    | {name: name.replace("-", " ").capitalize() for name, theme in BUILTIN_THEMES.items() if not theme.ansi}
+    | {SYSTEM: "System colours"}
+)
 WARNING = "#c62828"  # warnings with the system colours
+FONT_SIZE = 11  # points, when the config sets none: Qt's own default (9 on Windows) reads small
 
 
 def theme_name(configured: str) -> str:
     """The theme to show: the configured one when it is known, else the default."""
-    return configured if configured == SYSTEM or configured in BUILTIN_THEMES else DEFAULT
+    return configured if configured in THEMES else DEFAULT
 
 
 def colors(name: str) -> dict[str, Color] | None:
@@ -97,14 +103,30 @@ QToolTip {{ background: {v["panel"]}; color: {v["foreground"]}; border: 1px soli
 """
 
 
-def apply(app: QApplication, name: str) -> None:
+def font_sheet(points: float) -> str:
+    """The text size, in the style sheet: Windows gives item views and headers fonts of their own otherwise."""
+    return f"""
+QWidget {{ font-size: {points:g}pt; }}
+QToolButton#cog {{ font-size: {points * 1.6:.1f}pt; }}
+QLabel#title {{ font-size: {points * 1.15:.1f}pt; font-weight: 600; }}
+"""
+
+
+def apply(app: QApplication, name: str, size: int = 0) -> None:
+    """Colours of the theme `name` and text of `size` points (0: the default) for the whole app."""
+    points = size or FONT_SIZE
+    font = app.font()
+    font.setPointSizeF(points)
+    app.setFont(font)
     c = colors(name)
-    if c is None:
-        app.setPalette(app.style().standardPalette())
-        app.setStyleSheet("")
-        return
-    app.setPalette(palette(c))
-    app.setStyleSheet(style_sheet(c))
+    app.setPalette(palette(c) if c else app.style().standardPalette())
+    app.setStyleSheet(font_sheet(points) + (style_sheet(c) if c else ""))
+
+
+def row_height(size: int) -> int:
+    font = QApplication.font()
+    font.setPointSizeF(size or FONT_SIZE)
+    return QFontMetrics(font).height() + 10
 
 
 def warning_color(name: str) -> str:

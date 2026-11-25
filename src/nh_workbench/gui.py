@@ -30,7 +30,14 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAbstractTextDocumentLayout, QAction, QIcon, QKeySequence, QPalette, QTextDocument
+from PySide6.QtGui import (
+    QAbstractTextDocumentLayout,
+    QAction,
+    QIcon,
+    QKeySequence,
+    QPalette,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -185,11 +192,12 @@ def text_html(text: Text, theme: TerminalTheme) -> str:
     return "".join(parts)
 
 
-def rich_html(renderable: RenderableType, theme: TerminalTheme, width: int) -> str:
-    """A Rich renderable (tables included) as preformatted HTML, for the detail pane."""
+def rich_html(renderable: RenderableType, theme: TerminalTheme, width: int, size: int = 0) -> str:
+    """A Rich renderable (tables included) as preformatted HTML, for the detail pane. size: points, 0 the default."""
     console = Console(record=True, width=width, file=io.StringIO(), color_system="truecolor", legacy_windows=False)
     console.print(renderable)
-    code_format = f'<pre style="font-family:{_MONO}; color:{{foreground}}">{{code}}</pre>'
+    points = round((size or gui_theme.FONT_SIZE) * 1.1, 1)  # <pre> ignores the widget size; monospace reads smaller
+    code_format = f'<pre style="font-family:{_MONO}; font-size:{points}pt; color:{{foreground}}">{{code}}</pre>'
     return console.export_html(theme=theme, inline_styles=True, code_format=code_format)
 
 
@@ -674,7 +682,7 @@ class RepoModel(RichModel):
         self.pending: dict[Path, str] = {}  # repos a batch has not reached yet, and what it is doing
 
     def cells(self, st: RepoState) -> list[Text]:
-        cells = repo_cells(st)
+        cells = repo_cells(st, render.NO_CLIP)
         if st.path in self.pending:
             cells[RESULT] = Text(f"{self.pending[st.path].lower()}...", "dim italic")
         return cells
@@ -710,7 +718,7 @@ class PackModel(RichModel):
     columns = PACK_COLUMNS
 
     def cells(self, entry: PackEntry) -> list[Text]:
-        return render.pack_row(entry)
+        return render.pack_row(entry, render.NO_CLIP)
 
     def key(self, entry: PackEntry) -> str:
         return entry.name
@@ -746,7 +754,7 @@ class MineModel(PrModel):
 
     def cells(self, item: ReviewItem) -> list[Text]:
         local = local_branch(item, self.states)
-        return render.mine_row(item, local[1] if local else "")
+        return render.mine_row(item, local[1] if local else "", render.NO_CLIP)
 
 
 class ReviewModel(PrModel):
@@ -755,7 +763,7 @@ class ReviewModel(PrModel):
     columns = render.REVIEW_COLUMNS
 
     def cells(self, item: ReviewItem) -> list[Text]:
-        return render.review_row(item)
+        return render.review_row(item, render.NO_CLIP)
 
 
 class ToolModel(RichModel):
@@ -780,7 +788,7 @@ class OrgModel(PrModel):
         self.mark: Callable[[ReviewItem], str] = lambda item: ""
 
     def cells(self, item: ReviewItem) -> list[Text]:
-        return render.org_row(item, self.mark(item))
+        return render.org_row(item, self.mark(item), render.NO_CLIP)
 
 
 class RichFilter(QSortFilterProxyModel):
@@ -858,6 +866,7 @@ class RichTable(QTableView):
     ) -> None:
         super().__init__()
         self.source = model
+        self.fitted = False  # columns sized to the contents once
         self.proxy = RichFilter(accept)
         self.proxy.setSourceModel(model)
         self.on_key: Callable[[str], bool] = lambda key: False  # a printable key, or tab, backtab, escape
@@ -875,11 +884,12 @@ class RichTable(QTableView):
         self.verticalHeader().setDefaultSectionSize(row_height)
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setHighlightSections(False)
-        self.horizontalHeader().setResizeContentsPrecision(60)  # size columns from a sample: the pack has 250+ rows
+        self.horizontalHeader().setResizeContentsPrecision(-1)  # every row: a long name far down must fit too
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
     def fit_columns(self) -> None:
         """Size the columns to their contents, the last one still taking the width that is left."""
+        self.fitted = True
         self.resizeColumnsToContents()
         header = self.horizontalHeader()
         header.setStretchLastSection(False)  # sizing the last section turns its stretch off until set again
@@ -977,10 +987,7 @@ class ConfirmDialog(QDialog):
         self.setWindowTitle("NH Workbench")
         self.resize(820, 440)
         head = QLabel(title)
-        font = head.font()
-        font.setBold(True)
-        font.setPointSizeF(font.pointSizeF() * 1.15)
-        head.setFont(font)
+        head.setObjectName("title")  # bigger and bold, by the style sheet
         text = QTextBrowser()
         text.setHtml(body)
         self.option = QCheckBox(option)
@@ -1149,9 +1156,7 @@ class MainWindow(QMainWindow):
         self.addAction(find)
         cog = QToolButton()
         cog.setText("⚙")
-        font = cog.font()
-        font.setPointSizeF(font.pointSizeF() * 1.6)
-        cog.setFont(font)
+        cog.setObjectName("cog")  # bigger, by the style sheet
         cog.setAutoRaise(True)
         cog.setToolTip("Settings (x, Ctrl+,)")
         cog.clicked.connect(lambda: self.open_settings())
@@ -1174,7 +1179,7 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(VIEWS[key][0])
         self.tabs.currentChanged.connect(lambda _: self._apply_view())
 
-        height = self.fontMetrics().height() + 10
+        height = gui_theme.row_height(self.cfg.font_size)
         self.repos = RichTable(RepoModel(self.theme), self._repo_shown, height)
         self.mine = RichTable(MineModel(self.theme), self._pr_shown, height, sort_column="Updated")
         self.reviews = RichTable(ReviewModel(self.theme), self._pr_shown, height, sort_column="Updated")
@@ -1280,17 +1285,16 @@ class MainWindow(QMainWindow):
         for key in PR_TABS:
             self.tables[key].source.states = states
             loaded.append((self.tables[key], prs.get(key, [])))
-        first_rows = []
         for table, rows in loaded:
-            if rows and not table.source.rows:
-                first_rows.append(table)
             table.source.set_rows(rows)  # in place: the selected line stays selected unless it is gone
             if not table.currentIndex().isValid() and table.proxy.rowCount():
                 table.selectRow(0)
         self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
         self._refresh_org()
-        for table in first_rows:  # sized once filled and filtered (All PRs shows nothing before its filter runs)
-            table.fit_columns()
+        for table, _ in loaded:
+            # Sized once filled and filtered (All PRs shows nothing before its filter runs), then left as dragged.
+            if not table.fitted and table.proxy.rowCount():
+                table.fit_columns()
 
     def _progress(self, label: str, done: int, total: int) -> None:
         if not label:
@@ -1314,12 +1318,22 @@ class MainWindow(QMainWindow):
 
     def set_theme(self, name: str) -> None:
         """Switch the colors of the whole app, the Rich text in the tables and the detail pane included."""
-        gui_theme.apply(QApplication.instance(), name)
+        gui_theme.apply(QApplication.instance(), name, self.cfg.font_size)
         self.theme_name = name
         self.theme = theme_for(QApplication.palette(), name)
         for table in (self.repos, *self.tables.values()):
             table.source.theme = self.theme
             table.source.set_rows(table.source.rows)  # rendered again, in place
+        self._update_detail()
+
+    def set_font_size(self, size: int) -> None:
+        """Change the text size everywhere, then size the rows and columns to it."""
+        gui_theme.apply(QApplication.instance(), self.theme_name, size)
+        height = gui_theme.row_height(size)
+        for table in (self.repos, *self.tables.values()):
+            table.verticalHeader().setDefaultSectionSize(height)
+            if table.fitted or table is self.tools:
+                table.fit_columns()
         self._update_detail()
 
     def _notify(self, text: str, warning: bool = False) -> None:
@@ -1433,7 +1447,7 @@ class MainWindow(QMainWindow):
             self.detail.clear()
             return
         width = max(60, self.detail.viewport().width() // max(1, self.detail.fontMetrics().horizontalAdvance("M")))
-        self.detail.setHtml(rich_html(content, self.theme, width))
+        self.detail.setHtml(rich_html(content, self.theme, width, self.cfg.font_size))
 
     # --- actions
 
@@ -1502,6 +1516,8 @@ class MainWindow(QMainWindow):
         self._show_actions()
         if gui_theme.theme_name(cfg.theme) != self.theme_name:
             self.set_theme(gui_theme.theme_name(cfg.theme))
+        if any(keys == ("font_size",) for keys, _ in changes):
+            self.set_font_size(cfg.font_size)
         self._notify(f"Saved to {path}")
         if any(keys[0] in ("root", "repos") for keys, _ in changes):  # other repos, or other settings for them
             self._rescan()
@@ -1709,7 +1725,7 @@ class MainWindow(QMainWindow):
             return
         parked = {st.path: st for st, br in safe if br.name == st.head}  # checked out: needs a switch to main
         option = f"Switch {len(parked)} repos to main first (unticked: keep their branch)" if parked else ""
-        body = rich_html(tui.cleanup_body(safe, parked), self.theme, 120)
+        body = rich_html(tui.cleanup_body(safe, parked), self.theme, 120, self.cfg.font_size)
         title = f"Delete {len(safe)} merged local branches?"
         dialog = ConfirmDialog(self, title, body, option, self.cfg.cleanup_to_main)
         if not dialog.exec():
@@ -1729,7 +1745,7 @@ class MainWindow(QMainWindow):
         if not candidates:
             self._notify("No repo is parked on a merged branch with a clean working tree")
             return
-        body = rich_html(tui.to_main_body(candidates.values()), self.theme, 120)
+        body = rich_html(tui.to_main_body(candidates.values()), self.theme, 120, self.cfg.font_size)
         if not ConfirmDialog(self, f"Switch {len(candidates)} repos back to main?", body).exec():
             return
         if self._start("Switching", list(candidates)) is not None:
@@ -1894,7 +1910,7 @@ def run(cfg: Config, root_override: Path | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("NH Workbench")
     app.setStyle("Fusion")  # looks the same on Windows, Linux and macOS
-    gui_theme.apply(app, gui_theme.theme_name(cfg.theme))
+    gui_theme.apply(app, gui_theme.theme_name(cfg.theme), cfg.font_size)
     if not cfg.root.is_dir():
         folder = QFileDialog.getExistingDirectory(None, "Folder with your checkouts", str(Path.home()))
         if not folder:

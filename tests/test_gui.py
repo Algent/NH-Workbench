@@ -394,6 +394,10 @@ def test_run_saves_the_picked_folder(sandbox, monkeypatch):
         def setStyle(self, style): ...
         def setPalette(self, palette): ...
         def setStyleSheet(self, sheet): ...
+        def font(self):
+            return QApplication.font()
+
+        def setFont(self, font): ...
         def exec(self):
             return 0
 
@@ -585,5 +589,21 @@ def test_themes(window, sandbox, monkeypatch, tmp_path):
         dialog.theme.setCurrentIndex(dialog.theme.findData("textual-dark"))
         dialog.accept()
         assert window.theme_name == "textual-dark" and config.load().theme == "textual-dark"
+
+        dialog = SettingsDialog(window)
+        assert dialog.theme.findData("nord") >= 0 and dialog.theme.findData("ansi-dark") < 0  # ANSI: terminal colours
+        dialog.font_size.setValue(14)
+        dialog.accept()
+        assert config.load().font_size == 14 and window.repos.font().pointSizeF() == 14
+        assert window.repos.verticalHeader().defaultSectionSize() == gui_theme.row_height(14)
     finally:
         window.set_theme(gui_theme.SYSTEM)  # the palette belongs to the whole app: leave it as the next tests expect
+        QApplication.instance().setStyleSheet("")
+
+
+def test_cells_are_not_cut_short(window):
+    loaded(window)
+    st = window.model.rows[0]
+    st.subject = "x" * 120
+    window.model.update_row(st)
+    assert "x" * 120 in window.model._cells[0][gui.REPO_COLUMNS.index("Last commit")][0]

@@ -66,8 +66,14 @@ class SettingsDialog(QDialog):
         self.theme.setCurrentIndex(self.theme.findData(current))
         self.theme.setMaximumWidth(220)
         self.theme.setToolTip("Shared with the terminal UI: picking one there or here changes both")
+        self.font_size = QSpinBox()
+        self.font_size.setRange(7, 24)
+        self.font_size.setSuffix(" pt")
+        self.font_size.setValue(cfg.font_size or gui_theme.FONT_SIZE)
+        self.font_size.setMaximumWidth(120)
         look = QFormLayout()
         look.addRow("Theme", _row(self.theme, QWidget()))
+        look.addRow("Text size", _row(self.font_size, QWidget()))
 
         self.root = QLineEdit(str(cfg.root))
         change_root = QPushButton("Change...")
@@ -212,6 +218,9 @@ class SettingsDialog(QDialog):
         out: list[Change] = []
         if self.theme.currentData() != gui_theme.theme_name(cfg.theme):
             out.append((("theme",), self.theme.currentData()))
+        size = self.font_size.value()
+        if size != (cfg.font_size or gui_theme.FONT_SIZE):
+            out.append((("font_size",), None if size == gui_theme.FONT_SIZE else size))
         root = self.root.text().strip()
         if root and Path(root).expanduser() != cfg.root:
             if not Path(root).expanduser().is_dir():

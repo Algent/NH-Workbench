@@ -39,6 +39,7 @@ class Config:
     clone_protocol: str = "ssh"  # ssh or https, for clones and remotes the tool adds
     refresh_fetch: bool = False  # auto-refresh fetches instead of only rescanning
     theme: str = ""  # the UI's theme (picked in the command palette), empty: Textual's default
+    font_size: int = 0  # the desktop UI's text size in points, 0: its default
     pr_filters: tuple[str, ...] = ()  # filters on the All PRs tab, see github.PR_FILTERS
     ide_command: str | None = None
     ide_off: bool = False  # ide_command = false: no IDE actions at all
@@ -145,6 +146,7 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             refresh_fetch=bool(data.get("refresh_fetch", False)),
             pr_filters=tuple(str(f) for f in data.get("pr_filters", ())),
             theme=str(data.get("theme", "")),
+            font_size=max(0, int(data.get("font_size", 0))),
             ide_command=ide if isinstance(ide := data.get("ide_command"), str) and ide else None,
             ide_off=ide is False,
             cleanup_to_main=bool(data.get("cleanup_to_main", True)),
