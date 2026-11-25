@@ -19,7 +19,7 @@ nhwb = "nh_workbench.cli:app"
 gtnh-dev = "nh_workbench.cli:app"  # the old name, kept for existing setups
 
 [project.gui-scripts]
-nh-workbench-desktop = "nh_workbench.gui:main"  # no console window on Windows
+nh-workbench-desktop = "nh_workbench.gui:main"  # errors in a window; for no console at all, nh-workbench-desktop.cmd
 
 [project.optional-dependencies]
 desktop = [
