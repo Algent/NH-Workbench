@@ -1,3 +1,8 @@
+Tab.group-start {
+    margin-left: 1;
+    border-left: solid $foreground 30%;
+}
+
 #filter {
     height: 3;
 }

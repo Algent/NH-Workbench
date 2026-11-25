@@ -91,6 +91,7 @@ QTabBar::tab {{ background: {v["background"]}; color: {v["muted"]}; padding: 6px
     border-bottom: 2px solid {v["background"]}; }}
 QTabBar::tab:hover {{ color: {v["foreground"]}; background: {v["surface"]}; }}
 QTabBar::tab:selected {{ color: {v["foreground"]}; border-bottom: 2px solid {v["primary"]}; }}
+QTabBar::tab:disabled {{ color: {v["disabled"]}; padding: 6px 2px; background: {v["background"]}; }}
 QHeaderView::section {{ background: {v["panel"]}; color: {v["foreground"]}; border: none; padding: 4px 6px;
     font-weight: 600; }}
 QToolBar {{ background: {v["panel"]}; border: none; spacing: 2px; padding: 2px; }}
@@ -109,6 +110,7 @@ def font_sheet(points: float) -> str:
 QWidget {{ font-size: {points:g}pt; }}
 QToolButton#cog {{ font-size: {points * 1.6:.1f}pt; }}
 QLabel#title {{ font-size: {points * 1.15:.1f}pt; font-weight: 600; }}
+QTabBar::tab:disabled {{ background: transparent; border: none; padding: 4px 2px; }}  /* the group dividers */
 """
 
 

@@ -117,7 +117,7 @@ def test_pack_tab_lists_mods_and_clones(window, sandbox, monkeypatch):
 
     monkeypatch.setattr(pack, "clone", fake_clone)
     loaded(window)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
+    window.select_view("pack")
     assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["Pack", "2"]
     assert window.table is window.pack and window.stack.currentWidget() is window.pack
     assert window.pack.source.headers[3] == "Release (2.9.0)"
@@ -147,17 +147,17 @@ def test_toolbar_follows_the_tab(window):
         return {key for key, action in window.tab_actions.items() if action.isVisible()}
 
     assert shown() == {"fetch", "pull", "to_main", "cleanup", "rescan", "open_web", "open_ide"}
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
+    window.select_view("pack")
     assert shown() == {"rescan", "clone", "open_web", "open_ide"}  # what the TUI's footer shows on Pack
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.select_view("mine")
     assert shown() == {"reload_prs", "open_web", "checkout"}  # no IntelliJ: o/m is not checked out here
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("reviews"))
+    window.select_view("reviews")
     assert shown() == {"reload_prs", "open_web", "checkout", "toggle_team"}
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("org"))
+    window.select_view("org")
     assert shown() == {"reload_org", "open_web", "checkout", "toggle_drafts", "pr_filters"}
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("tools"))
+    window.select_view("tools")
     assert shown() == {"rescan"} and not window.filter_action.isVisible()  # as the TUI's footer on Tools
-    window.tabs.setCurrentIndex(0)
+    window.select_view("all")
     assert "clone" not in shown() and "toggle_team" not in shown()
 
 
@@ -166,7 +166,7 @@ def test_my_prs_tab_lists_and_opens(window, monkeypatch):
     monkeypatch.setattr(gui.webbrowser, "open", opened.append)
     loaded(window)
     wait_for(lambda: window.mine.source.rows)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.select_view("mine")
     assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["My", "PRs", "1"]
     assert window.table is window.mine and window._selected_pr().pr.number == 7
     cells = [window.mine.proxy.index(0, c).data() for c in range(len(window.mine.source.columns))]
@@ -199,7 +199,7 @@ def test_my_prs_check_out(window, sandbox, monkeypatch):
     loaded(window)
     window._rescan()  # the remote was added after the first scan
     wait_for(lambda: not window.running and "gh" in window.model.rows[0].remotes and window.mine.source.rows)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.select_view("mine")
     window.mine.selectRow(0)
     assert window.tab_actions["open_ide"].isVisible()  # its repo is checked out here now
     window.tab_actions["checkout"].trigger()
@@ -214,7 +214,7 @@ def test_reviews_tab_and_team_requests(window, monkeypatch):
     monkeypatch.setattr(gui.webbrowser, "open", opened.append)
     loaded(window)
     wait_for(lambda: window.reviews.source.rows)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("reviews"))
+    window.select_view("reviews")
     assert window.tabs.tabText(window.tabs.currentIndex()).split() == ["Reviews", "1"]
     assert window.table is window.reviews and window.reviews.proxy.rowCount() == 1  # team ones not loaded
     cells = [window.reviews.proxy.index(0, c).data() for c in range(len(window.reviews.source.columns))]
@@ -247,7 +247,7 @@ def test_refresh_from_github_on_pr_tabs(window, monkeypatch):
     loaded(window)
     wait_for(lambda: window.mine.source.rows and not window.running)
     monkeypatch.setattr(github, "fetch_mine", counted)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.select_view("mine")
     window.mine.setFocus()
     QTest.keyClick(window.mine, Qt.Key.Key_R)  # as in the terminal UI: r refreshes the PRs, not the repos
     wait_for(lambda: calls and not window.running)
@@ -260,7 +260,7 @@ def test_all_prs_tab(window, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "config_path", lambda: tmp_path / "config.toml")
     loaded(window)
     wait_for(lambda: window.mine.source.rows and window.reviews.source.rows)
-    org_tab = gui.VIEW_KEYS.index("org")
+    org_tab = window.tab_index("org")
     assert window.tabs.tabText(org_tab) == "All PRs"  # not searched yet
     window.tabs.setCurrentIndex(org_tab)
     wait_for(lambda: window.org.source.rows)
@@ -290,7 +290,7 @@ def test_tools_tab(window, monkeypatch, tmp_path):
     from nh_workbench import ops, skill
 
     loaded(window)
-    tools = gui.VIEW_KEYS.index("tools")
+    tools = window.tab_index("tools")
     assert window.tabs.tabText(tools) == "Tools"
     window.tabs.setCurrentIndex(tools)
     assert [window.tools.proxy.index(r, 0).data() for r in range(5)][:2] == ["spark profiles", "Clone missing repos"]
@@ -359,7 +359,7 @@ def test_spark_window(window, monkeypatch):
 
 def test_updates_keep_the_selected_line(window):
     loaded(window)
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("pack"))
+    window.select_view("pack")
     window.pack.selectRow(window.pack.proxy.rowCount() - 1)
     assert window.pack.current().name == "Thaumcraft"
     closed = PackEntry("Thaumcraft", "external", "4.3", closed=True)
@@ -555,7 +555,7 @@ def test_terminal_ui_keys_on_every_tab(window, sandbox, monkeypatch):
     QTest.keyClick(window.table, Qt.Key.Key_Backtab)
     assert window._view() == gui.VIEW_KEYS[0]
 
-    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("mine"))
+    window.select_view("mine")
     QTest.keyClick(window.mine, Qt.Key.Key_S)
     assert window.message.text() == "Sorted by smallest first"
 

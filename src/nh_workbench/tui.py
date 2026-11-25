@@ -34,6 +34,8 @@ VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "pack": ("Pack", None),
     "tools": ("Tools", None),
 }
+# Where a group of tabs starts (repos, then pull requests, then the rest): both UIs draw a divider before it.
+TAB_GROUP_STARTS = ("mine", "pack")
 SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
     "name": ("name", ops.by_repo),
     "recent": ("last commit", lambda st: -(st.date.timestamp() if st.date else 0)),
@@ -626,7 +628,12 @@ class RepoApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Tabs(*(Tab(label, id=f"view-{key}") for key, (label, _) in VIEWS.items()))
+        yield Tabs(
+            *(
+                Tab(label, id=f"view-{key}", classes="group-start" if key in TAB_GROUP_STARTS else "")
+                for key, (label, _) in VIEWS.items()
+            )
+        )
         hint = "Filter by name (on PR tabs <200 keeps PRs under 200 changed lines): Enter keeps it, Esc removes it"
         yield Input(placeholder=hint, id="filter")
         yield DataTable(id="repos", cursor_type="row", zebra_stripes=True)

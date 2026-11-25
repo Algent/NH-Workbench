@@ -82,6 +82,7 @@ from .tui import (
     PACK_COLUMNS,
     REPO_COLUMNS,
     SORTS,
+    TAB_GROUP_STARTS,
     TOOL_COLUMNS,
     TOOLS,
     VIEWS,
@@ -1187,7 +1188,9 @@ class MainWindow(QMainWindow):
         self.tabs.setDrawBase(False)
         self.tabs.setExpanding(False)
         for key in VIEW_KEYS:
-            self.tabs.addTab(VIEWS[key][0])
+            if key in TAB_GROUP_STARTS:  # a divider between the repo, PR and other tabs: a tab that cannot be picked
+                self.tabs.setTabEnabled(self.tabs.addTab("│"), False)
+            self.tabs.setTabData(self.tabs.addTab(VIEWS[key][0]), key)
         self.tabs.currentChanged.connect(lambda _: self._apply_view())
 
         height = gui_theme.row_height(self.cfg.font_size)
@@ -1354,7 +1357,13 @@ class MainWindow(QMainWindow):
     # --- view
 
     def _view(self) -> str:
-        return VIEW_KEYS[max(self.tabs.currentIndex(), 0)]
+        return self.tabs.tabData(self.tabs.currentIndex()) or "all"
+
+    def tab_index(self, key: str) -> int:
+        return next(i for i in range(self.tabs.count()) if self.tabs.tabData(i) == key)
+
+    def select_view(self, key: str) -> None:
+        self.tabs.setCurrentIndex(self.tab_index(key))
 
     def _needle(self) -> str:
         return self.filter.text().lower()
@@ -1410,7 +1419,7 @@ class MainWindow(QMainWindow):
         self._update_detail()
 
     def _count_tabs(self) -> None:
-        for i, key in enumerate(VIEW_KEYS):
+        for key in VIEW_KEYS:
             label, keep = VIEWS[key]
             if key == "reviews":  # as in the terminal UI: only the requests made to you personally
                 n = sum(1 for item in self.reviews.source.rows if item.direct)
@@ -1422,7 +1431,7 @@ class MainWindow(QMainWindow):
                 n = len(self.tables[key].source.rows)
             else:
                 n = sum(1 for st in self.model.rows if keep and keep(st))
-            self.tabs.setTabText(i, label if n is None else f"{label}  {n}")
+            self.tabs.setTabText(self.tab_index(key), label if n is None else f"{label}  {n}")
 
     def _selected(self) -> RepoState | None:
         return self.repos.current() if self._view() in REPO_VIEWS else None
@@ -1613,7 +1622,8 @@ class MainWindow(QMainWindow):
         return self._letter(key)
 
     def _cycle_view(self, step: int) -> None:
-        self.tabs.setCurrentIndex((self.tabs.currentIndex() + step) % self.tabs.count())
+        keys = VIEW_KEYS
+        self.select_view(keys[(keys.index(self._view()) + step) % len(keys)])  # over the dividers
         self.table.setFocus()
 
     def _cycle_sort(self) -> None:
