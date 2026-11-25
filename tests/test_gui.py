@@ -632,3 +632,29 @@ def test_message_history(window, monkeypatch):
     for i in range(gui.HISTORY_SIZE + 5):
         window._notify(f"m{i}")
     assert len(window.history) == gui.HISTORY_SIZE and window.history[-1][1] == f"m{gui.HISTORY_SIZE + 4}"
+
+
+def test_a_job_of_several_steps_ends_once(window):
+    from nh_workbench import ops
+
+    loaded(window)
+    ends = []
+    progress = window.wb.on_progress
+    window.wb.on_progress = lambda label, done, total: (
+        ends.append(label) if not label else None,
+        progress(label, done, total),
+    )
+
+    async def scan() -> None:
+        await window.wb.batch("Scanning", lambda p: ops.scan_repo(window.cfg, p))
+
+    async def two_steps() -> None:  # as a cleanup: a switch, then a scan
+        async with window.wb.job():
+            await scan()
+            assert ends == []  # the first step did not hand the toolbar back
+            await scan()
+
+    window.loop.submit(two_steps()).result(20)
+    assert ends == [""]
+    window.loop.submit(scan()).result(20)  # a batch on its own still ends its job
+    assert ends == ["", ""]

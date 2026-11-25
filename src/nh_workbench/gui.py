@@ -7,6 +7,7 @@ terminal UI builds, turned into HTML, so both UIs show the same thing from one p
 
 import asyncio
 import concurrent.futures
+import contextlib
 import html
 import io
 import logging
@@ -236,8 +237,21 @@ class Workbench:
         self.org: github.OrgPrs | None = None  # every open PR of the org, searched when All PRs opens
         self.org_searching = False
         self.busy = ""
+        self.depth = 0  # steps of the job in progress: a cleanup scans, a clone too
         self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
         self.tool_updated = False
+
+    @contextlib.asynccontextmanager
+    async def job(self):
+        """A step of what a UI started. The UI hears that the job is over once, when its outermost step ends:
+        a cleanup's switch and scan must not hand the toolbar back halfway."""
+        self.depth += 1
+        try:
+            yield
+        finally:
+            self.depth -= 1
+            if not self.depth:
+                self.on_progress("", 0, 0)
 
     def _changed(self) -> None:
         entries = list(self.pack_info.entries) if self.pack_info else []
@@ -259,39 +273,39 @@ class Workbench:
         paths: list[Path] | None = None,
         reset: bool = False,
     ) -> bool:
-        if self.busy:
-            self.notify(f"{self.busy} is still running", True)
-            return False
-        self.busy = label
-        try:
-            if paths is None:
-                paths = ops.discover(self.cfg)
-            if reset:
-                keep = {str(p) for p in paths}
-                self.states = {k: v for k, v in self.states.items() if k in keep}
-                self._changed()
-            done = 0
+        async with self.job():
+            if self.busy:
+                self.notify(f"{self.busy} is still running", True)
+                return False
+            self.busy = label
+            try:
+                if paths is None:
+                    paths = ops.discover(self.cfg)
+                if reset:
+                    keep = {str(p) for p in paths}
+                    self.states = {k: v for k, v in self.states.items() if k in keep}
+                    self._changed()
+                done = 0
 
-            def on_done(st: RepoState) -> None:
-                nonlocal done
-                done += 1
-                github.attach([st], self.prs)
-                old = self.states.get(str(st.path))
-                if old:  # keep the pack columns until they are recomputed after the batch
-                    st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
-                    st.daily_ahead, st.release_commits = old.daily_ahead, old.release_commits
-                    st.release_delta = old.release_delta
-                self.states[str(st.path)] = st
-                self.on_repo(st)
-                self.on_progress(label, done, len(paths))
+                def on_done(st: RepoState) -> None:
+                    nonlocal done
+                    done += 1
+                    github.attach([st], self.prs)
+                    old = self.states.get(str(st.path))
+                    if old:  # keep the pack columns until they are recomputed after the batch
+                        st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
+                        st.daily_ahead, st.release_commits = old.daily_ahead, old.release_commits
+                        st.release_delta = old.release_delta
+                    self.states[str(st.path)] = st
+                    self.on_repo(st)
+                    self.on_progress(label, done, len(paths))
 
-            await ops.run_all(paths, worker, self.cfg.concurrency, on_done)
-        finally:
-            self.busy = ""
-            self.on_progress("", 0, 0)
-        await self._relink(paths)
-        self._changed()
-        return True
+                await ops.run_all(paths, worker, self.cfg.concurrency, on_done)
+            finally:
+                self.busy = ""
+            await self._relink(paths)
+            self._changed()
+            return True
 
     async def _load_prs(self) -> None:
         data = await github.fetch_prs(self.states.values())
@@ -319,10 +333,8 @@ class Workbench:
 
     async def reload_prs(self) -> None:
         """Load your PRs, review requests and branch PRs again, without rescanning the repos."""
-        try:
+        async with self.job():
             await asyncio.gather(self._load_prs(), self._load_mine(), self._load_reviews())
-        finally:
-            self.on_progress("", 0, 0)
 
     async def open_org(self) -> None:
         """Show the saved org search at once; search again only when it is missing or old, like the TUI."""
@@ -367,7 +379,7 @@ class Workbench:
 
     async def clone_many(self, jobs: list[CloneJob]) -> None:
         """Clone a few at a time, then scan what was cloned so it shows up with the other checkouts."""
-        try:
+        async with self.job():
             done = 0
 
             def on_done(job: CloneJob, why: str | None) -> None:
@@ -383,33 +395,27 @@ class Workbench:
             for job, why in failed[:FAILURES_SHOWN]:
                 self.notify(f"{job.name}: {why}", True)
             self.notify(f"Cloned {len(cloned)} repos" + (f", {len(failed)} failed" if failed else ""), bool(failed))
-        finally:
-            self.on_progress("", 0, 0)
 
     async def download_jars(self) -> None:
         """The jars of closed-source pack mods, into the folder DreamAssemblerXXL expects."""
-        try:
+        async with self.job():
             entries = self.pack_info.entries if self.pack_info else []
             folder = self.cfg.root / pack.JAR_FOLDER
             report = await pack.download_closed(entries, folder)
             for line in report.failed:
                 self.notify(line, True)
             self.notify(f"{report.summary} in {folder}", bool(report.failed))
-        finally:
-            self.on_progress("", 0, 0)
 
     async def delete_jars(self, files: list[Path]) -> None:
-        try:
+        async with self.job():
             freed, failed = await asyncio.to_thread(ops.delete_files, files)
             for line in failed[:FAILURES_SHOWN]:
                 self.notify(line, True)
             more = f", {len(failed)} could not be deleted (in use?)" if failed else ""
             self.notify(f"Freed {render.megabytes(freed)}{more}", bool(failed))
-        finally:
-            self.on_progress("", 0, 0)
 
     async def install_skill(self, agents: list[str]) -> None:
-        try:
+        async with self.job():
             done = []
             for agent in agents:
                 try:
@@ -419,20 +425,16 @@ class Workbench:
                     return
                 done.append(f"{skill.AGENTS[agent]} in {folder}")
             self.notify(f"Skill installed for {', '.join(done)}; new sessions pick it up", False)
-        finally:
-            self.on_progress("", 0, 0)
 
     async def toggle_team(self, on: bool) -> None:
         """Show or hide the review requests that reach you through a team, as t does in the terminal UI."""
-        try:
+        async with self.job():
             self.team_reviews = on
             await self._load_reviews()
-        finally:
-            self.on_progress("", 0, 0)
 
     async def checkout(self, item: ReviewItem, st: RepoState) -> None:
         """Check out a pull request in its local repo, as c does on the terminal UI's PR tabs."""
-        try:
+        async with self.job():
             head, error = await github.pr_head(item.repo, item.pr.number, self.cfg.clone_protocol)
             if not head:
                 self.notify(f"#{item.pr.number}: {error}", True)
@@ -446,20 +448,16 @@ class Workbench:
                     github.attach([new], self.prs)
                     self._changed()
                 self.notify(f"{st.name}: {new.note.text}", new.note.kind == "failed")
-        finally:
-            self.on_progress("", 0, 0)
 
     async def find_cleanup(self, states: list[RepoState], then: Callable[[list, list], None]) -> None:
         """Merged branches safe to delete, and kept ones, handed to `then`, as the cleanup asks before deleting."""
-        try:
+        async with self.job():
             safe, unpushed = await ops.cleanup_candidates(states, parked=True)
-        finally:
-            self.on_progress("", 0, 0)
         then(safe, unpushed)
 
     async def cleanup(self, safe: list, parked: dict[Path, RepoState], switch: bool) -> None:
         """Delete merged branches; with switch, the parked repos go back to main first so theirs can go too."""
-        try:
+        async with self.job():
             if parked and switch:
                 await self.batch("Switching", lambda p: ops.to_main(self.cfg, parked[p]), list(parked))
             # Whatever is still checked out (unticked, or the switch failed) stays.
@@ -471,8 +469,6 @@ class Workbench:
             note, failed = tui.finish_cleanup(report)
             await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), list({st.path for st, _ in safe}))
             self.notify(note, failed)
-        finally:
-            self.on_progress("", 0, 0)
 
     async def to_main_many(self, candidates: dict[Path, RepoState]) -> None:
         if await self.batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
@@ -489,13 +485,11 @@ class Workbench:
             self.notify(f"NH Workbench has {behind} new commit(s): Settings (⚙) updates it", False)
 
     async def update_tool(self) -> None:
-        try:
+        async with self.job():
             self.tool, message, updated = await tui.update_tool(self.cfg, self.tool)
             self.tool_updated = self.tool_updated or updated
             if message:
                 self.notify(message, True)
-        finally:
-            self.on_progress("", 0, 0)
 
     async def _load_pack(self, force: bool = False) -> None:
         try:
@@ -507,14 +501,12 @@ class Workbench:
 
     async def refresh_pack(self) -> None:
         """Download the pack data again instead of using the copy cached for an hour."""
-        try:
+        async with self.job():
             await self._load_pack(force=True)
-        finally:
-            self.on_progress("", 0, 0)
 
     async def clone(self, entry: PackEntry) -> None:
         """Clone a pack mod into the root, then scan it so it shows up with the other checkouts."""
-        try:
+        async with self.job():
             res = await pack.clone(entry, self.cfg.root, self.cfg.clone_protocol)
             if not res.ok:
                 self.notify(f"{entry.name}: {res.message}", True)
@@ -522,8 +514,6 @@ class Workbench:
             job = pack.clone_job(entry, self.cfg.root, self.cfg.clone_protocol)
             await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), [job.dest])
             self.notify(f"Cloned {entry.repo} into {job.dest}", False)
-        finally:
-            self.on_progress("", 0, 0)
 
     async def _relink(self, paths: list[Path] | None = None) -> None:
         if not self.pack_info:
