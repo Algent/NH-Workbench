@@ -41,7 +41,7 @@ def main(
         err.print(f"[bold red]{e}")
         raise typer.Exit(2) from e
     # The UI asks for the folder itself; commands need it up front.
-    if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools"):
+    if not cfg.root.is_dir() and ctx.invoked_subcommand not in (None, "tools", "gui"):
         err.print(f'[bold red]Folder with your checkouts not found: "{cfg.root}"')
         err.print(
             f'Pass --root PATH, set root in "{config.config_path()}",'
@@ -424,6 +424,17 @@ def clone(
         err.print(f"[bold red]{e}")
         raise typer.Exit(1) from e
     raise typer.Exit(1 if failed else 0)
+
+
+@app.command()
+def gui(ctx: typer.Context) -> None:
+    """Open the desktop UI, a preview (needs the desktop extra: uv sync --extra desktop)."""
+    try:
+        from . import gui as desktop
+    except ImportError as e:
+        err.print("[bold red]The desktop UI needs PySide6: uv sync --extra desktop")
+        raise typer.Exit(2) from e
+    raise typer.Exit(desktop.run(ctx.obj))
 
 
 tools_app = typer.Typer(help="Tools that do not need the checkouts.", no_args_is_help=True)
