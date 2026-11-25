@@ -30,8 +30,9 @@ uv tool install -e .         # optional: puts `nh-workbench` and its short name 
 
 `nh-workbench.cmd` (Windows) and `nh-workbench.sh` (Linux, macOS) start the terminal UI from anywhere,
 `nh-workbench-desktop.cmd` and `nh-workbench-desktop.sh` the desktop UI (installing its Qt the first time; on
-Windows, without a console window). Run them directly or point a shortcut at them; each brings the environment up
-to date first. The terminal UI's pass command-line arguments through.
+Windows, without a console window), `nh-workbench-web.cmd` and `nh-workbench-web.sh` the web UI. Run them directly
+or point a shortcut at them; each brings the environment up to date first. The terminal and web UI launchers pass
+command-line arguments through.
 
 <img src="wiki/images/desktop-ui.png" width="800" alt="The desktop UI: the same repo list in a window, with Textual's dark theme">
 
