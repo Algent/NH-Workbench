@@ -156,7 +156,7 @@ class SparkWindow(QWidget):
 
     def _say(self, text: str, warning: bool = False) -> None:
         self.status.setText(text)
-        self.status.setStyleSheet("color: #c62828;" if warning else "")
+        self.status.setStyleSheet(f"color: {self.owner.warning_color()};" if warning else "")
 
     # --- loading
 

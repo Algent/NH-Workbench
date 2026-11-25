@@ -392,6 +392,8 @@ def test_run_saves_the_picked_folder(sandbox, monkeypatch):
     class App:
         def setApplicationName(self, name): ...
         def setStyle(self, style): ...
+        def setPalette(self, palette): ...
+        def setStyleSheet(self, sheet): ...
         def exec(self):
             return 0
 
@@ -557,3 +559,31 @@ def test_terminal_ui_keys_on_every_tab(window, sandbox, monkeypatch):
     monkeypatch.setattr(window, "open_settings", lambda: opened.append("settings"))
     QTest.keyClick(window.mine, Qt.Key.Key_X)
     assert opened == ["settings"]
+
+
+def test_themes(window, sandbox, monkeypatch, tmp_path):
+    from PySide6.QtGui import QPalette
+
+    from nh_workbench import config, gui_theme
+    from nh_workbench.gui_settings import SettingsDialog
+
+    path = tmp_path / "config.toml"
+    path.write_text(f"root = '{sandbox.root.as_posix()}'\n")
+    monkeypatch.setattr(config, "config_path", lambda: path)
+    assert gui_theme.theme_name("") == "textual-dark" and gui_theme.theme_name("nope") == "textual-dark"
+    loaded(window)
+    try:
+        window.cfg.theme = "dracula"  # as the config file says once picked in Settings
+        window.set_theme("dracula")
+        assert QApplication.palette().color(QPalette.ColorRole.Base).name() == "#2b2e3b"
+        assert any("#50fa7b" in rich for _, rich in window.model._cells[0])  # Dracula's green in the table
+        window._notify("oops", True)
+        assert "#fe5555" in window.statusBar().styleSheet().lower()
+
+        dialog = SettingsDialog(window)
+        assert dialog.theme.currentData() == "dracula"
+        dialog.theme.setCurrentIndex(dialog.theme.findData("textual-dark"))
+        dialog.accept()
+        assert window.theme_name == "textual-dark" and config.load().theme == "textual-dark"
+    finally:
+        window.set_theme(gui_theme.SYSTEM)  # the palette belongs to the whole app: leave it as the next tests expect

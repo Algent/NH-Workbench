@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config, proc, tui
+from . import config, gui_theme, proc, tui
 
 if TYPE_CHECKING:
     from .gui import MainWindow
@@ -58,6 +58,16 @@ class SettingsDialog(QDialog):
         cfg = owner.cfg
         self.setWindowTitle("Settings - NH Workbench")
         self.setMinimumWidth(680)
+
+        self.theme = QComboBox()
+        current = gui_theme.theme_name(cfg.theme)
+        for name, label in {**gui_theme.THEMES, current: gui_theme.THEMES.get(current, current)}.items():
+            self.theme.addItem(label, name)
+        self.theme.setCurrentIndex(self.theme.findData(current))
+        self.theme.setMaximumWidth(220)
+        self.theme.setToolTip("Shared with the terminal UI: picking one there or here changes both")
+        look = QFormLayout()
+        look.addRow("Theme", _row(self.theme, QWidget()))
 
         self.root = QLineEdit(str(cfg.root))
         change_root = QPushButton("Change...")
@@ -129,6 +139,7 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self._group("Look", look))
         layout.addWidget(self._group("Checkouts", checkouts))
         layout.addWidget(self._group("Auto-refresh", refresh))
         layout.addWidget(self._group("IntelliJ", ide))
@@ -199,6 +210,8 @@ class SettingsDialog(QDialog):
         """What to write to the config file; None when a value is invalid (and said so)."""
         cfg = self.owner.cfg
         out: list[Change] = []
+        if self.theme.currentData() != gui_theme.theme_name(cfg.theme):
+            out.append((("theme",), self.theme.currentData()))
         root = self.root.text().strip()
         if root and Path(root).expanduser() != cfg.root:
             if not Path(root).expanduser().is_dir():

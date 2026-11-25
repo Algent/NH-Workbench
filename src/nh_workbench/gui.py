@@ -66,7 +66,7 @@ from rich.segment import Segment
 from rich.terminal_theme import TerminalTheme
 from rich.text import Text
 
-from . import config, github, ops, pack, proc, render, skill, tui
+from . import config, github, gui_theme, ops, pack, proc, render, skill, tui
 from .config import Config
 from .gui_settings import open_folder
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
@@ -139,9 +139,14 @@ _LIGHT = (
 _MONO = "Consolas, 'Cascadia Mono', Menlo, 'DejaVu Sans Mono', monospace"
 
 
-def theme_for(palette: QPalette) -> TerminalTheme:
+def theme_for(palette: QPalette, name: str = "") -> TerminalTheme:
+    """The colors Rich text is shown in. A Textual theme's own red, green and yellow, as the TUI shows them."""
     bg, fg = palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Text)
-    normal, bright = _DARK if bg.lightness() < 128 else _LIGHT
+    normal, bright = (list(colors) for colors in (_DARK if bg.lightness() < 128 else _LIGHT))
+    themed = gui_theme.colors(name)
+    if themed:
+        for index, key in ((1, "error"), (2, "success"), (3, "warning")):
+            normal[index] = bright[index] = themed[key].rgb
     return TerminalTheme(bg.getRgb()[:3], fg.getRgb()[:3], normal, bright)
 
 
@@ -873,6 +878,13 @@ class RichTable(QTableView):
         self.horizontalHeader().setResizeContentsPrecision(60)  # size columns from a sample: the pack has 250+ rows
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
+    def fit_columns(self) -> None:
+        """Size the columns to their contents, the last one still taking the width that is left."""
+        self.resizeColumnsToContents()
+        header = self.horizontalHeader()
+        header.setStretchLastSection(False)  # sizing the last section turns its stretch off until set again
+        header.setStretchLastSection(True)
+
     def current(self) -> object | None:
         index = self.currentIndex()
         return index.data(Qt.ItemDataRole.UserRole) if index.isValid() else None
@@ -1029,7 +1041,8 @@ class MainWindow(QMainWindow):
         self.root_override = root_override  # --root: wins over the config file until the folder is changed
         self.bridge = Bridge()
         self.loop = AsyncLoop()
-        self.theme = theme_for(self.palette())
+        self.theme_name = gui_theme.theme_name(cfg.theme)
+        self.theme = theme_for(QApplication.palette(), self.theme_name)
         self.wb = Workbench(
             cfg,
             on_repo=self._later(self._repo_loaded),
@@ -1174,7 +1187,7 @@ class MainWindow(QMainWindow):
         self.tools.source.set_rows(TOOLS)
         self.tools.setSortingEnabled(False)
         self.tools.proxy.sort(-1)  # back to the terminal UI's order
-        self.tools.resizeColumnsToContents()
+        self.tools.fit_columns()
         self.spark_window = None
         self.tables = {"mine": self.mine, "reviews": self.reviews, "org": self.org, "pack": self.pack}
         self.tables["tools"] = self.tools
@@ -1277,7 +1290,7 @@ class MainWindow(QMainWindow):
         self.pack.source.set_headers(render.pack_labels(self.wb.pack_info))
         self._refresh_org()
         for table in first_rows:  # sized once filled and filtered (All PRs shows nothing before its filter runs)
-            table.resizeColumnsToContents()
+            table.fit_columns()
 
     def _progress(self, label: str, done: int, total: int) -> None:
         if not label:
@@ -1296,9 +1309,22 @@ class MainWindow(QMainWindow):
         self.progress_text = f"{label}..."
         self._notify(self.progress_text)
 
+    def warning_color(self) -> str:
+        return gui_theme.warning_color(self.theme_name)
+
+    def set_theme(self, name: str) -> None:
+        """Switch the colors of the whole app, the Rich text in the tables and the detail pane included."""
+        gui_theme.apply(QApplication.instance(), name)
+        self.theme_name = name
+        self.theme = theme_for(QApplication.palette(), name)
+        for table in (self.repos, *self.tables.values()):
+            table.source.theme = self.theme
+            table.source.set_rows(table.source.rows)  # rendered again, in place
+        self._update_detail()
+
     def _notify(self, text: str, warning: bool = False) -> None:
         self.message.setText(text)
-        self.statusBar().setStyleSheet("color: #c62828;" if warning else "")
+        self.statusBar().setStyleSheet(f"color: {self.warning_color()};" if warning else "")
 
     # --- view
 
@@ -1474,6 +1500,8 @@ class MainWindow(QMainWindow):
         self.cfg = self.wb.cfg = cfg
         self.setWindowTitle(f"NH Workbench - {cfg.root}")
         self._show_actions()
+        if gui_theme.theme_name(cfg.theme) != self.theme_name:
+            self.set_theme(gui_theme.theme_name(cfg.theme))
         self._notify(f"Saved to {path}")
         if any(keys[0] in ("root", "repos") for keys, _ in changes):  # other repos, or other settings for them
             self._rescan()
@@ -1865,7 +1893,8 @@ def run(cfg: Config, root_override: Path | None = None) -> int:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NHWorkbench.Desktop")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("NH Workbench")
-    app.setStyle("Fusion")  # looks the same on Windows, Linux and macOS, follows the system's dark mode
+    app.setStyle("Fusion")  # looks the same on Windows, Linux and macOS
+    gui_theme.apply(app, gui_theme.theme_name(cfg.theme))
     if not cfg.root.is_dir():
         folder = QFileDialog.getExistingDirectory(None, "Folder with your checkouts", str(Path.home()))
         if not folder:
