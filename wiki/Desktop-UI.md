@@ -54,14 +54,15 @@ The terminal UI's [keys](Terminal-UI#keys) work the same way, on the same tabs: 
 | `Ctrl+,` | Settings |
 | `Ctrl+Q` | Quit |
 
-Each toolbar button's tooltip gives its letter and its `Ctrl+Shift` shortcut.
+Each toolbar button's tooltip gives its letter and its shortcut. Both can be changed: Settings, Keys. The
+letters are shared with the terminal UI; `Tab`, `Ctrl+Tab`, `Esc` and the letters inside menus stay as they are.
 
 ## Settings
 
 The cog at the end of the toolbar, `x` or `Ctrl+,`: theme, text size, repo folder, clone over SSH or HTTPS,
 auto-refresh interval and whether it fetches, IntelliJ launcher (or none), hidden repos and protected branches.
 Save writes them to the config file, keeping its comments. Its buttons download the pack data again, open the
-config or cache folder, and update the tool itself (as in the terminal UI, a message says when its checkout has
+config or cache folder, change the keys and shortcuts (a dialog of its own, saved with its own Save), and update the tool itself (as in the terminal UI, a message says when its checkout has
 new commits).
 
 ## Themes

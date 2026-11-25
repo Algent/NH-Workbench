@@ -14,6 +14,12 @@
 # ide_command = "C:/path/to/idea64.exe"  # false: no IDE actions at all
 # cleanup_to_main = true  # cleanup offers merged branches still checked out, switching to main first
 
+# Keys, set from Settings > Keys: letters in both UIs, and the desktop UI's shortcuts ("" for none).
+# [keys]
+# fetch = "g"
+# [shortcuts]
+# fetch = "Ctrl+Alt+F"
+
 # Per repo, keyed by folder name.
 [repos.ForgeEssentials]
 tracked_branch = "1.7.10/develop"      # the branch that counts as "main" here

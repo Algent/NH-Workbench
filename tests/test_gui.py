@@ -733,3 +733,37 @@ def test_history_opens_above_its_button(window):
     menu = window.history_menu.geometry()
     assert menu.right() + 1 == corner.x() and 0 <= corner.y() - (menu.bottom() + 1) <= 4  # above, a frame apart
     window.history_menu.close()
+
+
+def test_keys_dialog_saves_letters_and_shortcuts(window, monkeypatch, tmp_path):
+    from nh_workbench import config
+    from nh_workbench.gui_settings import KeysDialog, QMessageBox
+
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: path)
+    loaded(window)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: warnings.append(text))
+
+    dialog = KeysDialog(window)
+    QTest.keyClick(dialog.letters["pull"], Qt.Key.Key_F)
+    dialog.accept()  # f is still Fetch all's
+    assert "f: Fetch all and Pull safe" in warnings[0] and not path.exists()
+
+    QTest.keyClick(dialog.letters["fetch"], Qt.Key.Key_G)
+    dialog.shortcuts["fetch"].setKeySequence(QKeySequence("Ctrl+Alt+F"))
+    dialog.shortcuts["quit"].clear()
+    dialog.accept()
+    assert len(warnings) == 1
+    cfg = config.load()
+    assert cfg.keys == {"fetch": "g", "pull": "f"} and cfg.shortcuts == {"fetch": "Ctrl+Alt+F", "quit": ""}
+    assert window.letters["fetch"] == "g"
+    assert window.tab_actions["fetch"].shortcut() == QKeySequence("Ctrl+Alt+F")
+    assert window.tab_actions["fetch"].toolTip() == "Fetch every repo (g; F: the selected one, Ctrl+Alt+F)"
+    assert window.key_actions["quit"].shortcut().isEmpty()
+
+    dialog = KeysDialog(window)
+    dialog._defaults()
+    dialog.accept()
+    assert config.load().keys == {} and config.load().shortcuts == {}
+    assert window.tab_actions["fetch"].shortcut() == QKeySequence("Ctrl+Shift+F")

@@ -31,6 +31,22 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set. Folders from befo
 | `ide_command` | found automatically | IntelliJ launcher; `false` hides the IDE actions |
 | `cleanup_to_main` | `true` | Cleanup's "switch to main first" checkbox starts ticked |
 
+## Keys
+
+`[keys]` maps an action to its letter in both UIs, `[shortcuts]` to its desktop shortcut (`""` for none). Set from
+Settings, Keys in either UI, which refuses clashes. Actions: `fetch`, `fetch_one`, `pull`, `pull_one`, `to_main`,
+`cleanup`, `rescan`, `reload_prs`, `reload_org`, `clone`, `checkout`, `toggle_team`, `toggle_drafts`, `pr_filters`,
+`open_web`, `open_ide`, `filter`, `sort`, `extras` (Settings), `open_config`, `open_logs`, `quit`.
+
+```toml
+[keys]
+fetch = "g"
+
+[shortcuts]
+fetch = "Ctrl+Alt+F"
+quit = ""
+```
+
 ## Per repo
 
 Under `[repos.<folder name>]`: `tracked_branch` (what counts as main), `group`, `ignore` (hide it),

@@ -80,6 +80,7 @@ from rich.terminal_theme import TerminalTheme
 from rich.text import Text
 
 from . import config, github, gui_theme, ops, pack, proc, render, skill, tui
+from . import keys as keytable
 from .config import Config
 from .gui_settings import open_folder
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
@@ -113,23 +114,22 @@ log = logging.getLogger(__name__)
 RESULT = REPO_COLUMNS.index("Result")
 HTML_ROLE = Qt.ItemDataRole.UserRole + 1
 SORT_ROLE = Qt.ItemDataRole.UserRole + 2
-# Letters for toolbar actions on the tabs where they show, as in the terminal UI.
-# The terminal UI's keys, each to the toolbar action it is on a tab: the first one shown there wins.
-LETTERS = [
-    ("f", "fetch"),
-    ("p", "pull"),
-    ("m", "to_main"),
-    ("d", "cleanup"),
-    ("r", "rescan"),
-    ("r", "reload_prs"),
-    ("r", "reload_org"),
-    ("c", "clone"),
-    ("c", "checkout"),
-    ("t", "toggle_team"),
-    ("t", "toggle_drafts"),
-    ("v", "pr_filters"),
-    ("w", "open_web"),
-    ("o", "open_ide"),
+# Toolbar actions that answer to their letter (keytable.letters) on the tabs where they show, as in the terminal UI.
+LETTER_ACTIONS = [
+    "fetch",
+    "pull",
+    "to_main",
+    "cleanup",
+    "rescan",
+    "reload_prs",
+    "reload_org",
+    "clone",
+    "checkout",
+    "toggle_team",
+    "toggle_drafts",
+    "pr_filters",
+    "open_web",
+    "open_ide",
 ]
 ASC, DESC = Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder
 PR_SORT_COLUMNS = {"updated": ("Updated", ASC), "small": ("Size", ASC), "large": ("Size", DESC), "repo": ("Repo", ASC)}
@@ -1117,6 +1117,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon)))
         self._build()
         self.resize(1400, 820)
+        self._warn_key_clashes()
         self._rescan()
         self.run(self.wb.check_tool())
         self.refresh_timer = QTimer(self)  # checked every minute, so a new interval applies without a restart
@@ -1132,61 +1133,31 @@ class MainWindow(QMainWindow):
         self.addToolBar(bar)
         # Named like the terminal UI's actions: action_shown() decides on which tabs each one appears.
         self.tab_actions: dict[str, QAction] = {}
-        for action_id, label, keys, slot, tip in (
-            (
-                "fetch",
-                "Fetch all",
-                "Ctrl+Shift+F",
-                lambda: self._operate("Fetching", ops.fetch_repo),
-                "Fetch every repo (f; F: the selected one)",
-            ),
-            (
-                "pull",
-                "Pull safe",
-                "Ctrl+Shift+P",
-                lambda: self._operate("Pulling", ops.pull_repo),
-                "Fast-forward main if safe (p; P: the selected one)",
-            ),
+        # Keys and the tooltips naming them: _apply_keys, from the config.
+        self.tips: dict[str, str] = {}
+        for action_id, label, slot, tip in (
+            ("fetch", "Fetch all", lambda: self._operate("Fetching", ops.fetch_repo), "Fetch every repo"),
+            ("pull", "Pull safe", lambda: self._operate("Pulling", ops.pull_repo), "Fast-forward main if safe"),
             (
                 "to_main",
                 "To main",
-                "Ctrl+Shift+M",
                 lambda: self._to_main_all(),
-                "Switch repos parked on a merged PR branch back to main (m)",
+                "Switch repos parked on a merged PR branch back to main",
             ),
-            (
-                "cleanup",
-                "Cleanup",
-                "Ctrl+Shift+Del",
-                lambda: self._cleanup(list(self.model.rows)),
-                "Delete merged local branches (d)",
-            ),
-            ("rescan", "Rescan", "F5", lambda: self._rescan(), "Read every repo again (r)"),
-            ("reload_prs", "Refresh from GitHub", "F5", self._reload_prs, "Load your PRs and reviews again (r)"),
-            ("reload_org", "Search again", "F5", lambda: self.run(self.wb.reload_org()), "Search the org's PRs (r)"),
-            ("clone", "Clone", "Ctrl+Shift+C", lambda: self._act("clone"), "Clone the selected mod (c)"),
-            ("checkout", "Check out", "Ctrl+Shift+K", lambda: self._act("checkout"), "Check out the selected PR (c)"),
-            ("toggle_team", "Team reviews", "Ctrl+Shift+T", self._toggle_team, "Also requests made to your teams (t)"),
-            ("toggle_drafts", "Drafts", "Ctrl+Shift+D", self._refresh_org, "Also list draft PRs (t)"),
-            ("pr_filters", "Show only...", "Ctrl+Shift+V", self._pr_filters, "Only some of the org's PRs (v)"),
-            (
-                "open_web",
-                "Open in browser",
-                "Ctrl+Shift+G",
-                lambda: self._act("web"),
-                "PR or GitHub page of the line (w)",
-            ),
-            (
-                "open_ide",
-                "Open in IntelliJ",
-                "Ctrl+Shift+O",
-                lambda: self._act("ide"),
-                "Open the checkout of the line (o)",
-            ),
+            ("cleanup", "Cleanup", lambda: self._cleanup(list(self.model.rows)), "Delete merged local branches"),
+            ("rescan", "Rescan", lambda: self._rescan(), "Read every repo again"),
+            ("reload_prs", "Refresh from GitHub", self._reload_prs, "Load your PRs and reviews again"),
+            ("reload_org", "Search again", lambda: self.run(self.wb.reload_org()), "Search the org's PRs"),
+            ("clone", "Clone", lambda: self._act("clone"), "Clone the selected mod"),
+            ("checkout", "Check out", lambda: self._act("checkout"), "Check out the selected PR"),
+            ("toggle_team", "Team reviews", self._toggle_team, "Also requests made to your teams"),
+            ("toggle_drafts", "Drafts", self._refresh_org, "Also list draft PRs"),
+            ("pr_filters", "Show only...", self._pr_filters, "Only some of the org's PRs"),
+            ("open_web", "Open in browser", lambda: self._act("web"), "PR or GitHub page of the line"),
+            ("open_ide", "Open in IntelliJ", lambda: self._act("ide"), "Open the checkout of the line"),
         ):
             action = QAction(label, self)
-            action.setShortcut(QKeySequence(keys))
-            action.setToolTip(f"{tip} ({keys})")
+            self.tips[action_id] = tip
             action.triggered.connect(slot)
             bar.addAction(action)
             self.tab_actions[action_id] = action
@@ -1199,32 +1170,32 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
         self.filter = FilterBox(lambda: self.table.setFocus())
-        self.filter.setPlaceholderText("Filter by name (Ctrl+F)")
         self.filter.setClearButtonEnabled(True)
         self.filter.setFixedWidth(260)
         self.filter.textChanged.connect(lambda _: self._apply_view())
         self.filter_action = bar.addWidget(self.filter)
-        find = QAction(self)
-        find.setShortcut(QKeySequence.StandardKey.Find)
-        find.triggered.connect(lambda: (self.filter.setFocus(), self.filter.selectAll()))
-        self.addAction(find)
-        cog = QToolButton()
+        self.cog = cog = QToolButton()
         cog.setText("⚙")
         cog.setObjectName("cog")  # bigger, by the style sheet
         cog.setAutoRaise(True)
-        cog.setToolTip("Settings (x, Ctrl+,)")
         cog.clicked.connect(lambda: self.open_settings())
         bar.addWidget(cog)
-        for keys, slot in (
-            ("Ctrl+,", lambda: self.open_settings()),
-            ("Ctrl+Tab", lambda: self._cycle_view(1)),
-            ("Ctrl+Shift+Tab", lambda: self._cycle_view(-1)),
-            ("Ctrl+Q", self.close),
+        self.key_actions: dict[str, QAction] = {}  # rebindable shortcuts off the toolbar
+        for key_id, slot in (
+            ("filter", lambda: (self.filter.setFocus(), self.filter.selectAll())),
+            ("extras", lambda: self.open_settings()),
+            ("quit", self.close),
         ):
+            shortcut = QAction(self)
+            shortcut.triggered.connect(slot)
+            self.addAction(shortcut)
+            self.key_actions[key_id] = shortcut
+        for keys, slot in (("Ctrl+Tab", lambda: self._cycle_view(1)), ("Ctrl+Shift+Tab", lambda: self._cycle_view(-1))):
             shortcut = QAction(self)
             shortcut.setShortcut(QKeySequence(keys))
             shortcut.triggered.connect(slot)
             self.addAction(shortcut)
+        self._apply_keys()
 
         self.tabs = QTabBar()
         self.tabs.setDrawBase(False)
@@ -1585,6 +1556,28 @@ class MainWindow(QMainWindow):
 
     # --- settings
 
+    def _apply_keys(self) -> None:
+        """Shortcuts, letters and the tooltips naming them, from the config."""
+        self.letters = keytable.letters(self.cfg)
+        shortcuts = keytable.shortcuts(self.cfg)
+        for action_id, action in (self.tab_actions | self.key_actions).items():
+            action.setShortcut(QKeySequence(shortcuts[action_id]))
+        for action_id, tip in self.tips.items():
+            letter = self.letters[action_id]
+            if action_id in ("fetch", "pull"):
+                letter += f"; {self.letters[action_id + '_one']}: the selected one"
+            keys = ", ".join(k for k in (letter, shortcuts[action_id]) if k)
+            self.tab_actions[action_id].setToolTip(f"{tip} ({keys})")
+        find = shortcuts["filter"]
+        self.filter.setPlaceholderText(f"Filter by name ({find})" if find else "Filter by name")
+        self.cog.setToolTip(f"Settings ({', '.join(k for k in (self.letters['extras'], shortcuts['extras']) if k)})")
+
+    def _warn_key_clashes(self) -> None:
+        """Keys edited by hand in the config file can clash; the Keys dialog does not let them."""
+        for a, b in keytable.clashes(self.letters) + keytable.clashes(keytable.shortcuts(self.cfg)):
+            label = f"{keytable.BY_ID[a].label} and {keytable.BY_ID[b].label}"
+            self._notify(f"{label} share a key: Settings → Keys", warning=True)
+
     def open_settings(self, focus: str = "") -> None:
         from .gui_settings import SettingsDialog
 
@@ -1612,6 +1605,8 @@ class MainWindow(QMainWindow):
         if any(keys == ("font_size",) for keys, _ in changes):
             self.set_font_size(cfg.font_size)
         self._notify(f"Saved to {path}")
+        if any(keys[0] in ("keys", "shortcuts") for keys, _ in changes):
+            self._apply_keys()
         if any(keys[0] in ("root", "repos") for keys, _ in changes):  # other repos, or other settings for them
             self._rescan()
         return True
@@ -1674,23 +1669,25 @@ class MainWindow(QMainWindow):
                 return False
             self.filter.clear()
             return True
+        letters = self.letters
         anywhere = {
-            "/": ("filter", lambda: (self.filter.setFocus(), self.filter.selectAll())),
-            "s": ("sort", self._cycle_sort),
-            "x": ("", self.open_settings),
-            "C": ("", lambda: open_folder("config")),
-            "L": ("", lambda: open_folder("logs")),
-            "q": ("", self.close),
+            letters["filter"]: ("filter", lambda: (self.filter.setFocus(), self.filter.selectAll())),
+            letters["sort"]: ("sort", self._cycle_sort),
+            letters["extras"]: ("", self.open_settings),
+            letters["open_config"]: ("", lambda: open_folder("config")),
+            letters["open_logs"]: ("", lambda: open_folder("logs")),
+            letters["quit"]: ("", self.close),
         }
         if key in anywhere:
             shown_as, run = anywhere[key]
             if not shown_as or action_shown(shown_as, view):
                 run()
-            return True
-        if key in ("F", "P") and view in REPO_VIEWS:  # the selected repo only
+                return True
+        one = {letters["fetch_one"]: "fetch", letters["pull_one"]: "pull"}
+        if key in one and view in REPO_VIEWS:  # the selected repo only
             st = self._selected()
             if st:
-                self._repo_action("fetch" if key == "F" else "pull", st)
+                self._repo_action(one[key], st)
             return True
         return self._letter(key)
 
@@ -1717,9 +1714,9 @@ class MainWindow(QMainWindow):
 
     def _letter(self, key: str) -> bool:
         """A toolbar action's letter; on the Pack and PR tabs, also the selected line's (c, w, e...) at once."""
-        for letter, action_id in LETTERS:
+        for action_id in LETTER_ACTIONS:
             action = self.tab_actions[action_id]
-            if key == letter and action.isVisible():
+            if key == self.letters[action_id] and action.isVisible():
                 if action.isEnabled():
                     action.trigger()
                 return True

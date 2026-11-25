@@ -44,6 +44,8 @@ class Config:
     ide_command: str | None = None
     ide_off: bool = False  # ide_command = false: no IDE actions at all
     cleanup_to_main: bool = True  # cleanup offers branches still checked out, switching to main first
+    keys: dict[str, str] = field(default_factory=dict)  # action id -> letter, see keys.ACTIONS
+    shortcuts: dict[str, str] = field(default_factory=dict)  # action id -> desktop shortcut, "" for none
     repos: dict[str, RepoConfig] = field(default_factory=dict)
     # external pack mod name (lower case) -> {repo, branch, closed}
     sources: dict[str, dict] = field(default_factory=dict)
@@ -150,6 +152,8 @@ def load(root: Path | None = None, path: Path | None = None) -> Config:
             ide_command=ide if isinstance(ide := data.get("ide_command"), str) and ide else None,
             ide_off=ide is False,
             cleanup_to_main=bool(data.get("cleanup_to_main", True)),
+            keys={str(k): str(v) for k, v in data.get("keys", {}).items()},
+            shortcuts={str(k): str(v) for k, v in data.get("shortcuts", {}).items()},
             repos={k.lower(): _repo_config(v) for k, v in data.get("repos", {}).items()},
             sources=sources,
         )

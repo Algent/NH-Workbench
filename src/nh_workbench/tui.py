@@ -16,7 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 
-from . import config, git, github, ops, pack, proc, render, skill
+from . import config, git, github, keys, ops, pack, proc, render, skill
 from .config import Config
 from .models import Branch, CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 
@@ -564,6 +564,7 @@ class ExtrasMenu(MenuScreen):
             ("o", "root", "Change the repo folder", None),
             ("u", "unhide", f"Show a hidden repo again ({len(cfg.hidden)})", None if cfg.hidden else "none hidden"),
             ("k", "unkeep", f"Unprotect a kept branch ({len(cfg.kept)})", None if cfg.kept else "none protected"),
+            ("b", "keys", "Keys: change the main keys (shared with the desktop UI)", None),
             ("c", "config", "Open config folder", None),
             ("l", "logs", "Open logs and cache folder", None),
             ("n", "update", *update),
@@ -572,35 +573,93 @@ class ExtrasMenu(MenuScreen):
         super().__init__(Text("Settings", "bold"), actions, Group(*lines))
 
 
+class KeysScreen(ModalScreen[None]):
+    """The main keys: Enter on one, then press its new key. Saved at once, shared with the desktop UI."""
+
+    BINDINGS = [Binding("escape,q,backspace,left", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waiting: str | None = None  # the action whose new key is awaited
+
+    def _prompt(self, action: keys.KeyAction) -> Text:
+        letter = keys.letters(self.app.cfg)[action.id]
+        default = Text(f"  (default {action.letter})", "dim") if letter != action.letter else ""
+        return Text.assemble((letter.ljust(3), "bold"), action.label, default)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield dialog_head(Text("Keys", "bold"))
+            yield Static(Text("Shared with the desktop UI, where they work on the list.", "dim"), id="dialog-info")
+            yield OptionList(*(Option(self._prompt(a), id=a.id) for a in keys.ACTIONS), id="menu")
+            yield Static(Text("Enter to change one, q or Esc to close", "dim"), id="keys-status")
+
+    def _status(self, text: str, style: str = "dim") -> None:
+        self.query_one("#keys-status", Static).update(Text(text, style))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.waiting = event.option.id
+        action = keys.BY_ID[self.waiting]
+        self._status(f"Press the new key for {action.label} (Esc: keep it, Backspace: default {action.letter})", "bold")
+
+    def on_key(self, event: Key) -> None:
+        if self.waiting is None:
+            return
+        event.stop()
+        event.prevent_default()
+        action = keys.BY_ID[self.waiting]
+        if event.key == "escape":
+            letter = None
+        elif event.key == "backspace":
+            letter = action.letter
+        elif event.character and not keys.letter_error(event.character):
+            letter = event.character
+        else:
+            self._status(f"{event.key} types no character: pick a letter, digit or sign", "red")
+            return
+        if letter is not None:
+            why = self.app.set_letter(action.id, letter)
+            if why:
+                self._status(f"{why}: press another key for {action.label}, or Esc to keep it", "red")
+                return
+            self.query_one(OptionList).replace_option_prompt(action.id, self._prompt(action))
+        self.waiting = None
+        self._status("Enter to change one, q or Esc to close")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class RepoApp(App[None]):
     CSS_PATH = "tui.tcss"
     TITLE = "NH Workbench"
+    # The ids are keys.ACTIONS: on_mount sets their keys from the config.
     BINDINGS = [
-        Binding("f", "fetch", "Fetch all"),
-        Binding("p", "pull", "Pull safe"),
-        Binding("F", "fetch(True)", "Fetch one", show=False),
-        Binding("P", "pull(True)", "Pull one", show=False),
-        Binding("r", "rescan", "Rescan"),
-        Binding("r", "reload_org", "Search again"),
-        Binding("r", "reload_prs", "Refresh from GitHub"),
-        Binding("slash", "filter", "Filter"),
-        Binding("o", "open_ide", "IDE"),
-        Binding("w", "open_web", "Web"),
-        Binding("m", "to_main", "To main"),
-        Binding("d", "cleanup", "Cleanup"),
-        Binding("c", "clone", "Clone"),
-        Binding("c", "checkout", "Check out"),
-        Binding("s", "sort", "Sort"),
-        Binding("t", "toggle_team", "Team reviews"),
-        Binding("t", "toggle_drafts", "Drafts"),
-        Binding("v", "pr_filters", "Show only"),
-        Binding("x", "extras", "Settings"),
-        Binding("C", "open_folder('config')", "Config dir", show=False),
-        Binding("L", "open_folder('logs')", "Logs dir", show=False),
+        Binding("f", "fetch", "Fetch all", id="fetch"),
+        Binding("p", "pull", "Pull safe", id="pull"),
+        Binding("F", "fetch(True)", "Fetch one", show=False, id="fetch_one"),
+        Binding("P", "pull(True)", "Pull one", show=False, id="pull_one"),
+        Binding("r", "rescan", "Rescan", id="rescan"),
+        Binding("r", "reload_org", "Search again", id="reload_org"),
+        Binding("r", "reload_prs", "Refresh from GitHub", id="reload_prs"),
+        Binding("slash", "filter", "Filter", id="filter"),
+        Binding("o", "open_ide", "IDE", id="open_ide"),
+        Binding("w", "open_web", "Web", id="open_web"),
+        Binding("m", "to_main", "To main", id="to_main"),
+        Binding("d", "cleanup", "Cleanup", id="cleanup"),
+        Binding("c", "clone", "Clone", id="clone"),
+        Binding("c", "checkout", "Check out", id="checkout"),
+        Binding("s", "sort", "Sort", id="sort"),
+        Binding("t", "toggle_team", "Team reviews", id="toggle_team"),
+        Binding("t", "toggle_drafts", "Drafts", id="toggle_drafts"),
+        Binding("v", "pr_filters", "Show only", id="pr_filters"),
+        Binding("x", "extras", "Settings", id="extras"),
+        Binding("C", "open_folder('config')", "Config dir", show=False, id="open_config"),
+        Binding("L", "open_folder('logs')", "Logs dir", show=False, id="open_logs"),
         Binding("tab", "cycle_view(1)", "Next view", priority=True),
         Binding("shift+tab", "cycle_view(-1)", show=False, priority=True),
         Binding("escape", "clear_filter", show=False),
-        Binding("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", id="quit"),
     ]
 
     def __init__(self, cfg: Config, root_override: Path | None = None) -> None:
@@ -666,6 +725,7 @@ class RepoApp(App[None]):
         if self.cfg.theme in self.available_themes:
             self.theme = self.cfg.theme
         self.theme_changed_signal.subscribe(self, self._save_theme)
+        self._apply_keys()
         self._check_tool()
         if self.cfg.root.is_dir():
             self.load_everything()
@@ -685,7 +745,11 @@ class RepoApp(App[None]):
         self.tool = await ops.fetch_repo(self.cfg, path)
         behind = self._tool_behind()
         if behind:
-            self.notify(f"NH Workbench has {behind} new commit(s): Settings (x) updates it", timeout=10)
+            self.notify(f"NH Workbench has {behind} new commit(s): {self._settings} updates it", timeout=10)
+
+    @property
+    def _settings(self) -> str:
+        return f"Settings ({keys.hint(self.cfg, 'extras')})"
 
     def _tool_behind(self) -> int:
         return tool_behind(self.tool)
@@ -1219,7 +1283,10 @@ class RepoApp(App[None]):
                 return
             wanted = set() if choice == "none" else wanted ^ {choice}
             if choice == "unreviewed" and self.org and any(i.pr.reviews is None for i in self.org.items):
-                self.notify("Review counts come with the next search (r); until then no PR is left out for it")
+                self.notify(
+                    f"Review counts come with the next search ({keys.hint(self.cfg, 'reload_org')}); "
+                    "until then no PR is left out for it"
+                )
             chosen = [f for f in github.PR_FILTERS if f in wanted]
             if not self._save_setting(("pr_filters",), chosen or None, rescan=False, quiet=True):
                 return
@@ -1274,7 +1341,7 @@ class RepoApp(App[None]):
         try:
             proc.launch(ide, str(st.path))
         except OSError as e:
-            self.notify(f"Could not start {ide}: {e}. Settings (x) can change it.", severity="error")
+            self.notify(f"Could not start {ide}: {e}. {self._settings} can change it.", severity="error")
             return
         self.notify(f"Opening {st.name}")
 
@@ -1303,7 +1370,7 @@ class RepoApp(App[None]):
         self.cfg.ide_off, self.cfg.ide_command = off, None if off else answer or None
         self.refresh_bindings()
         if off:
-            self.notify("IDE actions turned off. Settings (x) turns them back on.")
+            self.notify(f"IDE actions turned off. {self._settings} turns them back on.")
             return None
         self.notify(f"Saved to {path}")
         return answer or None
@@ -1361,6 +1428,30 @@ class RepoApp(App[None]):
             self._save_setting(("refresh_minutes",), int(value))
         elif choice == "root":
             await self._ask_root(str(self.cfg.root))
+        elif choice == "keys":
+            await self.push_screen_wait(KeysScreen())
+
+    def _apply_keys(self) -> None:
+        letters = keys.letters(self.cfg)
+        self.set_keymap(letters)
+        for a, b in keys.clashes(letters):  # edited by hand in the config file: the Keys screen does not let them
+            label = f"{letters[a]} is both {keys.BY_ID[a].label} and {keys.BY_ID[b].label}"
+            self.notify(f"{label}: Settings → Keys", severity="warning", timeout=15)
+
+    def handle_bindings_clash(self, clashed_bindings, node) -> None:
+        pass  # keys shared on purpose by actions never on the same tab (r, c, t); real clashes are told on start
+
+    def set_letter(self, action_id: str, letter: str) -> str | None:
+        """Give an action a new key and save it. The reason it cannot be, or None."""
+        mapping = {**keys.letters(self.cfg), action_id: letter}
+        why = keys.clash_text(mapping, action_id)
+        if why:
+            return why
+        value = None if letter == keys.BY_ID[action_id].letter else letter
+        if not self._save_setting(("keys", action_id), value, rescan=False, quiet=True):
+            return "Could not save it"
+        self.set_keymap(keys.letters(self.cfg))
+        return None
 
     async def _purge_jars(self) -> None:
         found = ops.built_jars(self.states.values(), self.cfg.org)
@@ -1446,7 +1537,9 @@ class RepoApp(App[None]):
         guess = config.suggest_root()
         why = f'"{self.cfg.root}" does not exist.'
         if not await self._ask_root(str(guess or self.cfg.root), why):
-            self.notify("No repo folder yet: Settings (x) → Change the repo folder", severity="warning", timeout=10)
+            self.notify(
+                f"No repo folder yet: {self._settings} → Change the repo folder", severity="warning", timeout=10
+            )
 
     async def _ask_root(self, current: str, why: str = "") -> bool:
         """Ask for the folder with the checkouts until it exists, then save it. False when cancelled."""

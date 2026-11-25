@@ -42,6 +42,9 @@ commits waiting on the release branch.
 | `x` | Settings |
 | `q` | Quit (also closes menus) |
 
+These are the defaults: Settings (`x`), Keys changes them. `Tab`, `Esc`, `Enter` and the letters inside menus
+stay as they are.
+
 ## Repo menu
 
 `Enter` on a repo: fetch, pull, switch to main, delete merged branches, open in IntelliJ, on GitHub or in the
@@ -50,9 +53,13 @@ file manager, set the main branch or group, protect branches from cleanup, hide 
 ## Settings
 
 `x`: auto-refresh interval, fetch during auto-refresh (off by default), IntelliJ launcher, clone over SSH or
-HTTPS, refresh pack data, change the repo folder, show a hidden repo again, unprotect a kept branch, open the
+HTTPS, refresh pack data, change the repo folder, the keys (see [Keys](#keys)), show a hidden repo again, unprotect a kept branch, open the
 config or cache folder, and update the tool itself (its checkout is fetched at start; a notification says when
 there are new commits, and after updating, restart it).
+
+Keys: `Enter` on an action, then press its new key (`Backspace`: the default). A key already taken on one of
+that action's tabs is refused; actions never on the same tab may share one, as `r` does. The keys are shared with
+the desktop UI.
 
 Settings changed from the UI are written to the config file, keeping its comments. See
 [Configuration](Configuration) for everything the file holds.

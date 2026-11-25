@@ -1095,3 +1095,44 @@ async def test_r_on_my_prs_refreshes_from_github(sandbox, offline, monkeypatch):
         await pilot.press("r")
         await settle(app, pilot)
         assert len(calls) == before + 1 and app.last_loaded == scanned  # the PRs again, not the repos
+
+
+async def test_keys_screen_rebinds_and_saves(sandbox, offline, monkeypatch, tmp_path):
+    from textual.widgets import OptionList
+
+    from nh_workbench import config
+    from nh_workbench.tui import KeysScreen
+
+    cfg_file = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "config_path", lambda: cfg_file)
+    app = RepoApp(sandbox.cfg, root_override=sandbox.root)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("x", "b")
+        await pilot.pause()
+        assert isinstance(app.screen, KeysScreen)
+        menu = app.screen.query_one(OptionList)
+
+        async def rebind(action_id: str, key: str) -> None:
+            menu.highlighted = menu.get_option_index(action_id)
+            await pilot.press("enter", key)
+            await pilot.pause()
+
+        await rebind("fetch", "g")
+        assert app.cfg.keys == {"fetch": "g"}
+        await rebind("pull", "g")  # taken: refused, nothing saved
+        assert app.cfg.keys == {"fetch": "g"}
+        assert "already Fetch all" in str(app.screen.query_one("#keys-status").content)
+        await pilot.press("escape")  # leaves the waiting for a key
+        await rebind("quit", "Q")
+        await pilot.press("q")
+        await pilot.pause()
+        assert not isinstance(app.screen, KeysScreen)
+        bound = {key: b.binding.id for key, b in app.screen.active_bindings.items() if b.binding.id}
+        assert bound["g"] == "fetch" and bound["Q"] == "quit" and "f" not in bound and "q" not in bound
+
+        await pilot.press("x", "b")
+        await pilot.pause()
+        menu = app.screen.query_one(OptionList)
+        await rebind("fetch", "backspace")  # back to the default, out of the config file
+        assert app.cfg.keys == {"quit": "Q"}

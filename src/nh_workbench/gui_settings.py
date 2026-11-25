@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -25,11 +28,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from . import config, gui_theme, proc, render, tui
+from . import keys as keytable
 
 if TYPE_CHECKING:
     from .gui import MainWindow
@@ -43,6 +49,120 @@ def _row(*widgets: QWidget) -> QHBoxLayout:
     for i, widget in enumerate(widgets):
         row.addWidget(widget, 1 if i == 0 else 0)
     return row
+
+
+class LetterEdit(QLineEdit):
+    """One typed character; empty is the default, shown greyed."""
+
+    def __init__(self, letter: str, default: str) -> None:
+        super().__init__("" if letter == default else letter)
+        self.default = default
+        self.setPlaceholderText(default)
+        self.setFixedWidth(48)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def keyPressEvent(self, event) -> None:
+        text = event.text()
+        if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            self.clear()
+        elif len(text) == 1 and not keytable.letter_error(text):
+            self.setText("" if text == self.default else text)
+        else:
+            super().keyPressEvent(event)
+
+    def letter(self) -> str:
+        return self.text() or self.default
+
+
+class KeysDialog(QDialog):
+    """The main keys: the letters (shared with the terminal UI) and the desktop shortcuts. Saved on its own."""
+
+    def __init__(self, owner: "MainWindow") -> None:
+        super().__init__(owner)
+        self.owner = owner
+        self.setWindowTitle("Keys - NH Workbench")
+        letters, shortcuts = keytable.letters(owner.cfg), keytable.shortcuts(owner.cfg)
+        self.table = QTableWidget(len(keytable.ACTIONS), 3)
+        self.table.setHorizontalHeaderLabels(["Action", "Key", "Shortcut"])
+        self.table.verticalHeader().hide()
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.letters: dict[str, LetterEdit] = {}
+        self.shortcuts: dict[str, QKeySequenceEdit] = {}
+        for row, action in enumerate(keytable.ACTIONS):
+            item = QTableWidgetItem(action.label)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.table.setItem(row, 0, item)
+            self.letters[action.id] = LetterEdit(letters[action.id], action.letter)
+            self.table.setCellWidget(row, 1, self.letters[action.id])
+            if action.id in owner.tab_actions or action.id in owner.key_actions:  # the others have no shortcut
+                edit = QKeySequenceEdit(QKeySequence(shortcuts[action.id]))
+                edit.setMaximumSequenceLength(1)
+                edit.setClearButtonEnabled(True)
+                self.shortcuts[action.id] = edit
+                self.table.setCellWidget(row, 2, edit)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(2, 200)
+        self.table.resizeRowsToContents()
+
+        note = QLabel(
+            "Key: on the list, shared with the terminal UI. Shortcut: anywhere in this window.\n"
+            "Actions never on the same tab may share a key, as Rescan and Search again do."
+        )
+        note.setEnabled(False)
+        defaults = QPushButton("Defaults")
+        defaults.setToolTip("Put back every key and shortcut (saved with Save)")
+        defaults.clicked.connect(self._defaults)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.addButton(defaults, QDialogButtonBox.ButtonRole.ResetRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.table)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+        self.resize(560, 720)
+
+    def _defaults(self) -> None:
+        for edit in self.letters.values():
+            edit.clear()
+        for action_id, edit in self.shortcuts.items():
+            edit.setKeySequence(QKeySequence(keytable.BY_ID[action_id].shortcut))
+
+    def _shortcut(self, action_id: str) -> str:
+        edit = self.shortcuts.get(action_id)
+        return edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText) if edit else ""
+
+    def changes(self) -> list[Change] | None:
+        """What to write to the config file; None when two actions clash (and said so)."""
+        letters = {action_id: edit.letter() for action_id, edit in self.letters.items()}
+        shortcuts = {a.id: self._shortcut(a.id) for a in keytable.ACTIONS}
+        clashes = [(letters, a, b) for a, b in keytable.clashes(letters)]
+        clashes += [(shortcuts, a, b) for a, b in keytable.clashes(shortcuts)]
+        fixed = [a for a, key in shortcuts.items() if key in keytable.FIXED_SHORTCUTS]
+        if clashes or fixed:
+            lines = [f"{m[a]}: {keytable.BY_ID[a].label} and {keytable.BY_ID[b].label}" for m, a, b in clashes]
+            lines += [f"{shortcuts[a]} is taken: {keytable.BY_ID[a].label}" for a in fixed]
+            QMessageBox.warning(self, "Keys", "These share a key on some tab:\n\n" + "\n".join(lines))
+            return None
+        cfg = self.owner.cfg
+        before_letters, before_shortcuts = keytable.letters(cfg), keytable.shortcuts(cfg)
+        out: list[Change] = []
+        for action in keytable.ACTIONS:
+            if letters[action.id] != before_letters[action.id]:
+                out.append((("keys", action.id), None if letters[action.id] == action.letter else letters[action.id]))
+            if action.id in self.shortcuts and shortcuts[action.id] != before_shortcuts[action.id]:
+                same = QKeySequence(shortcuts[action.id]) == QKeySequence(action.shortcut)
+                out.append((("shortcuts", action.id), None if same else shortcuts[action.id]))
+        return out
+
+    def accept(self) -> None:
+        changes = self.changes()
+        if changes is not None and self.owner.apply_settings(changes):
+            super().accept()
 
 
 def open_folder(which: str) -> None:
@@ -128,12 +248,15 @@ class SettingsDialog(QDialog):
         config_folder.clicked.connect(lambda: open_folder("config"))
         logs_folder = QPushButton("Open logs and cache folder")
         logs_folder.clicked.connect(lambda: open_folder("logs"))
+        keys_button = QPushButton("Keys...")
+        keys_button.setToolTip("Change the main keys and shortcuts (saved on their own)")
+        keys_button.clicked.connect(lambda: KeysDialog(owner).exec())
         label, why = tui.tool_entry(owner.wb.tool, owner.wb.tool_updated)
         self.update_button = QPushButton(f"{label}: {why}" if why else label)
         self.update_button.setEnabled(why is None)
         self.update_button.clicked.connect(lambda: (owner.update_tool(), self.update_button.setEnabled(False)))
         actions = QHBoxLayout()
-        for button in (refresh_pack, config_folder, logs_folder):
+        for button in (refresh_pack, config_folder, logs_folder, keys_button):
             actions.addWidget(button)
         actions.addStretch(1)
 
