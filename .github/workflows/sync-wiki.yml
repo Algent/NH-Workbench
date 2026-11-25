@@ -1,0 +1,29 @@
+name: Wiki Sync
+
+# The GitHub wiki is generated from the wiki folder: pages edited on GitHub are overwritten by the next sync.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "wiki/**"
+      - ".github/workflows/sync-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # pushing to the wiki; the token can only read by default
+
+jobs:
+  update-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync Wiki
+        uses: GTNewHorizons/ghaction-wiki-sync@6e5b3b581b0dad89c4ea56cabefe66e18b1f2212
+        with:
+          username: ${{ github.actor }}
+          access_token: ${{ secrets.GITHUB_TOKEN }}
+          ignore_safe_warnings: true
+          commit_username: "github-actions[bot]"
+          commit_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          commit_message: "Wiki sync: ${{ github.event.head_commit.message || 'manual run' }}"

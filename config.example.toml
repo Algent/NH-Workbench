@@ -1,5 +1,5 @@
-# Copy to the config path from the README (Windows: %APPDATA%\nh-workbench\config.toml,
-# Linux: ~/.config/nh-workbench/config.toml). Everything is optional.
+# Copy to the config path (Windows: %APPDATA%\nh-workbench\config.toml, Linux: ~/.config/nh-workbench/config.toml,
+# others: https://github.com/Algent/NH-Workbench/wiki/Configuration). Everything is optional.
 
 # root = "C:/Users/you/IdeaProjects"   # folder holding the checkouts
 # org = "GTNewHorizons"                # its repos form the "gtnh" group; the All PRs tab lists its PRs
