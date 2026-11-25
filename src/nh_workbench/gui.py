@@ -1,4 +1,4 @@
-"""Desktop UI on Qt (PySide6), a proof of concept: the repo, PR and Pack tabs, fetch, pull, clone, check out.
+"""Desktop UI on Qt (PySide6), a proof of concept: every tab of the terminal UI, fetch, pull, clone, check out.
 
 The git, GitHub and pack work is the code the terminal UI runs. It runs on an asyncio loop in a background
 thread; results come back to the Qt thread through a signal. Cells and the detail pane reuse the Rich text the
@@ -53,19 +53,21 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from rich.console import Console, RenderableType
+from rich.console import Console, Group, RenderableType
 from rich.segment import Segment
 from rich.terminal_theme import TerminalTheme
 from rich.text import Text
 
-from . import config, github, ops, pack, proc, render
+from . import config, github, ops, pack, proc, render, skill
 from .config import Config
-from .models import PackEntry, PackInfo, RepoState, ReviewItem
+from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 from .tui import (
     HEADER_SORT,
     PACK_COLUMNS,
     REPO_COLUMNS,
     SORTS,
+    TOOL_COLUMNS,
+    TOOLS,
     VIEWS,
     action_shown,
     local_branch,
@@ -80,6 +82,7 @@ from .tui import (
     repo_detail,
     repo_for,
     review_detail,
+    tool_status,
 )
 
 log = logging.getLogger(__name__)
@@ -91,7 +94,7 @@ SORT_ROLE = Qt.ItemDataRole.UserRole + 2
 TOOLBAR_LETTERS = {"toggle_team": "t", "toggle_drafts": "t", "pr_filters": "v", "reload_org": "r", "reload_prs": "r"}
 REPO_VIEWS = [key for key, (_, keep) in VIEWS.items() if keep is not None]
 PR_TABS = ("mine", "reviews", "org")
-VIEW_KEYS = [key for key in VIEWS if key in REPO_VIEWS or key in (*PR_TABS, "pack")]  # Tools comes later
+VIEW_KEYS = list(VIEWS)  # the same tabs as the terminal UI, in the same order
 DONE_ACTIONS = {"fetch", "pull", "main", "ide", "web", "folder"}  # repo menu entries this preview handles
 
 # ANSI colors the Rich styles map to, picked to read well on a light or a dark window.
@@ -303,6 +306,71 @@ class Workbench:
             if not found.error:
                 self.notify(f"Searched all open PRs of {self.cfg.org}", False)
 
+    async def list_org_jobs(self, then: Callable[[list[CloneJob]], None]) -> None:
+        """Clone jobs for the org repos not checked out here (archived ones left out), handed to `then`."""
+        org = self.cfg.org
+        self.notify(f"Listing the repos of {org}...", False)
+        repos, error = await github.org_repos(org)
+        if error:
+            self.notify(f"{org} repos: {error}", True)
+            if not repos:
+                return
+        repos = [r for r in repos if not r.archived]
+        then(ops.org_jobs(repos, self.states.values(), self.cfg.root, self.cfg.clone_protocol))
+
+    async def clone_many(self, jobs: list[CloneJob]) -> None:
+        """Clone a few at a time, then scan what was cloned so it shows up with the other checkouts."""
+        try:
+            done = 0
+
+            def on_done(job: CloneJob, why: str | None) -> None:
+                nonlocal done
+                done += 1
+                self.on_progress("Cloning", done, len(jobs))
+
+            failed = await ops.clone_all(jobs, min(4, self.cfg.concurrency), on_done)
+            failed_jobs = {job for job, _ in failed}
+            cloned = [j.dest for j in jobs if j.dest.is_dir() and j not in failed_jobs]
+            if cloned:
+                await self.batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), cloned)
+            why = f", {len(failed)} failed (first: {failed[0][0].name}: {failed[0][1]})" if failed else ""
+            self.notify(f"Cloned {len(cloned)} repos{why}", bool(failed))
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def download_jars(self) -> None:
+        """The jars of closed-source pack mods, into the folder DreamAssemblerXXL expects."""
+        try:
+            entries = self.pack_info.entries if self.pack_info else []
+            folder = self.cfg.root / pack.JAR_FOLDER
+            report = await pack.download_closed(entries, folder)
+            why = f", {len(report.failed)} failed (first: {report.failed[0]})" if report.failed else ""
+            self.notify(f"{report.summary} in {folder}{why}", bool(report.failed))
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def delete_jars(self, files: list[Path]) -> None:
+        try:
+            freed, failed = await asyncio.to_thread(ops.delete_files, files)
+            more = f", {len(failed)} could not be deleted (in use?): {failed[0]}" if failed else ""
+            self.notify(f"Freed {render.megabytes(freed)}{more}", bool(failed))
+        finally:
+            self.on_progress("", 0, 0)
+
+    async def install_skill(self, agents: list[str]) -> None:
+        try:
+            done = []
+            for agent in agents:
+                try:
+                    folder, _ = await asyncio.to_thread(skill.install, None, agent)
+                except OSError as e:
+                    self.notify(f"{skill.AGENTS[agent]}: {e}", True)
+                    return
+                done.append(f"{skill.AGENTS[agent]} in {folder}")
+            self.notify(f"Skill installed for {', '.join(done)}; new sessions pick it up", False)
+        finally:
+            self.on_progress("", 0, 0)
+
     async def toggle_team(self, on: bool) -> None:
         """Show or hide the review requests that reach you through a team, as t does in the terminal UI."""
         try:
@@ -380,7 +448,16 @@ class AsyncLoop:
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     def stop(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
+        """Cancel what is still running (a fetch when the window closes), let it clean up, then stop."""
+
+        async def shutdown() -> None:
+            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.loop.stop()
+
+        asyncio.run_coroutine_threadsafe(shutdown(), self.loop)
 
 
 class Bridge(QObject):
@@ -563,6 +640,18 @@ class ReviewModel(PrModel):
 
     def cells(self, item: ReviewItem) -> list[Text]:
         return render.review_row(item)
+
+
+class ToolModel(RichModel):
+    """The Tools tab: one line per tool, as in the terminal UI."""
+
+    columns = TOOL_COLUMNS
+
+    def cells(self, tool: tuple) -> list[Text]:
+        return [Text(tool[1], "bold"), Text(tool[2])]
+
+    def key(self, tool: tuple) -> str:
+        return tool[0]
 
 
 class OrgModel(PrModel):
@@ -844,16 +933,25 @@ class MainWindow(QMainWindow):
         self.org.source.mark = self._org_mark
         self.pack = RichTable(PackModel(self.theme), self._entry_shown, height)
         # Tabs with their own table; the repo tabs share one.
+        self.tools = RichTable(ToolModel(self.theme), lambda tool: True, height)
+        self.tools.source.set_rows(TOOLS)
+        self.tools.setSortingEnabled(False)
+        self.tools.proxy.sort(-1)  # back to the terminal UI's order
+        self.tools.resizeColumnsToContents()
+        self.spark_window = None
         self.tables = {"mine": self.mine, "reviews": self.reviews, "org": self.org, "pack": self.pack}
+        self.tables["tools"] = self.tools
         self.stack = QStackedWidget()
         for table in (self.repos, *self.tables.values()):
             table.customContextMenuRequested.connect(lambda pos, t=table: self._menu(t.viewport().mapToGlobal(pos)))
             table.selectionModel().currentRowChanged.connect(lambda *_: self._update_detail())
             self.stack.addWidget(table)
-        for table in self.tables.values():  # letters act at once there, as in the terminal UI
-            table.on_letter = self._letter
+        for key, table in self.tables.items():  # letters act at once there, as in the terminal UI
+            if key != "tools":
+                table.on_letter = self._letter
         self.repos.activated.connect(lambda _: self._menu())  # Enter or double click
         self.pack.activated.connect(lambda _: self._menu())
+        self.tools.activated.connect(lambda _: self._open_tool(self._selected_tool()))  # as in the TUI: Enter runs it
         for key in PR_TABS:  # as in the terminal UI: Enter opens the PR
             self.tables[key].activated.connect(lambda _: self._act("web"))
 
@@ -893,9 +991,16 @@ class MainWindow(QMainWindow):
 
     # --- plumbing between the two threads
 
+    def post(self, fn: Callable[[], None]) -> None:
+        """Run fn on the Qt thread, from any thread; dropped once the window is gone."""
+        try:
+            self.bridge.call.emit(fn)
+        except RuntimeError:  # the window was closed while the work ran: nothing left to show it in
+            pass
+
     def _later(self, fn: Callable) -> Callable:
         """Wrap fn so that calling it from the asyncio thread runs it on the Qt thread."""
-        return lambda *args: self.bridge.call.emit(lambda: fn(*args))
+        return lambda *args: self.post(lambda: fn(*args))
 
     def run(self, coro: Coroutine) -> None:
         future = self.loop.submit(coro)
@@ -903,7 +1008,7 @@ class MainWindow(QMainWindow):
         def done(f: concurrent.futures.Future) -> None:
             if not f.cancelled() and f.exception():
                 log.error("background task failed", exc_info=f.exception())
-                self.bridge.call.emit(lambda: self._notify(f"Failed: {f.exception()}", True))
+                self.post(lambda: self._notify(f"Failed: {f.exception()}", True))
 
         future.add_done_callback(done)
 
@@ -944,6 +1049,8 @@ class MainWindow(QMainWindow):
             self.progress.hide()
             if self.message.text().endswith("..."):
                 self.message.setText(f"{len(self.model.rows)} repos")
+            if self._view() == "tools":  # what a tool would act on may have changed
+                self._update_detail()
             return
         self.progress.setMaximum(total)
         self.progress.setValue(done)
@@ -1019,6 +1126,8 @@ class MainWindow(QMainWindow):
                 n = sum(1 for item in self.reviews.source.rows if item.direct)
             elif key == "org":
                 n = len(self.org_urls) if self.wb.org else None  # not searched yet
+            elif key == "tools":
+                n = None
             elif key in self.tables:
                 n = len(self.tables[key].source.rows)
             else:
@@ -1034,6 +1143,10 @@ class MainWindow(QMainWindow):
     def _selected_entry(self) -> PackEntry | None:
         return self.pack.current() if self._view() == "pack" else None
 
+    def _selected_tool(self) -> str | None:
+        tool = self.tools.current() if self._view() == "tools" else None
+        return tool[0] if tool else None
+
     def _update_detail(self) -> None:
         self._show_actions()  # Open in IntelliJ on a PR depends on its repo being here
         st, entry, item = self._selected(), self._selected_entry(), self._selected_pr()
@@ -1047,6 +1160,10 @@ class MainWindow(QMainWindow):
             content = repo_detail(st, self.wb.pack_info)
         elif entry and self.wb.pack_info:
             content = pack_detail(entry, self.wb.pack_info)
+        elif self._selected_tool():
+            tool = self.tools.current()
+            status = tool_status(tool[0], self.cfg, self.pack.source.rows, self.model.rows)
+            content = Group(Text(tool[3]), Text(status, "bold"))
         else:
             self.detail.clear()
             return
@@ -1087,7 +1204,10 @@ class MainWindow(QMainWindow):
 
     def _line(self) -> tuple[str, list[tuple[str, str, str, str | None]], Callable[[str], None]] | None:
         """The selected line's name, its actions, and what runs one: the menu, toolbar and letters all use it."""
-        st, entry, item = self._selected(), self._selected_entry(), self._selected_pr()
+        st, entry, item, tool = self._selected(), self._selected_entry(), self._selected_pr(), self._selected_tool()
+        if tool:
+            name = self.tools.current()[1]
+            return name, [("o", "open", f"Open {name}", None)], lambda a: self._open_tool(tool)
         if item:
             local = repo_for(item, self.model.rows)
             title = f"{item.repo} #{item.pr.number}"
@@ -1138,6 +1258,83 @@ class MainWindow(QMainWindow):
         if action_id:
             self._act(action_id)
         return action_id is not None
+
+    def _confirm(self, title: str, text: str, details: str = "") -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "NH Workbench", title, parent=self)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.setInformativeText(text)
+        if details:
+            box.setDetailedText(details)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _open_tool(self, key: str | None) -> None:
+        if key == "spark":
+            from .gui_spark import SparkWindow
+
+            if self.spark_window is None:
+                self.spark_window = SparkWindow(self)
+            self.spark_window.show()
+            self.spark_window.raise_()
+            self.spark_window.activateWindow()
+        elif key == "clone":
+            self._tool_clone()
+        elif key == "jars":
+            if not any(e.closed for e in self.pack.source.rows):
+                self._notify("Pack data not loaded yet", True)
+            elif self._start("Downloading closed-source jars", []) is not None:
+                self.run(self.wb.download_jars())
+        elif key == "clean":
+            self._tool_clean()
+        elif key == "skill":
+            self._tool_skill()
+
+    def _tool_clone(self) -> None:
+        protocol, org = self.cfg.clone_protocol, self.cfg.org
+        pack_jobs = pack.missing_jobs(self.pack.source.rows, self.cfg.root, protocol)
+        no_pack = None if pack_jobs else ("pack data not loaded" if not self.pack.source.rows else "none missing")
+        actions = [
+            ("p", "pack", f"Pack mods not checked out ({len(pack_jobs)})", no_pack),
+            ("o", "org", f"{org} repos not checked out, archived ones left out (asks GitHub)", None),
+        ]
+        choice = self._ask(f"Clone missing repos into {self.cfg.root} over {protocol.upper()}", actions)
+        if choice == "pack":
+            self._confirm_clone(pack_jobs, "pack mods")
+        elif choice == "org":
+            self.run(self.wb.list_org_jobs(self._later(lambda jobs: self._confirm_clone(jobs, f"{org} repos"))))
+
+    def _confirm_clone(self, jobs: list[CloneJob], what: str) -> None:
+        if not jobs:
+            self._notify(f"Every one of the {what} is checked out already")
+            return
+        text = "Folders that already exist are skipped."
+        if self._confirm(f"Clone {len(jobs)} {what}?", text, "\n".join(j.name for j in jobs)):
+            if self._start(f"Cloning {len(jobs)} {what}", []) is not None:
+                self.run(self.wb.clone_many(jobs))
+
+    def _tool_clean(self) -> None:
+        found = ops.built_jars(self.model.rows, self.cfg.org)
+        if not found:
+            self._notify(f"No built jars in build/libs of {self.cfg.org} repos")
+            return
+        files = [p for _, jars in found for p in jars]
+        total = render.megabytes(sum(ops.file_size(p) for p in files))
+        sizes = [(st, jars, render.megabytes(sum(map(ops.file_size, jars)))) for st, jars in found]
+        lines = [f"{st.name}  {len(jars)} jars, {size}" for st, jars, size in sizes]
+        title = f"Delete {len(files)} built jars ({total}) in {len(found)} repos?"
+        text = "Deleted for good, not to the recycle bin. The next build makes them again."
+        if self._confirm(title, text, "\n".join(lines)) and self._start("Deleting built jars", []) is not None:
+            self.run(self.wb.delete_jars(files))
+
+    def _tool_skill(self) -> None:
+        actions = []
+        for key, (agent, label) in zip("123", skill.AGENTS.items(), strict=True):
+            state = "update" if skill.installed(agent) else "install"
+            actions.append((key, agent, f"{label}: {state} in {skill.skills_dir(agent) / skill.SKILL}", None))
+        actions.append(("a", "all", "All", None))
+        choice = self._ask("Install the spark-profile skill", actions)
+        if choice and self._start("Installing the skill", []) is not None:
+            self.run(self.wb.install_skill(list(skill.AGENTS) if choice == "all" else [choice]))
 
     def _reload_prs(self) -> None:
         if self._start("Refreshing from GitHub", []) is not None:

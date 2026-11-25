@@ -155,6 +155,8 @@ def test_toolbar_follows_the_tab(window):
     assert shown() == {"reload_prs", "open_web", "checkout", "toggle_team"}
     window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("org"))
     assert shown() == {"reload_org", "open_web", "checkout", "toggle_drafts", "pr_filters"}
+    window.tabs.setCurrentIndex(gui.VIEW_KEYS.index("tools"))
+    assert shown() == {"rescan"} and not window.filter_action.isVisible()  # as the TUI's footer on Tools
     window.tabs.setCurrentIndex(0)
     assert "clone" not in shown() and "toggle_team" not in shown()
 
@@ -282,3 +284,74 @@ def test_all_prs_tab(window, monkeypatch, tmp_path):
     count = len(searches)
     QTest.keyClick(window.org, Qt.Key.Key_R)  # r: search again
     wait_for(lambda: len(searches) == count + 1 and not window.wb.org_searching)
+
+
+def test_tools_tab(window, monkeypatch, tmp_path):
+    from nh_workbench import ops, skill
+
+    loaded(window)
+    tools = gui.VIEW_KEYS.index("tools")
+    assert window.tabs.tabText(tools) == "Tools"
+    window.tabs.setCurrentIndex(tools)
+    assert [window.tools.proxy.index(r, 0).data() for r in range(5)][:2] == ["spark profiles", "Clone missing repos"]
+    window.tools.selectRow(2)
+    assert window._selected_tool() == "jars" and "Closed-source mods in the pack: 1" in window.detail.toPlainText()
+
+    downloads = []
+
+    async def fake_download(entries, folder):
+        downloads.append(folder)
+        return pack.JarReport(downloaded=["Thaumcraft.jar"])
+
+    monkeypatch.setattr(pack, "download_closed", fake_download)
+    window.tools.activated.emit(window.tools.currentIndex())  # Enter runs the tool, as in the TUI
+    wait_for(lambda: downloads and not window.running)
+    assert "1 downloaded" in window.message.text()
+
+    jar = tmp_path / "built.jar"
+    jar.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(ops, "built_jars", lambda states, org: [(window.model.rows[0], [jar])])
+    asked = []
+    monkeypatch.setattr(window, "_confirm", lambda title, text, details="": asked.append(title) or True)
+    window.tools.selectRow(3)
+    window.tools.activated.emit(window.tools.currentIndex())
+    wait_for(lambda: not jar.exists() and not window.running)
+    assert asked and asked[0].startswith("Delete 1 built jars")
+
+    installs = []
+    monkeypatch.setattr(skill, "install", lambda dest, agent: installs.append(agent) or (tmp_path / agent, None))
+    window.tools.selectRow(4)
+    QTimer.singleShot(200, lambda: QTest.keyClick(QApplication.activePopupWidget(), Qt.Key.Key_1))
+    window.tools.activated.emit(window.tools.currentIndex())
+    wait_for(lambda: installs and not window.running)
+    assert installs == [next(iter(skill.AGENTS))] and "Skill installed" in window.message.text()
+
+
+def test_spark_window(window, monkeypatch):
+    from nh_workbench import spark
+
+    asked = []
+    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (object(), "abc"))
+    monkeypatch.setattr(spark, "summary", lambda p, name, thread, windows, *a: "summary\n  12.5%  1.2s  a.B.tick")
+    monkeypatch.setattr(
+        spark, "focus_report", lambda p, name, method, up, *a: asked.append((method, up)) or f"report of {method}"
+    )
+    window._open_tool("spark")
+    sw = window.spark_window
+    try:
+        sw.source.setEditText("abc")
+        sw.load()
+        wait_for(lambda: sw.text.startswith("summary"))
+        sw.report.show_text(sw.text, 1)  # the cursor on the method line
+        sw.report.setFocus()
+        QTest.keyClick(sw.report, Qt.Key.Key_Return)  # what it calls
+        wait_for(lambda: sw.text == "report of a.B.tick")
+        assert asked == [("a.B.tick", False)] and "calls of a.B.tick" in sw.status.text()
+        sw.back()
+        wait_for(lambda: sw.text.startswith("summary"))
+        sw.report.show_text(sw.text, 1)
+        QTest.keyClick(sw.report, Qt.Key.Key_C)  # who calls it
+        wait_for(lambda: len(asked) == 2)
+        assert asked[1] == ("a.B.tick", True)
+    finally:
+        sw.close()

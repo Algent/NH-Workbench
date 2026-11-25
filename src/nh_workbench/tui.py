@@ -146,6 +146,29 @@ def org_shown(
     return github.filter_prs(items, filters, ops.local_slugs(states), pack.pack_slugs(entries))
 
 
+def tool_status(key: str, cfg: Config, entries: list[PackEntry], states: Iterable[RepoState]) -> str:
+    """The current state a tool of the Tools tab would act on, for the detail pane."""
+    if key == "clone":
+        if not entries:
+            return "Pack data not loaded yet."
+        missing = pack.missing_jobs(entries, cfg.root, cfg.clone_protocol)
+        return f"Pack mods not checked out: {len(missing)}. Org repos are listed from GitHub when you pick them."
+    if key == "jars":
+        closed = sum(1 for e in entries if e.closed)
+        return f"Closed-source mods in the pack: {closed}" if entries else "Pack data not loaded yet."
+    if key == "clean":
+        found = ops.built_jars(states, cfg.org)
+        files = [p for _, jars in found for p in jars]
+        size = render.megabytes(sum(ops.file_size(p) for p in files))
+        return f"Now: {len(files)} built jars, {size}, in {len(found)} repos." if files else "No built jars now."
+    if key == "skill":
+        found = [
+            f"{label} {'installed' if skill.installed(a) else 'not installed'}" for a, label in skill.AGENTS.items()
+        ]
+        return ", ".join(found) + "."
+    return ""
+
+
 def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: bool = True) -> bool:
     """Whether an action belongs on a tab. The terminal UI's footer and the desktop UI's toolbar both ask this,
     so a tab or an action added later shows up the same way in both.
@@ -1054,26 +1077,7 @@ class RepoApp(App[None]):
             await self.install_skill_menu()
 
     def _tool_status(self, key: str) -> str:
-        """The current state a tool would act on, for the detail pane."""
-        if key == "clone":
-            if not self.entries:
-                return "Pack data not loaded yet."
-            missing = pack.missing_jobs(self.entries, self.cfg.root, self.cfg.clone_protocol)
-            return f"Pack mods not checked out: {len(missing)}. Org repos are listed from GitHub when you pick them."
-        if key == "jars":
-            closed = sum(1 for e in self.entries if e.closed)
-            return f"Closed-source mods in the pack: {closed}" if self.entries else "Pack data not loaded yet."
-        if key == "clean":
-            found = ops.built_jars(self.states.values(), self.cfg.org)
-            files = [p for _, jars in found for p in jars]
-            size = render.megabytes(sum(ops.file_size(p) for p in files))
-            return f"Now: {len(files)} built jars, {size}, in {len(found)} repos." if files else "No built jars now."
-        if key == "skill":
-            states = [
-                f"{label} {'installed' if skill.installed(a) else 'not installed'}" for a, label in skill.AGENTS.items()
-            ]
-            return ", ".join(states) + "."
-        return ""
+        return tool_status(key, self.cfg, self.entries, self.states.values())
 
     async def install_skill_menu(self) -> None:
         """Install the skill that lets Claude Code, Codex or OpenCode read spark links with this tool."""
