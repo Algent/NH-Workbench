@@ -408,6 +408,7 @@ def test_run_saves_the_picked_folder(sandbox, monkeypatch):
 
     monkeypatch.setattr(gui, "QApplication", type("Qa", (), {"instance": staticmethod(App)}))
     monkeypatch.setattr(gui.config, "suggest_root", lambda: None)  # nothing to offer: straight to the folder picker
+    monkeypatch.setattr(gui, "setup_logging", lambda verbose=False: None)
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: str(sandbox.root))
     monkeypatch.setattr(gui, "MainWindow", Window)
     monkeypatch.setattr(gui.config, "save_setting", lambda keys, value: saved.append((keys, value)))
@@ -681,3 +682,38 @@ def test_a_job_of_several_steps_ends_once(window):
     assert ends == [""]
     window.loop.submit(scan()).result(20)  # a batch on its own still ends its job
     assert ends == ["", ""]
+
+
+def test_gui_log(monkeypatch):
+    import logging
+    import sys
+
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # put back after the test
+    monkeypatch.setattr(sys, "__excepthook__", lambda *a: None)  # no traceback in the test output
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        path = gui.setup_logging()
+        logging.getLogger("nh_workbench.test").info("not kept without -v")
+        logging.getLogger("nh_workbench.test").warning("kept")
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            sys.excepthook(*sys.exc_info())
+        for handler in root.handlers:
+            handler.flush()
+        text = path.read_text(encoding="utf-8")
+        assert "kept" in text and "not kept" not in text
+        assert "unhandled error" in text and "RuntimeError: boom" in text
+    finally:
+        for handler in set(root.handlers) - set(before):
+            root.removeHandler(handler)
+            handler.close()
+
+
+def test_settings_shows_the_pack_data(window):
+    from nh_workbench.gui_settings import SettingsDialog
+
+    loaded(window)
+    labels = [label.text() for label in SettingsDialog(window).findChildren(gui.QLabel)]
+    assert any("Release" in text and "2.9.0" in text for text in labels)

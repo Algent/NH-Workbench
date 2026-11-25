@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config, gui_theme, proc, tui
+from . import config, gui_theme, proc, render, tui
 
 if TYPE_CHECKING:
     from .gui import MainWindow
@@ -137,6 +137,12 @@ class SettingsDialog(QDialog):
             actions.addWidget(button)
         actions.addStretch(1)
 
+        from .gui import text_html  # imports this module
+
+        info = owner.wb.pack_info
+        pack_line = QLabel(text_html(render.pack_header(info), owner.theme) if info else "Pack data not loaded yet")
+        pack_line.setTextFormat(Qt.TextFormat.RichText)
+        pack_line.setToolTip("The daily and the release the Pack tab and the version columns describe")
         where = QLabel(f"Config file: {config.config_path()}")
         where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         where.setEnabled(False)  # greyed, like the TUI's dim lines
@@ -150,6 +156,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._group("Auto-refresh", refresh))
         layout.addWidget(self._group("IntelliJ", ide))
         layout.addLayout(lists)
+        layout.addWidget(pack_line)
         layout.addLayout(actions)
         layout.addLayout(_row(self.update_button, QWidget()))
         layout.addWidget(where)

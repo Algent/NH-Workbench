@@ -18,6 +18,9 @@ It needs Qt, an optional extra of about 100 MB.
 
 The terminal UI's launchers leave the extra installed, so both can be used from one checkout.
 
+Warnings and errors, unhandled ones included, go to `gui.log` in the cache folder (Settings, Open logs and
+cache folder); `nhwb -v gui` logs every command run there too.
+
 ## Tabs and the detail pane
 
 The tabs are the terminal UI's, with the same counts and filters: see its [tabs](Terminal-UI#tabs). The pane

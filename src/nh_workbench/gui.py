@@ -11,6 +11,7 @@ import contextlib
 import html
 import io
 import logging
+import logging.handlers
 import sys
 import threading
 import time
@@ -2002,7 +2003,30 @@ def ask_root(missing: Path) -> Path | None:
     return Path(folder) if folder else None
 
 
-def run(cfg: Config, root_override: Path | None = None) -> int:
+def setup_logging(verbose: bool = False) -> Path:
+    """Log to gui.log in the cache folder: warnings and errors, everything with -v. Started from a launcher, the
+    desktop UI has no console, so errors would be lost otherwise, unhandled ones included."""
+    folder = config.cache_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "gui.log"
+    handler = logging.handlers.RotatingFileHandler(path, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+    handler.setLevel(logging.DEBUG if verbose else logging.WARNING)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    if verbose:
+        root.setLevel(logging.DEBUG)
+
+    def unhandled(kind, error, trace) -> None:
+        log.critical("unhandled error", exc_info=(kind, error, trace))
+        sys.__excepthook__(kind, error, trace)  # and on the console too, when there is one
+
+    sys.excepthook = unhandled  # also what PySide6 calls for an error in a slot
+    return path
+
+
+def run(cfg: Config, root_override: Path | None = None, verbose: bool = False) -> int:
+    setup_logging(verbose)
     if sys.platform == "win32":  # its own taskbar entry and icon, not Python's
         import ctypes
 
