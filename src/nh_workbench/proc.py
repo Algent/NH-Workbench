@@ -1,6 +1,7 @@
 """The only module that spawns processes."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import subprocess
@@ -54,6 +55,13 @@ async def run(*args: str, cwd: Path | None = None, stdin: str | None = None, tim
         proc.kill()
         await proc.wait()
         return Result(124, "", f"timed out after {timeout:.0f}s")
+    except asyncio.CancelledError:
+        # The caller gave up (a UI closing mid-fetch): stop the process instead of leaving it running, and wait
+        # for it so its pipes close now rather than after the event loop is gone.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await asyncio.shield(proc.wait())
+        raise
     return Result(proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
 
 
