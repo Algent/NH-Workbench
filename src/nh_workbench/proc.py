@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -71,6 +73,47 @@ def open_path(path: Path) -> None:
         os.startfile(path)
     else:
         launch("open" if sys.platform == "darwin" else "xdg-open", str(path))
+
+
+# Tried in order on Linux after $TERMINAL; each starts in the folder it is started from.
+_LINUX_TERMINALS = (
+    "x-terminal-emulator ptyxis gnome-terminal kgx konsole xfce4-terminal kitty alacritty wezterm foot xterm".split()
+)
+
+
+def terminal_command(path: Path) -> list[str]:
+    """The command that opens a terminal window in path; raises OSError when none is found."""
+    if sys.platform == "win32":
+        if shutil.which("wt"):  # Windows Terminal, with the user's default profile
+            return ["wt", "-w", "new", "-d", str(path)]
+        return ["powershell.exe"]
+    if sys.platform == "darwin":
+        return ["open", "-a", "Terminal", str(path)]
+    if own := shlex.split(os.environ.get("TERMINAL", "")):
+        return own
+    for name in _LINUX_TERMINALS:
+        if shutil.which(name):
+            return [name]
+    raise OSError("no terminal found: set $TERMINAL")
+
+
+def open_terminal(path: Path) -> None:
+    """Open a terminal window in a folder."""
+    cmd = terminal_command(path)
+    log.debug("terminal %s in %s", cmd, path)
+    if sys.platform == "win32" and cmd[0] != "wt":
+        # A console of its own, keeping its standard handles: the shell types in it.
+        subprocess.Popen(cmd, cwd=path, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        return
+    subprocess.Popen(
+        cmd,
+        cwd=path,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_FLAGS,
+        start_new_session=sys.platform != "win32",
+    )
 
 
 def launch(*args: str) -> None:

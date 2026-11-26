@@ -40,6 +40,7 @@ commits waiting on the release branch.
 | `m` | Switch repos parked on a merged PR branch back to main |
 | `d` | Delete merged branches |
 | `o` / `w` | Open in IntelliJ / open the PR or GitHub page |
+| `e` / `T` | Open the selected repo in the file manager / in a new terminal window |
 | `t` | Reviews: show team requests. All PRs: show drafts |
 | `v` | All PRs: show only some PRs (see below) |
 | `c` | Pack tab: clone the selected mod. PR tabs: check out the PR in its local repo |
@@ -56,7 +57,8 @@ cannot be changed.
 ## Repo menu
 
 `Enter` on a repo opens its menu: fetch, pull, switch to main, delete merged branches, open in IntelliJ, on
-GitHub or in the file manager, set the main branch or group, protect branches from cleanup, hide the repo.
+GitHub, in the file manager or a terminal, set the main branch or group, protect branches from cleanup, hide the
+repo.
 
 ## Settings
 

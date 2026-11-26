@@ -33,8 +33,8 @@ Columns size themselves to their contents until you drag one. Clicking a header 
 
 - **Toolbar**: the actions of the current tab, the same set the terminal UI's footer shows.
 - **Menu of a line**: `Enter`, double click or right click. On a repo: fetch, pull, switch to main, delete
-  merged branches, protect branches, open in IntelliJ, on GitHub or in the file manager, set the main branch or
-  group, hide the repo. On a pack mod or a PR: clone, check out, open.
+  merged branches, protect branches, open in IntelliJ, on GitHub, in the file manager or a terminal, set the main
+  branch or group, hide the repo. On a pack mod or a PR: clone, check out, open.
 - **Cleanup** and **To main** list what they will do and ask first; `No` is the default.
 - Tools tab: `Enter` on a tool runs it. spark profiles open in a window of their own, with an overview, call
   tree, tables and the text report ([spark profiles](Spark-Profiles#desktop-ui)).

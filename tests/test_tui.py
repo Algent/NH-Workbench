@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from textual.widgets import DataTable, Tabs
 
-from nh_workbench import github, pack
+from nh_workbench import github, pack, proc
 from nh_workbench.models import PackEntry, PackInfo, PrInfo, ReviewItem
 from nh_workbench.tui import RepoApp
 
@@ -492,6 +492,28 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
         tabs.active = "view-org"  # still fresh: no new search
         await settle(app, pilot)
         assert len(org_searches) == 2
+
+
+async def test_repo_menu_opens_a_terminal(sandbox, offline, monkeypatch):
+    opened = []
+    monkeypatch.setattr(proc, "open_terminal", opened.append)
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter", "t")
+        await pilot.pause()
+        assert opened == [sandbox.work]
+        await pilot.press("T")  # the same without the menu
+        await pilot.pause()
+        assert opened == [sandbox.work, sandbox.work]
+
+        def broken(path):
+            raise OSError("no terminal found: set $TERMINAL")
+
+        monkeypatch.setattr(proc, "open_terminal", broken)
+        await pilot.press("enter", "t")
+        await pilot.pause()
+        assert any("set $TERMINAL" in str(n.message) for n in app._notifications)
 
 
 async def test_open_ide_asks_for_launcher_when_none_found(sandbox, offline, monkeypatch, tmp_path):
@@ -1109,6 +1131,8 @@ def test_action_shown_per_tab():
     assert not action_shown("rescan", "mine") and not action_shown("reload_prs", "all")
     assert not action_shown("open_ide", "all", ide_off=True)
     assert not action_shown("open_ide", "reviews", repo_selected=False) and action_shown("open_ide", "reviews")
+    assert action_shown("open_terminal", "all", ide_off=True) and not action_shown("open_files", "tools")
+    assert not action_shown("open_terminal", "mine", repo_selected=False) and action_shown("open_files", "pack")
     assert not action_shown("open_web", "tools") and not action_shown("filter", "tools")
 
 

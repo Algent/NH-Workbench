@@ -41,6 +41,8 @@ ACTIONS = [
     KeyAction("pr_filters", "Show only (All PRs)", "v", "Ctrl+Shift+V"),
     KeyAction("open_web", "Open in browser", "w", "Ctrl+Shift+G"),
     KeyAction("open_ide", "Open in IntelliJ", "o", "Ctrl+Shift+O"),
+    KeyAction("open_files", "Open in file manager", "e", "Ctrl+Shift+E"),
+    KeyAction("open_terminal", "Open terminal here", "T", "Ctrl+Alt+T"),
     KeyAction("filter", "Filter", "/", "Ctrl+F"),
     KeyAction("sort", "Sort", "s"),
     KeyAction("extras", "Settings", "x", "Ctrl+,", shown_as="-"),

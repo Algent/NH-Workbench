@@ -659,7 +659,8 @@ def pack_actions(entry: PackEntry, cfg: Config) -> list[tuple[str, str, str, str
     return [
         ("c", "clone", f"Clone {where}", no_clone),
         ("w", "web", on_web, None if entry.web_url else "no web page known"),
-        ("e", "folder", "Open folder", None if entry.local else "not checked out"),
+        ("e", "folder", "Open in file manager", None if entry.local else "not checked out"),
+        ("t", "terminal", "Open terminal here", None if entry.local else "not checked out"),
         ("o", "ide", "Open in IntelliJ", None if entry.local and not cfg.ide_off else "not checked out"),
         ("r", "refresh", "Download the pack data again", None),
     ]
@@ -673,7 +674,8 @@ def pr_actions(item: ReviewItem, st: RepoState | None, cfg: Config) -> list[tupl
         ("w", "web", f"Open #{item.pr.number} in the browser", None),
         ("c", "checkout", f"Check out #{item.pr.number}" + (f" in {st.name}" if st else ""), no_checkout),
         ("o", "ide", "Open in IntelliJ", here or ("turned off in Settings" if cfg.ide_off else None)),
-        ("e", "folder", "Open folder", here),
+        ("e", "folder", "Open in file manager", here),
+        ("t", "terminal", "Open terminal here", here),
     ]
 
 
@@ -870,6 +872,8 @@ class MainWindow(QMainWindow):
         for key_id, slot in (
             ("filter", lambda: (self.filter.setFocus(), self.filter.selectAll())),
             ("extras", lambda: self.open_settings()),
+            ("open_files", lambda: self._act("folder")),
+            ("open_terminal", lambda: self._act("terminal")),
             ("quit", self.close),
         ):
             shortcut = QAction(self)
@@ -1372,6 +1376,8 @@ class MainWindow(QMainWindow):
             letters["extras"]: ("", self.open_settings),
             letters["open_config"]: ("", lambda: open_folder("config")),
             letters["open_logs"]: ("", lambda: open_folder("logs")),
+            letters["open_files"]: ("open_files", lambda: self._act("folder")),
+            letters["open_terminal"]: ("open_terminal", lambda: self._act("terminal")),
             letters["quit"]: ("", self.close),
         }
         if key in anywhere:
@@ -1633,7 +1639,7 @@ class MainWindow(QMainWindow):
         elif action_id == "checkout" and st:
             if self._start(f"Checking out #{item.pr.number}", [st.path]) is not None:
                 self.run(self.wb.checkout(item, st))
-        elif st:  # open folder, open in the IDE: the same as for the checkout
+        elif st:  # folder, terminal, IDE: the same as for the checkout
             self._repo_action(action_id, st)
 
     def _pack_action(self, action_id: str, entry: PackEntry) -> None:
@@ -1645,7 +1651,7 @@ class MainWindow(QMainWindow):
                 webbrowser.open(entry.web_url)
         elif action_id == "refresh":
             self.refresh_pack()
-        elif entry.local:  # open folder, open in the IDE: the same as for the checkout
+        elif entry.local:  # folder, terminal, IDE: the same as for the checkout
             self._repo_action(action_id, entry.local)
 
     def _repo_action(self, action_id: str, st: RepoState) -> None:
@@ -1663,6 +1669,11 @@ class MainWindow(QMainWindow):
                 webbrowser.open(url)
         elif action_id == "folder":
             proc.open_path(st.path)
+        elif action_id == "terminal":
+            try:
+                proc.open_terminal(st.path)
+            except OSError as e:
+                self._notify(f"Could not open a terminal: {e}", True)
         elif action_id == "cleanup":
             self._cleanup([st])
         elif action_id in ("keep", "main_branch", "group", "hide"):

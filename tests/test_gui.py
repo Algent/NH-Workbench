@@ -675,6 +675,18 @@ def test_repo_menu_settings(window, sandbox, monkeypatch, tmp_path):
     assert config.load().hidden == ["repo"]
 
 
+def test_repo_menu_opens_a_terminal(window, sandbox, monkeypatch):
+    loaded(window)
+    opened = []
+    monkeypatch.setattr(gui.proc, "open_terminal", opened.append)
+    window._repo_action("terminal", window.model.rows[0])
+    assert opened == [sandbox.work]
+    window.table.selectRow(0)
+    window.key_actions["open_terminal"].trigger()  # Ctrl+Alt+T
+    assert opened == [sandbox.work, sandbox.work]
+    assert window._key("T") and opened == [sandbox.work] * 3  # the terminal UI's letter
+
+
 def test_terminal_ui_keys_on_every_tab(window, sandbox, monkeypatch):
     loaded(window)
     window.show()  # focus moves only in a shown, active window

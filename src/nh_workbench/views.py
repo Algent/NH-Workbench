@@ -84,7 +84,8 @@ TOOLS = [
         "Installs the spark-profile skill for the agent you pick. Same as `nh-workbench tools install-skill`.",
     ),
 ]
-NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
+NOT_ON_TOOLS = {"sort", "open_ide", "open_files", "open_terminal", "open_web", "filter", "clone"}
+CHECKOUT_ACTIONS = {"open_ide", "open_files", "open_terminal"}  # need the selected line checked out here
 BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
 
 
@@ -192,8 +193,10 @@ def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: b
         return view in ("mine", "reviews")
     if action == "reload_org":
         return view == "org"
-    if action == "open_ide":
-        return not ide_off and (view not in PR_VIEWS or repo_selected)
+    if action == "open_ide" and ide_off:
+        return False
+    if action in CHECKOUT_ACTIONS:
+        return view not in PR_VIEWS or repo_selected
     return True
 
 
@@ -326,7 +329,8 @@ def repo_actions(st: RepoState, ide_off: bool = False) -> list[tuple[str, str, s
         ("k", "keep", f"Protect branches from cleanup ({kept})", None),
         ("o", "ide", "Open in IntelliJ", "turned off in Settings" if ide_off else None),
         ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
-        ("e", "folder", "Open folder", None),
+        ("e", "folder", "Open in file manager", None),
+        ("t", "terminal", "Open terminal here", None),
         ("b", "main_branch", f"Set main branch (now {main})", None),
         ("u", "group", f"Set group (now {st.group})", None),
         ("h", "hide", "Hide this repo from the tool", None),

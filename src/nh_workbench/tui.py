@@ -24,6 +24,7 @@ from . import config, github, keys, ops, pack, proc, render, skill
 from .config import Config
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 from .views import (
+    CHECKOUT_ACTIONS,
     HEADER_SORT,
     PACK_COLUMNS,
     PR_HEADER_SORT,
@@ -280,6 +281,8 @@ class RepoApp(App[None]):
         Binding("r", "reload_prs", "Refresh from GitHub", id="reload_prs"),
         Binding("slash", "filter", "Filter", id="filter"),
         Binding("o", "open_ide", "IDE", id="open_ide"),
+        Binding("e", "open_files", "Files", show=False, id="open_files"),
+        Binding("T", "open_terminal", "Terminal", show=False, id="open_terminal"),
         Binding("w", "open_web", "Web", id="open_web"),
         Binding("m", "to_main", "To main", id="to_main"),
         Binding("d", "cleanup", "Cleanup", id="cleanup"),
@@ -669,6 +672,8 @@ class RepoApp(App[None]):
             self._open_web(st, None)
         elif choice == "folder":
             proc.open_path(st.path)
+        elif choice == "terminal":
+            self._open_terminal(st)
         elif choice == "main_branch":
             hint = "Leave empty to go back to the automatic choice."
             current = self.cfg.repo(st.name).tracked_branch or ""
@@ -731,7 +736,7 @@ class RepoApp(App[None]):
         """Keep the footer to what works in the current view."""
         if action in ("extras", "cycle_view") and len(self.screen_stack) > 1:
             return False  # a tool screen is open
-        selected = action != "open_ide" or self._selected_repo() is not None  # looked up only when it matters
+        selected = action not in CHECKOUT_ACTIONS or self._selected_repo() is not None  # looked up only when needed
         return action_shown(action, self.view, self.cfg.ide_off, selected)
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -885,6 +890,22 @@ class RepoApp(App[None]):
                 return
             paths = [st.path]
         await self.wb.batch(label, worker, paths)
+
+    def action_open_files(self) -> None:
+        st = self._selected_repo()
+        if st:
+            proc.open_path(st.path)
+
+    def action_open_terminal(self) -> None:
+        st = self._selected_repo()
+        if st:
+            self._open_terminal(st)
+
+    def _open_terminal(self, st: RepoState) -> None:
+        try:
+            proc.open_terminal(st.path)
+        except OSError as e:
+            self.notify(f"Could not open a terminal: {e}", severity="error")
 
     def action_open_ide(self) -> None:
         st = self._selected_repo()

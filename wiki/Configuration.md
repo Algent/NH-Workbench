@@ -36,7 +36,8 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set. Folders from befo
 `[keys]` maps an action to its letter in both UIs, `[shortcuts]` to its desktop shortcut (`""` for none). Set from
 Settings, Keys in either UI, which refuses clashes. Actions: `fetch`, `fetch_one`, `pull`, `pull_one`, `to_main`,
 `cleanup`, `rescan`, `reload_prs`, `reload_org`, `clone`, `checkout`, `toggle_team`, `toggle_drafts`, `pr_filters`,
-`open_web`, `open_ide`, `filter`, `sort`, `extras` (Settings), `open_config`, `open_logs`, `quit`.
+`open_web`, `open_ide`, `open_files`, `open_terminal`, `filter`, `sort`, `extras` (Settings), `open_config`,
+`open_logs`, `quit`.
 
 The spark tool's keys clash only with each other: `spark_calls`, `spark_callers`, `spark_summary`, `spark_copy`
 (both UIs), and in the terminal UI also `spark_window`, `spark_thread`, `spark_save`, `spark_open`,
