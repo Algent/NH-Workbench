@@ -420,7 +420,7 @@ def test_spark_lists_profiles_saved_since_it_was_opened(window, monkeypatch):
         monkeypatch.setattr(gui_spark, "saved_profiles", lambda: [Path("cache/spark/new.sparkprofile")])
         sw.hide()
         window._open_tool("spark")
-        assert sw.source.findText("new.sparkprofile") == 0
+        assert sw.source.findText("new") == 0
     finally:
         sw.close()
 

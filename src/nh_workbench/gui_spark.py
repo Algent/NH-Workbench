@@ -52,7 +52,7 @@ from .gui_spark_widgets import (
     expand_hot,
     ink,
 )
-from .tui_spark import method_on_line, saved_profiles, window_on_line
+from .tui_spark import _when, method_on_line, saved_profiles, window_on_line
 
 if TYPE_CHECKING:
     from .gui import MainWindow
@@ -259,6 +259,17 @@ class SparkWindow(QWidget):
         self.source.lineEdit().setPlaceholderText(
             "spark.lucko.me link (profile or heap summary), its code, or a downloaded file; or pick a saved one"
         )
+        # The saved ones as a table in the popup; the box itself shows only the code (column 0).
+        self.saved = QStandardItemModel(0, 4)
+        self.saved.setHorizontalHeaderLabels(["Profile", "Kind", "Recorded", "Downloaded"])
+        self.source.setModel(self.saved)
+        popup = QTableView()
+        popup.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        popup.setShowGrid(False)
+        popup.verticalHeader().hide()
+        popup.horizontalHeader().setHighlightSections(False)
+        popup.horizontalHeader().setStretchLastSection(True)
+        self.source.setView(popup)
         self._fill_saved()
         self.source.lineEdit().returnPressed.connect(self.load)
         load = QPushButton("Load")
@@ -511,12 +522,24 @@ class SparkWindow(QWidget):
         """List the saved profiles again: downloads since the window was made are new ones."""
         text = self.source.currentText()
         self.source.blockSignals(True)
-        self.source.clear()
-        for path in saved_profiles():
-            self.source.addItem(path.name, str(path))
+        self.saved.removeRows(0, self.saved.rowCount())
+        for path in saved_profiles():  # last downloaded first
+            info = spark.saved_info(path)
+            recorded = _when(info.recorded / 1000) if info.recorded else "?"
+            if info.length_ms:
+                recorded += f"  for {spark._span(info.length_ms)}"
+            code = QStandardItem(path.stem)
+            code.setData(str(path), Qt.ItemDataRole.UserRole)
+            code.setToolTip(str(path))
+            row = [code, QStandardItem(info.kind), QStandardItem(recorded), QStandardItem(_when(info.downloaded))]
+            self.saved.appendRow(row)
         self.source.setCurrentIndex(-1)
         self.source.setEditText(text)
         self.source.blockSignals(False)
+        popup = self.source.view()
+        popup.resizeColumnsToContents()
+        width = popup.horizontalHeader().length() + popup.verticalScrollBar().sizeHint().width() + 8
+        popup.setMinimumWidth(min(width, 1000))
 
     def showEvent(self, event) -> None:
         self._fill_saved()

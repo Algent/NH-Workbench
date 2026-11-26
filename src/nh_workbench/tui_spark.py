@@ -45,6 +45,10 @@ def window_on_line(line: str) -> int | None:
     return int(m[1]) if m else None
 
 
+def _when(epoch_s: float) -> str:
+    return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M")
+
+
 def saved_profiles() -> list[Path]:
     try:
         folder = cache_dir() / "spark"
@@ -137,9 +141,11 @@ class SparkScreen(Screen[None]):
         recent.clear_options()
         files = saved_profiles()
         for path in files:
-            when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            kind = "heap summary" if path.suffix == ".sparkheap" else "profile"
-            label = Text.assemble((path.stem, "bold"), f"   {kind}, downloaded {when}")
+            info = spark.saved_info(path)
+            recorded = f", recorded {_when(info.recorded / 1000)}" if info.recorded else ""
+            if info.recorded and info.length_ms:
+                recorded += f" for {spark._span(info.length_ms)}"
+            label = Text.assemble((path.stem, "bold"), f"   {info.kind}{recorded}, downloaded {_when(info.downloaded)}")
             recent.add_option(Option(label, id=str(path)))
         if files:
             recent.add_option(None)  # separator

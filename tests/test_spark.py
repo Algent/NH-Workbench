@@ -274,6 +274,19 @@ def test_entities_by_world_and_chunk(profile):
     assert "   15  Overworld  x -120 z 104      Cow 12, Item 3" in text
 
 
+def test_saved_info(tmp_path):
+    saved = tmp_path / "abc.sparkprofile"
+    saved.write_bytes(profile_bytes())
+    heap = tmp_path / "def.sparkheap"
+    heap.write_bytes(heap_bytes(HEAP_A))
+    info = spark.saved_info(saved)
+    assert (info.kind, info.recorded, info.length_ms) == ("profile", START, 120_000) and info.downloaded > 0
+    assert spark.saved_info(heap).kind == "heap summary"
+    broken = tmp_path / "bad.sparkprofile"
+    broken.write_bytes(b"\xff\xff")
+    assert spark.saved_info(broken).recorded == 0  # listed anyway, without a date
+
+
 def test_memory_and_machine_details(profile):
     assert (profile.heap_max, profile.old_gen_live, profile.uptime_ms) == (3_500_000_000, 3_000_000_000, 1_800_000)
     assert profile.gc_since_start["MarkSweepCompact"].collections == 7 and profile.engine == "java"

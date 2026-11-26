@@ -446,6 +446,41 @@ def parse_upload(data: bytes) -> "Profile | Heap":
 _EXTENSIONS = {"sampler": ".sparkprofile", "heap": ".sparkheap"}
 
 
+@dataclass(frozen=True)
+class Saved:
+    """A downloaded profile or heap summary in the cache, for the lists of saved ones."""
+
+    path: Path
+    kind: str  # "profile" or "heap summary"
+    recorded: int  # epoch ms; 0 when the file does not say
+    length_ms: int  # how long the profile ran; 0 for a heap summary
+    downloaded: float  # epoch s
+
+
+@cache
+def _saved(path: Path, mtime: float) -> Saved:
+    kind = "heap summary" if path.suffix == _EXTENSIONS["heap"] else "profile"
+    recorded = length = 0
+    try:
+        meta = _Msg(path.read_bytes()).msg(1)  # only the top level is decoded: cheap even for big profiles
+        if kind == "profile":
+            recorded, length = meta.int(2), max(0, meta.int(11) - meta.int(2))
+        else:
+            recorded = meta.int(5)
+    except (OSError, ProfileError, IndexError, ValueError):
+        pass
+    return Saved(path, kind, recorded, length, mtime)
+
+
+def saved_info(path: Path) -> Saved:
+    """What a saved file is and when it was recorded and downloaded (remembered until the file changes)."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return _saved(path, mtime)
+
+
 def load(source: str, refresh: bool = False) -> "tuple[Profile | Heap, str]":
     """A profile or heap summary from a spark.lucko.me link, its code, or a downloaded file, and a short name."""
     code = code_of(source)
