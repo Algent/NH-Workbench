@@ -55,7 +55,7 @@ from .gui_spark_widgets import (
     expand_hot,
     ink,
 )
-from .tui_spark import _when, method_on_line, saved_profiles, window_on_line
+from .spark import method_on_line, saved_profiles, when_text, window_on_line
 
 if TYPE_CHECKING:
     from .gui import MainWindow
@@ -315,7 +315,6 @@ class SparkWindow(QWidget):
         scope.addWidget(self.all_minutes)
         scope.addStretch(1)
         scope.addWidget(self.copy_button)
-        self.scope_controls = [self.threads, self.all_minutes, self.copy_button]
 
         self.status = QLabel("Paste a spark link or code and press Enter, or pick a saved profile.")
         self.tabs = QTabWidget()
@@ -483,9 +482,6 @@ class SparkWindow(QWidget):
         column.addWidget(self.report, 1)
         self._add_tab("report", page, "Text report")
 
-    def _tab(self, key: str) -> QWidget:
-        return self.tabs.widget(self.tab_keys.index(key))
-
     def show_tab(self, key: str) -> None:
         self.tabs.setCurrentIndex(self.tab_keys.index(key))
 
@@ -545,16 +541,16 @@ class SparkWindow(QWidget):
         self.saved.removeRows(0, self.saved.rowCount())
         for path in saved_profiles():  # last downloaded first
             info = spark.saved_info(path)
-            recorded = _when(info.recorded / 1000) if info.recorded else "?"
+            recorded = when_text(info.recorded / 1000) if info.recorded else "?"
             if info.length_ms:
-                recorded += f"  for {spark._span(info.length_ms)}"
+                recorded += f"  for {spark.span_text(info.length_ms)}"
             code = QStandardItem(path.stem)
             code.setData(str(path), Qt.ItemDataRole.UserRole)
             code.setToolTip(str(path))
             cross = QStandardItem("✕")
             cross.setToolTip("Delete this saved file (asks first)")
             cross.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            row = [code, QStandardItem(info.kind), QStandardItem(recorded), QStandardItem(_when(info.downloaded))]
+            row = [code, QStandardItem(info.kind), QStandardItem(recorded), QStandardItem(when_text(info.downloaded))]
             self.saved.appendRow([*row, cross])
         self.source.setCurrentIndex(-1)
         self.source.setEditText(text)
@@ -742,7 +738,9 @@ class SparkWindow(QWidget):
             return "All minutes"
         p = self.profile
         by_id = {w.id: w for w in p.windows} if p else {}
-        at = [spark._span(by_id[w].start - p.start) for w in self.windows if w in by_id and by_id[w].start and p.start]
+        at = [
+            spark.span_text(by_id[w].start - p.start) for w in self.windows if w in by_id and by_id[w].start and p.start
+        ]
         return f"Only minute {', '.join(map(str, self.windows))}" + (f" (at {', '.join(at)})" if at else "")
 
     def _picked_windows(self) -> list[spark.Window]:
@@ -764,7 +762,7 @@ class SparkWindow(QWidget):
             else ""
         )
         mc = f"Minecraft {p.minecraft}" if p.minecraft else ""
-        recorded = f"recorded {when} for {spark._span(p.duration_ms)}"
+        recorded = f"recorded {when} for {spark.span_text(p.duration_ms)}"
         parts = [self.name_, f"{p.platform} {p.platform_version}".strip(), mc, recorded, mode]
         if p.comment:
             parts.append(f"comment: {p.comment}")
@@ -824,16 +822,16 @@ class SparkWindow(QWidget):
                 state, label = BAD, "nearly full"
             elif p.heap_max and p.heap_max < 4e9:
                 state, label = WARN, "small"
-            detail = f"used of {spark._bytes(limit)} max; {spark._bytes(p.heap_total)} allocated"
+            detail = f"used of {spark.bytes_text(limit)} max; {spark.bytes_text(p.heap_total)} allocated"
             if p.old_gen_live:
-                detail += f", {spark._bytes(p.old_gen_live)} after the last GC"
-            c["heap"].set(spark._bytes(p.heap_used), detail, state, label)
+                detail += f", {spark.bytes_text(p.old_gen_live)} after the last GC"
+            c["heap"].set(spark.bytes_text(p.heap_used), detail, state, label)
         else:
             c["heap"].set("-", "not reported")
         during = any(g.collections for g in p.gc.values())
         gcs = {n: g for n, g in (p.gc if during else p.gc_since_start).items() if g.collections}
         if gcs:
-            pausing = {n: g for n, g in gcs.items() if spark._pauses(n)} or gcs
+            pausing = {n: g for n, g in gcs.items() if spark.pauses_game(n)} or gcs
             worst = max(pausing.values(), key=lambda g: g.avg_ms)
             state = BAD if worst.avg_ms >= 1000 else WARN if worst.avg_ms >= 200 else OK
             label = {BAD: "freezes", WARN: "long", OK: "short"}[state]
@@ -859,14 +857,14 @@ class SparkWindow(QWidget):
         thread = view.thread.name.lower()
         self.parts_title.setText(f"Where the {thread} goes" + (" (slow ticks only)" if p.ticked else ""))
         shown, accounted = [], 0.0
-        for slot, (label, _) in enumerate(spark._TICK_PARTS):
+        for slot, (label, _) in enumerate(spark.TICK_PARTS):
             total, by_mod = found.parts.get(label, (0.0, {}))
             accounted += total
             if total < whole * 0.005:
                 continue
-            mods = spark._top_mods(by_mod, whole, 5)
+            mods = spark.top_mods_text(by_mod, whole, 5)
             tip = f"\n{mods}" if mods else ""
-            shown.append((label, total / whole, tip, -2 if label == spark._IDLE else slot))
+            shown.append((label, total / whole, tip, -2 if label == spark.IDLE else slot))
         idle = [s for s in shown if s[3] == -2]
         shown = [s for s in shown if s[3] != -2]
         other = max(0.0, whole - accounted)
@@ -881,19 +879,19 @@ class SparkWindow(QWidget):
         if p.cpu_model or p.cpu_threads:
             rows.append(("CPU", f"{p.cpu_model or '?'}, {p.cpu_threads} threads"))
         if p.ram_total:
-            rows.append(("RAM", f"{spark._bytes(p.ram_used)} of {spark._bytes(p.ram_total)} in use"))
+            rows.append(("RAM", f"{spark.bytes_text(p.ram_used)} of {spark.bytes_text(p.ram_total)} in use"))
         if p.swap_total:
-            rows.append(("Swap", f"{spark._bytes(p.swap_used)} of {spark._bytes(p.swap_total)} in use"))
+            rows.append(("Swap", f"{spark.bytes_text(p.swap_used)} of {spark.bytes_text(p.swap_total)} in use"))
         if p.disk_total:
-            rows.append(("Disk", f"{spark._bytes(p.disk_used)} of {spark._bytes(p.disk_total)} in use"))
+            rows.append(("Disk", f"{spark.bytes_text(p.disk_used)} of {spark.bytes_text(p.disk_total)} in use"))
         if p.os:
             rows.append(("OS", p.os))
         if p.java:
             rows.append(("Java", p.java + (f" ({p.jvm})" if p.jvm else "")))
         if p.non_heap:
-            rows.append(("Non-heap", spark._bytes(p.non_heap)))
+            rows.append(("Non-heap", spark.bytes_text(p.non_heap)))
         if p.uptime_ms:
-            rows.append(("Up for", spark._span(p.uptime_ms)))
+            rows.append(("Up for", spark.span_text(p.uptime_ms)))
         engine = {"async": "async-profiler", "java": "spark's Java sampler"}.get(p.engine, "")
         what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
         rows.append(("Sampling", f"{what}" + (f" with {engine}" if engine else "")))
@@ -912,7 +910,7 @@ class SparkWindow(QWidget):
         rows = []
         for key, mod, own, total in found.methods:
             rows.append([
-                _item(spark._short(key), data=key, tip=key),
+                _item(spark.short_name(key), data=key, tip=key),
                 _item(f"{100 * own / whole:.1f}%", own, own / whole),
                 _item(f"{100 * total / whole:.1f}%", total, total / whole),
                 _item(mod.replace(" (package)", "?")),
@@ -925,7 +923,7 @@ class SparkWindow(QWidget):
             [
                 _item(mod.replace(" (package)", "?"), data=mod),
                 _item(f"{100 * own / whole:.1f}%", own, own / whole),
-                _item(spark._short(key) if key else "", tip=key),
+                _item(spark.short_name(key) if key else "", tip=key),
             ]
             for mod, own, key in found.mods
         ]
@@ -945,7 +943,7 @@ class SparkWindow(QWidget):
             x, z = c.x * 16 + 8, c.z * 16 + 8
             rows.append([
                 _item(str(c.total), c.total, c.total / top, data=(x, z)),
-                _item(c.world), _item(str(x), x), _item(str(z), z), _item(spark._counts(c.counts, 4)),
+                _item(c.world), _item(str(x), x), _item(str(z), z), _item(spark.counts_text(c.counts, 4)),
             ])  # fmt: skip
         self.chunks.fill(rows, 0, stretch=4)
 
@@ -958,17 +956,17 @@ class SparkWindow(QWidget):
         rows = [
             [
                 _item(e.cls, data=e.cls),
-                _item(spark._heap_owner(e.cls).replace(" (package)", "?")),
+                _item(spark.heap_owner(e.cls).replace(" (package)", "?")),
                 _item(f"{e.instances:,}", e.instances),
-                _item(spark._bytes(e.size), e.size, e.size / top, tip=f"{100 * e.size / total:.1f}% of the heap"),
+                _item(spark.bytes_text(e.size), e.size, e.size / top, tip=f"{100 * e.size / total:.1f}% of the heap"),
             ]
             for e in h.entries
         ]
         self.heap_classes.fill(rows, 3)
-        owners = spark._by_owner(h.entries)
+        owners = spark.heap_by_owner(h.entries)
         top = max((s for s, _ in owners.values()), default=1) or 1
         rows = [
-            [_item(o.replace(" (package)", "?")), _item(f"{n:,}", n), _item(spark._bytes(s), s, s / top)]
+            [_item(o.replace(" (package)", "?")), _item(f"{n:,}", n), _item(spark.bytes_text(s), s, s / top)]
             for o, (s, n) in owners.items()
         ]
         self.heap_mods.fill(rows, 2)
@@ -994,7 +992,7 @@ class SparkWindow(QWidget):
             what = "Who calls" if up else "What is called by"
             more = f" and {len(keys) - 1} more" if len(keys) > 1 else ""
             share = f"{100 * top.total / view.whole:.1f}% of the thread"
-            self.tree_title.setText(f"{what} {spark._short(keys[0])}{more}: {share}")
+            self.tree_title.setText(f"{what} {spark.short_name(keys[0])}{more}: {share}")
         self.focus = focus
         model = CallTreeModel(top, view, up)
         self.tree.setModel(model)

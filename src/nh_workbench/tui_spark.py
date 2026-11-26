@@ -2,8 +2,6 @@
 
 import asyncio
 import re
-from datetime import datetime
-from pathlib import Path
 
 from rich.text import Text
 from textual import work
@@ -15,47 +13,15 @@ from textual.widgets.option_list import Option
 
 from . import keys, spark
 from .config import cache_dir
+from .spark import method_on_line, saved_profiles, when_text, window_on_line
 from .tui import MenuScreen, PromptScreen
 
-_LEAD = re.compile(r"^\s*[\d.]+%\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\d+ [MG]B)?\s*")
-_OWN = re.compile(r"\s+\(own [\d.]+%\)$")
-_WINDOW_ROW = re.compile(r"^(\d+)\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\?)\s+\d+\s")
-_METHOD = re.compile(r"^[\w$.<>/-]+$")
-_TAG = re.compile(r"^\[[^\]]*\]\s*")  # [Mod] in front of a frame
-RECENT = 20  # saved profiles listed
 INSTALL = "install-skill"  # id of the list entry that installs the skill
 HINTS = {
     "pick": "Paste a link or code and press Enter, or pick a saved profile. F2: install the AI skill.",
     "read": "Enter on a method: what it calls ({spark_calls}), {spark_callers}: who calls it, Enter on a minute: only"
     " that minute, Esc: step back, {spark_summary}: summary, {spark_copy}: copy for an LLM",  # keys from Settings
 }
-
-
-def method_on_line(line: str) -> str | None:
-    """The method (or package) a report line is about: the last frame of a call path, or the listed name."""
-    if not _LEAD.match(line):
-        return None
-    rest = _OWN.sub("", _LEAD.sub("", line, count=1)).strip()
-    last = _TAG.sub("", rest.rpartition(" > ")[2].strip().removeprefix("< "))
-    return last if _METHOD.match(last) else None
-
-
-def window_on_line(line: str) -> int | None:
-    m = _WINDOW_ROW.match(line)
-    return int(m[1]) if m else None
-
-
-def _when(epoch_s: float) -> str:
-    return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M")
-
-
-def saved_profiles() -> list[Path]:
-    try:
-        folder = cache_dir() / "spark"
-        files = [*folder.glob("*.sparkprofile"), *folder.glob("*.sparkheap")]
-    except OSError:
-        return []
-    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:RECENT]
 
 
 class SparkScreen(Screen[None]):
@@ -143,10 +109,12 @@ class SparkScreen(Screen[None]):
         files = saved_profiles()
         for path in files:
             info = spark.saved_info(path)
-            recorded = f", recorded {_when(info.recorded / 1000)}" if info.recorded else ""
+            recorded = f", recorded {when_text(info.recorded / 1000)}" if info.recorded else ""
             if info.recorded and info.length_ms:
-                recorded += f" for {spark._span(info.length_ms)}"
-            label = Text.assemble((path.stem, "bold"), f"   {info.kind}{recorded}, downloaded {_when(info.downloaded)}")
+                recorded += f" for {spark.span_text(info.length_ms)}"
+            label = Text.assemble(
+                (path.stem, "bold"), f"   {info.kind}{recorded}, downloaded {when_text(info.downloaded)}"
+            )
             recent.add_option(Option(label, id=str(path)))
         if files:
             recent.add_option(None)  # separator
@@ -312,7 +280,7 @@ class SparkScreen(Screen[None]):
         worst = sorted((w for w in p.windows if w.ticks), key=lambda w: -w.mspt_max)[:9]
         actions = [("a", "all", "Whole recording", None if self.windows else "shown now")]
         for i, w in enumerate(worst, 1):
-            at = spark._span(w.start - p.start) if w.start and p.start else "?"
+            at = spark.span_text(w.start - p.start) if w.start and p.start else "?"
             label = f"{w.id} at {at}: slowest tick {w.mspt_max:.0f} ms, TPS {w.tps:.1f}"
             actions.append((str(i), str(w.id), label, None))
         title = Text("Only one minute (worst first)", "bold")

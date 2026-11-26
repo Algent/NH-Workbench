@@ -9,7 +9,7 @@ Keeps a folder full of GTNH mod checkouts under control:
 - where each repo stands in the pack: daily and release versions, what still needs a backport
 - clone missing pack mods, download the closed-source jars
 - read spark profiles as text, for people and coding agents
-- in the terminal, or in a desktop window with the same tabs and keys
+- in the terminal, in a desktop window, or in a browser tab, with the same tabs and keys
 
 Works on Windows, Linux and macOS. Installing it: see the
 [README](https://github.com/Algent/NH-Workbench#getting-started).
@@ -23,5 +23,6 @@ Works on Windows, Linux and macOS. Installing it: see the
 - [What the tool will and won't do](Safety): pull, branch cleanup, PR checkout, worktrees, forks
 - [Pack and GitHub data](Pack-and-GitHub-Data): where the versions and PR information come from
 - [Configuration](Configuration): config file, settings, groups, IntelliJ
+- [Development](Development): tests, how the code is laid out, the wiki and its screenshots
 
 This wiki is generated from the `wiki` folder of the repository: change the pages there, not here.

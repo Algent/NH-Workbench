@@ -12,12 +12,18 @@ nh-workbench tools spark callers XXXXXXXXXX ASMEventHandler.invoke  # who calls 
 
 ## What the report shows
 
-The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
-changes how to read the percentages), TPS, MSPT, uptime, memory (heap used, allocated and max, the old
-generation after the last GC, GC during the profile and since start), CPU, swap, disk, Java and JVM arguments.
-Then come the findings, the worst minutes, and for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
-paths, with `[Mod]` where a mod's code starts. Entities are listed by type, by world, and the busiest chunks
-with their block coordinates.
+The summary starts with the setup:
+
+- the platform, and how the profile was recorded: every tick, or only ticks over N ms. This changes how to read
+  the percentages.
+- TPS, MSPT and uptime
+- memory: heap used, allocated and max, the old generation after the last GC, and GC during the profile and
+  since start
+- CPU, swap, disk, Java and JVM arguments
+
+Then come the findings and the worst minutes. For the server thread, it lists the methods with the most own time
+and total time, own time per mod, and the hot call paths, with `[Mod]` where a mod's code starts. Entities are
+listed by type, by world, and the busiest chunks with their block coordinates.
 
 Findings are rules of thumb for GTNH, `[warn]` for problems and `[info]` for notes: frozen ticks, low TPS,
 long GC pauses, a small or nearly full heap, 32-bit Java, few CPU threads, swap in use, a full disk, a mod
@@ -26,9 +32,9 @@ taking a large share, and an entity pile-up in one chunk. They also show where t
 between ticks, which is its headroom. Work set off inside other work counts for the inner kind, so world
 generation set off by a packet counts as world generation.
 
-Heap summaries (`/spark heapsummary`) read the same way: `summary` lists the biggest classes in memory and
-the total per mod, and `compare EARLIER LATER` shows what grew between two of them, which is how a leak
-shows. In the UI, `m` on a heap summary compares it with a later one.
+Heap summaries (`/spark heapsummary`) read the same way. `summary` lists the biggest classes in memory and the
+total per mod. `compare EARLIER LATER` shows what grew between two of them, which is how a leak shows. In the
+terminal UI, `m` on a heap summary compares it with a later one.
 
 - Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
   uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.
@@ -40,8 +46,8 @@ shows. In the UI, `m` on a heap summary compares it with a later one.
 
 ## In the UI
 
-Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report (the letters are the
-defaults, changed in Settings > Keys):
+On the Tools tab, press Enter on spark, then paste a link or pick a saved profile. On the report, these keys
+work (they are the defaults; change them in Settings > Keys):
 
 | Key | Action |
 |---|---|
@@ -51,6 +57,8 @@ defaults, changed in Settings > Keys):
 | `s` | Jump straight to the summary |
 | `y` / `e` | Copy the report (for an LLM) / save it as a file |
 | `o` | Open another profile |
+| `r` | Download the profile again |
+| `m` | On a heap summary: compare it with a later one |
 | `Esc` | Step back to the previous view (on the summary: close) |
 | `q` | Close |
 
@@ -58,9 +66,9 @@ defaults, changed in Settings > Keys):
 
 ![The spark window's overview of a profile whose slow ticks are mostly world generation](images/spark-overview.png)
 
-The spark window has the same text report and keys under **Text report** (except that `Esc` there never closes
-the window), plus tabs to browse the profile.
-**Copy report for an LLM** (`y`) is always at the top.
+The spark window has the same text report under **Text report**, with `t`, `c`, `s` and `y` (`Esc` there steps
+back but never closes the window), plus tabs to browse the profile. **Copy report for an LLM** (`y`) is always at
+the top.
 
 - **Overview:** cards for TPS, tick time, CPU, memory, GC pauses and the world, each with a coloured stripe
   when it looks wrong. Then come the findings, a bar of where the server thread's time goes (hover a part for
@@ -88,14 +96,18 @@ again. The name and UUID of whoever recorded the profile are left out of the rep
 
 ## Skill for Claude Code, Codex and OpenCode
 
+A `spark-profile` skill lets coding agents read a spark link pasted in any project with these commands, instead
+of opening the web viewer. Install it from the command line, or with F2 where the spark screen asks for a link:
+
 ```
 nh-workbench tools install-skill    # for the agents found in your home folder; --for claude|codex|opencode|all
 ```
 
-(or F2 where the spark screen asks for a link) installs a `spark-profile` skill, so a spark link pasted in any
-project gets read with these commands instead of the web viewer: for Claude Code in `~/.claude/skills`, for
-Codex in `~/.agents/skills`, for OpenCode in `~/.config/opencode/skills`.
+It goes in `~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and `~/.config/opencode/skills` for
+OpenCode.
 
-It runs through a small launcher that needs only uv: it uses the checkout it was installed from, else
-`nh-workbench` (or the old `gtnh-dev`) on PATH, else the published version from GitHub through `uvx` (the agent
-then offers once to point it at a checkout).
+The skill runs through a small launcher that needs only uv. It uses, in this order:
+
+1. the checkout it was installed from
+2. `nh-workbench` (or the old `gtnh-dev`) on PATH
+3. the published version from GitHub, through `uvx`. The agent then offers once to point it at a checkout.

@@ -7,6 +7,7 @@ desktop UI's toolbar key, as Qt writes it (Ctrl+Shift+F). Overrides live in the 
 from dataclasses import dataclass
 
 from .config import Config
+from .views import VIEWS, action_shown
 
 
 @dataclass(frozen=True)
@@ -82,8 +83,6 @@ def letter_error(letter: str) -> str | None:
 
 
 def _views_of(action: KeyAction) -> set[str]:
-    from .tui import VIEWS, action_shown  # imports this module
-
     if action.screen:
         return {action.screen}
     return {view for view in VIEWS if action.shown == "-" or action_shown(action.shown, view)}

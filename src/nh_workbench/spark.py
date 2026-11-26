@@ -481,6 +481,42 @@ def saved_info(path: Path) -> Saved:
     return _saved(path, mtime)
 
 
+# Reading the text reports back: which method or minute a line is about, for the UIs' drill-down.
+_LEAD = re.compile(r"^\s*[\d.]+%\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\d+ [MG]B)?\s*")
+_OWN = re.compile(r"\s+\(own [\d.]+%\)$")
+_WINDOW_ROW = re.compile(r"^(\d+)\s+(?:\d+h\d\dm|\d+m\d\ds|[\d.]+s|\?)\s+\d+\s")
+_METHOD = re.compile(r"^[\w$.<>/-]+$")
+_TAG = re.compile(r"^\[[^\]]*\]\s*")  # [Mod] in front of a frame
+RECENT_SAVED = 20  # saved profiles listed
+
+
+def method_on_line(line: str) -> str | None:
+    """The method (or package) a report line is about: the last frame of a call path, or the listed name."""
+    if not _LEAD.match(line):
+        return None
+    rest = _OWN.sub("", _LEAD.sub("", line, count=1)).strip()
+    last = _TAG.sub("", rest.rpartition(" > ")[2].strip().removeprefix("< "))
+    return last if _METHOD.match(last) else None
+
+
+def window_on_line(line: str) -> int | None:
+    m = _WINDOW_ROW.match(line)
+    return int(m[1]) if m else None
+
+
+def when_text(epoch_s: float) -> str:
+    return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M")
+
+
+def saved_profiles() -> list[Path]:
+    try:
+        folder = cache_dir() / "spark"
+        files = [*folder.glob("*.sparkprofile"), *folder.glob("*.sparkheap")]
+    except OSError:
+        return []
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:RECENT_SAVED]
+
+
 def load(source: str, refresh: bool = False) -> "tuple[Profile | Heap, str]":
     """A profile or heap summary from a spark.lucko.me link, its code, or a downloaded file, and a short name."""
     code = code_of(source)
@@ -587,7 +623,7 @@ _BUILTIN = (
     ("com.google.", "guava/gson"),
     ("native", "native code"),
 )
-_NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "native code"}
+NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "native code"}
 # Code that only does what its caller asked: its time counts for that caller in the per-mod totals.
 _CHARGED = {"java", "netty", "fastutil", "guava/gson", "native code"}
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
@@ -677,7 +713,7 @@ class View:
                     out[i] = mod_above or game_above or label
                 else:
                     out[i] = label
-                    if label in _NOT_MODS:
+                    if label in NOT_MODS:
                         game_above = label
                     else:
                         mod_above = label
@@ -772,7 +808,7 @@ def _pct(part: float, whole: float) -> str:
     return f"{100 * part / whole:5.1f}%" if whole else "    -"
 
 
-def _bytes(n: float) -> str:
+def bytes_text(n: float) -> str:
     if abs(n) >= 1e9:
         return f"{n / 1e9:.1f} GB"
     if abs(n) >= 1e6:
@@ -780,7 +816,7 @@ def _bytes(n: float) -> str:
     return f"{n / 1e3:.0f} KB" if abs(n) >= 1e3 else f"{n:.0f} B"
 
 
-def _span(ms: float) -> str:
+def span_text(ms: float) -> str:
     s = int(ms / 1000)
     if s >= 3600:
         return f"{s // 3600}h{s % 3600 // 60:02d}m"
@@ -796,10 +832,10 @@ def _gc_text(gcs: dict[str, Gc]) -> str:
 
 
 def amount(profile: Profile, value: float) -> str:
-    return _bytes(value) if profile.allocation else _span(value)
+    return bytes_text(value) if profile.allocation else span_text(value)
 
 
-def _short(key: str) -> str:
+def short_name(key: str) -> str:
     """Class.method without the package, to keep trees narrow."""
     cls, _, method = key.rpartition(".")
     if is_native(cls):  # library path and symbol
@@ -814,7 +850,7 @@ def header(p: Profile, name: str) -> list[str]:
     what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
     what += {"async": " with async-profiler", "java": " with spark's Java sampler"}.get(p.engine, "")
     names = {"mcp": "; method names from MCP", "raw": "; func_ names left as is (MCP mappings unavailable)"}
-    lines.append(f"Recorded {when} for {_span(p.duration_ms)}, sampling {what}{names.get(p.names, '')}")
+    lines.append(f"Recorded {when} for {span_text(p.duration_ms)}, sampling {what}{names.get(p.names, '')}")
     if p.ticked:
         lines.append(
             f"Mode: only ticks over {p.tick_threshold_ms:g} ms were kept ({p.included_ticks} of {p.ticks} ticks)."
@@ -833,16 +869,16 @@ def header(p: Profile, name: str) -> list[str]:
         if p.entities:
             server += f"; entities {p.entities}"
         if p.uptime_ms:
-            server += f"; up {_span(p.uptime_ms)}"
+            server += f"; up {span_text(p.uptime_ms)}"
         lines.append(server)
     memory = []
     if p.heap_total:
-        heap = f"heap {_bytes(p.heap_used)} used, {_bytes(p.heap_total)} allocated"
-        memory.append(heap + (f", {_bytes(p.heap_max)} max" if p.heap_max else ""))
+        heap = f"heap {bytes_text(p.heap_used)} used, {bytes_text(p.heap_total)} allocated"
+        memory.append(heap + (f", {bytes_text(p.heap_max)} max" if p.heap_max else ""))
     if p.old_gen_live:
-        memory.append(f"old gen after the last GC {_bytes(p.old_gen_live)}")
+        memory.append(f"old gen after the last GC {bytes_text(p.old_gen_live)}")
     if p.non_heap:
-        memory.append(f"non-heap {_bytes(p.non_heap)}")
+        memory.append(f"non-heap {bytes_text(p.non_heap)}")
     if _gc_text(p.gc):
         memory.append(f"GC during the profile {_gc_text(p.gc)}")
     if _gc_text(p.gc_since_start):
@@ -856,11 +892,11 @@ def header(p: Profile, name: str) -> list[str]:
             f" {100 * p.cpu_system[0]:.0f}% overall"
         )
     if p.ram_total:
-        machine.append(f"RAM {_bytes(p.ram_used)} of {_bytes(p.ram_total)}")
+        machine.append(f"RAM {bytes_text(p.ram_used)} of {bytes_text(p.ram_total)}")
     if p.swap_used:
-        machine.append(f"swap {_bytes(p.swap_used)} of {_bytes(p.swap_total)} in use")
+        machine.append(f"swap {bytes_text(p.swap_used)} of {bytes_text(p.swap_total)} in use")
     if p.disk_total:
-        machine.append(f"disk {_bytes(p.disk_used)} of {_bytes(p.disk_total)}")
+        machine.append(f"disk {bytes_text(p.disk_used)} of {bytes_text(p.disk_total)}")
     java = f"Java {p.java}" + (f" ({p.jvm})" if p.jvm else "") if p.java else ""
     machine += [x for x in (p.os, java) if x]
     if machine:
@@ -887,7 +923,7 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
     head = f"{'id':<{width}}  {'at':>6}  {'ticks':>5}  {'TPS':>4}  {'median ms':>9}  {'max ms':>6}  {'CPU':>4}"
     lines.append(head + "".join(f"  {title:>8}" for _, title in columns))
     for w in shown:
-        at = _span(w.start - p.start) if w.start and p.start else "?"
+        at = span_text(w.start - p.start) if w.start and p.start else "?"
         row = f"{w.id:<{width}}  {at:>6}  {w.ticks:5}  {w.tps:4.1f}  {w.mspt_median:9.1f}  {w.mspt_max:6.0f}"
         row += f"  {100 * w.cpu_process:3.0f}%"
         counts = (getattr(w, attr) for attr, _ in columns)
@@ -895,7 +931,7 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
     return lines
 
 
-def _counts(counts: dict[str, int], n: int) -> str:
+def counts_text(counts: dict[str, int], n: int) -> str:
     return ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])[:n])
 
 
@@ -905,17 +941,17 @@ def entities(p: Profile, busiest: int = 5) -> list[str]:
         return []
     lines = [f"\n## Entities: {p.entities}"]
     if p.entity_counts:
-        lines.append(f"By type: {_counts(p.entity_counts, 8)}")
+        lines.append(f"By type: {counts_text(p.entity_counts, 8)}")
     worlds = {w: n for w, n in p.world_entities.items() if n}
     if worlds:
-        lines.append(f"By world: {_counts(worlds, 8)}")
+        lines.append(f"By world: {counts_text(worlds, 8)}")
     chunks = sorted((c for c in p.chunks if c.total), key=lambda c: -c.total)[:busiest]
     if chunks:
         lines.append("Busiest chunks (block coordinates of the chunk centre):")
         width = max(len(c.world) for c in chunks)
         for c in chunks:
             where = f"x {c.x * 16 + 8} z {c.z * 16 + 8}"
-            lines.append(f"{c.total:5}  {c.world:<{width}}  {where:<16}  {_counts(c.counts, 4)}")
+            lines.append(f"{c.total:5}  {c.world:<{width}}  {where:<16}  {counts_text(c.counts, 4)}")
     return lines
 
 
@@ -938,15 +974,15 @@ def tree_lines(view: View, top: Merged, min_pct: float, max_lines: int, up: bool
     def name(key: str, before: str) -> str:
         """Class.method, with [Mod] in front where a mod's code starts."""
         owner = mod(key)
-        tag = f"[{owner.replace(' (package)', '?')}] " if owner not in _NOT_MODS and owner != before else ""
-        return tag + _short(key)
+        tag = f"[{owner.replace(' (package)', '?')}] " if owner not in NOT_MODS and owner != before else ""
+        return tag + short_name(key)
 
     def fold(chain: list[Merged], before: str) -> str:
         """A run of frames on one line: the first, the last, and up to three where another mod takes over."""
         keys = [n.key for n in chain]
         keep = set(range(len(keys)))
         if len(keys) > 3:
-            entries = [i for i in range(1, len(keys) - 1) if mod(keys[i]) not in _NOT_MODS]
+            entries = [i for i in range(1, len(keys) - 1) if mod(keys[i]) not in NOT_MODS]
             entries = [i for i in entries if mod(keys[i]) != mod(keys[i - 1])]
             keep = {0, len(keys) - 1, *entries[:3]}
         parts, last, prev = [], -1, before
@@ -1003,7 +1039,7 @@ def thread_report(view: View, top_n: int, min_pct: float, max_lines: int) -> lis
     lines.append("\n### Most total time (including what it calls), mods only")
     shown = 0
     for key, value in sorted(view.total_by_method().items(), key=lambda kv: -kv[1]):
-        if package_of(key.rpartition(".")[0], p.class_sources) in _NOT_MODS:
+        if package_of(key.rpartition(".")[0], p.class_sources) in NOT_MODS:
             continue
         lines.append(f"{_pct(value, view.whole)}  {key}")
         shown += 1
@@ -1061,8 +1097,8 @@ def _is_worldgen(f: Frame) -> bool:
 
 # Where the main thread's time goes, by the kind of frame its time is under (MCP names, else the raw ones).
 # A frame inside another kind counts for the inner one: world generation set off by a packet is world generation.
-_IDLE = "waiting between ticks"
-_TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
+IDLE = "waiting between ticks"
+TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
     ("entities", lambda f: f.method in ("updateEntityWithOptionalForce", "func_72866_a")),
     (
         "tile entities",
@@ -1073,7 +1109,7 @@ _TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
     ("world saving", lambda f: f.key.endswith(("MinecraftServer.saveAllWorlds", "WorldServer.saveAllChunks"))),
     ("backups", lambda f: "backup" in f.cls.lower()),
     ("network", lambda f: f.key.endswith("NetworkSystem.networkTick")),
-    (_IDLE, lambda f: f.key.startswith("java.lang.Thread.sleep")),
+    (IDLE, lambda f: f.key.startswith("java.lang.Thread.sleep")),
 ]
 
 
@@ -1085,14 +1121,14 @@ def tick_parts(view: View) -> dict[str, tuple[float, dict[str, float]]]:
     while stack:
         i, label = stack.pop()
         f = frames[i]
-        found = next((name for name, wanted in _TICK_PARTS if wanted(f)), None)
-        if found and (found != _IDLE or label is None):  # a sleep inside other work is part of that work
+        found = next((name for name, wanted in TICK_PARTS if wanted(f)), None)
+        if found and (found != IDLE or label is None):  # a sleep inside other work is part of that work
             label = found
         if label:
             total, by_mod = out.setdefault(label, (0.0, defaultdict(float)))
             own = view.own(i)
             out[label] = (total + own, by_mod)
-            if owners[i] not in _NOT_MODS:
+            if owners[i] not in NOT_MODS:
                 by_mod[owners[i]] += own
         stack += [(c, label) for c in f.children]
     return out
@@ -1102,12 +1138,12 @@ def _mod_name(mod: str) -> str:
     return mod.replace(" (package)", "?")
 
 
-def _top_mods(by_mod: dict[str, float], whole: float, n: int = 3) -> str:
+def top_mods_text(by_mod: dict[str, float], whole: float, n: int = 3) -> str:
     top = [(m, v) for m, v in sorted(by_mod.items(), key=lambda kv: -kv[1])[:n] if v >= whole * 0.01]
     return ", ".join(f"{_mod_name(m)} {_pct(v, whole).strip()}" for m, v in top)
 
 
-def _pauses(name: str) -> bool:
+def pauses_game(name: str) -> bool:
     """A collector whose average time is a pause of the whole game, not a concurrent cycle."""
     return not any(word in name for word in ("Concurrent", "Cycles"))
 
@@ -1117,11 +1153,11 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
     of = "of the slow ticks" if p.ticked else f"of the {thread}'s time"
     parts = tick_parts(view)
     shown = []
-    for label, _ in _TICK_PARTS:
+    for label, _ in TICK_PARTS:
         total, by_mod = parts.get(label, (0.0, {}))
-        if label == _IDLE or total < whole * 0.01:
+        if label == IDLE or total < whole * 0.01:
             continue
-        mods = _top_mods(by_mod, whole)
+        mods = top_mods_text(by_mod, whole)
         shown.append(f"{label} {_pct(total, whole).strip()}" + (f" ({mods})" if mods else ""))
         share = f"{100 * total / whole:.0f}% {of}"
         if label == "world generation" and total >= whole * 0.1:
@@ -1130,7 +1166,7 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
         elif label == "tile entities" and total >= whole * 0.3:
             warn.append(f"Tile entities (machines, pipes, cables) take {share}: {mods or '?'}")
         elif label == "entities" and total >= whole * 0.3:
-            most = f"; most: {_counts(p.entity_counts, 3)}" if p.entity_counts else ""
+            most = f"; most: {counts_text(p.entity_counts, 3)}" if p.entity_counts else ""
             warn.append(f"Entities take {share} ({p.entities} entities{most})")
         elif label == "backups" and total >= whole * 0.05:
             warn.append(f"Backups take {share}")
@@ -1142,14 +1178,14 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
         if value < whole * 0.15:
             break
         named = any(f"{_mod_name(mod)} " in w for w in warn)  # already blamed above
-        if mod not in _NOT_MODS and not named:
+        if mod not in NOT_MODS and not named:
             warn.append(f"{_mod_name(mod)} takes {_pct(value, whole).strip()} {of} in its own code")
     if thread not in ("server thread", "client thread"):
         return
     if shown:
         info.append(f"Where the {thread} goes: {'; '.join(shown)}")
     if not p.ticked:  # slow ticks have no time between ticks to measure
-        idle = parts.get(_IDLE, (0.0, {}))[0]
+        idle = parts.get(IDLE, (0.0, {}))[0]
         if idle < whole * 0.05:
             warn.append(f"The {thread} is busy {100 - 100 * idle / whole:.0f}% of the time: no headroom left")
         else:
@@ -1166,7 +1202,7 @@ def findings(p: Profile, view: View) -> list[Finding]:
     if windows:
         slowest = max(windows, key=lambda w: w.mspt_max)
         if slowest.mspt_max >= 1000:
-            at = f" at {_span(slowest.start - p.start)}" if slowest.start and p.start else ""
+            at = f" at {span_text(slowest.start - p.start)}" if slowest.start and p.start else ""
             warn.append(f"A tick took {_ms(slowest.mspt_max)}{at} (minute {slowest.id}): the {game} froze")
         lowest = min(windows, key=lambda w: w.tps)
         if 0 < lowest.tps < 19 and not p.client:
@@ -1178,17 +1214,17 @@ def findings(p: Profile, view: View) -> list[Finding]:
 
     during = any(g.collections for g in p.gc.values())
     for gc_name, g in (p.gc if during else p.gc_since_start).items():
-        if g.collections and _pauses(gc_name) and g.avg_ms >= 200:
+        if g.collections and pauses_game(gc_name) and g.avg_ms >= 200:
             warn.append(
                 f"GC {gc_name}: {g.collections} collections {'during the profile' if during else 'since start'},"
                 f" {_ms(g.avg_ms)} each on average; the {game} stops for each one"
             )
     if p.heap_max and p.heap_max < 4e9:
-        warn.append(f"Max heap {_bytes(p.heap_max)}: GTNH usually needs 6 GB or more (-Xmx)")
+        warn.append(f"Max heap {bytes_text(p.heap_max)}: GTNH usually needs 6 GB or more (-Xmx)")
     if p.heap_max and p.old_gen_live >= 0.8 * p.heap_max:
         warn.append(
-            f"After the last GC {_bytes(p.old_gen_live)} of {_bytes(p.heap_max)} was still in use: memory is nearly"
-            " full (raise -Xmx, or look for a leak with /spark heapsummary)"
+            f"After the last GC {bytes_text(p.old_gen_live)} of {bytes_text(p.heap_max)} was still in use:"
+            " memory is nearly full (raise -Xmx, or look for a leak with /spark heapsummary)"
         )
     if "32-Bit" in p.jvm:
         warn.append("32-bit Java: the heap can't grow past about 2-3 GB; install a 64-bit Java")
@@ -1200,7 +1236,7 @@ def findings(p: Profile, view: View) -> list[Finding]:
             f" {100 * p.cpu_process[0]:.0f}%: something else is using it"
         )
     if p.swap_used >= 256e6:
-        warn.append(f"{_bytes(p.swap_used)} of swap in use: the machine may be short on RAM")
+        warn.append(f"{bytes_text(p.swap_used)} of swap in use: the machine may be short on RAM")
     if p.disk_total and p.disk_used >= 0.95 * p.disk_total:
         warn.append(f"Disk {100 * p.disk_used / p.disk_total:.0f}% full")
     if any(word.startswith("1.8") for word in p.java.split()):
@@ -1213,8 +1249,8 @@ def findings(p: Profile, view: View) -> list[Finding]:
     if busiest and busiest.total >= 50:
         c = busiest
         warn.append(
-            f"{c.total} entities in one chunk, {c.world} x {c.x * 16 + 8} z {c.z * 16 + 8} ({_counts(c.counts, 3)}):"
-            " a mob farm or items piling up"
+            f"{c.total} entities in one chunk, {c.world} x {c.x * 16 + 8} z {c.z * 16 + 8}"
+            f" ({counts_text(c.counts, 3)}): a mob farm or items piling up"
         )
     if p.entity_counts.get("Item", 0) >= 500:
         warn.append(f"{p.entity_counts['Item']} dropped items on the ground")
@@ -1274,7 +1310,7 @@ def focus_report(
 # --- heap summaries ------------------------------------------------------------------------------------------
 
 
-def _heap_owner(cls: str) -> str:
+def heap_owner(cls: str) -> str:
     """Who a class in memory belongs to; arrays count for their element type, primitive arrays for java."""
     base = cls.split("[", 1)[0]
     return "java" if "." not in base else package_of(base)
@@ -1285,8 +1321,8 @@ def heap_header(h: Heap, name: str, what: str = "heap summary") -> list[str]:
     lines = [f"# spark {what} {name}: {h.platform} {h.platform_version}{mc}, spark v{h.spark_version}"]
     memory = []
     if h.heap_total:
-        heap = f"heap {_bytes(h.heap_used)} used, {_bytes(h.heap_total)} allocated"
-        memory.append(heap + (f", {_bytes(h.heap_max)} max" if h.heap_max else ""))
+        heap = f"heap {bytes_text(h.heap_used)} used, {bytes_text(h.heap_total)} allocated"
+        memory.append(heap + (f", {bytes_text(h.heap_max)} max" if h.heap_max else ""))
     if _gc_text(h.gc):
         memory.append(f"GC {_gc_text(h.gc)}")
     if memory:
@@ -1294,10 +1330,10 @@ def heap_header(h: Heap, name: str, what: str = "heap summary") -> list[str]:
     return lines
 
 
-def _by_owner(entries: Iterable[HeapEntry]) -> dict[str, list[int]]:
+def heap_by_owner(entries: Iterable[HeapEntry]) -> dict[str, list[int]]:
     out: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for e in entries:
-        totals = out[_heap_owner(e.cls)]
+        totals = out[heap_owner(e.cls)]
         totals[0] += e.size
         totals[1] += e.instances
     return out
@@ -1307,16 +1343,16 @@ def heap_report(h: Heap, name: str, top_n: int = 25) -> str:
     total = h.size or 1
     lines = heap_header(h, name)
     objects = sum(e.instances for e in h.entries)
-    lines.append(f"Live objects: {objects:,} in {len(h.entries):,} classes, {_bytes(h.size)}")
+    lines.append(f"Live objects: {objects:,} in {len(h.entries):,} classes, {bytes_text(h.size)}")
     lines.append(f"\n## Biggest classes (of {len(h.entries):,})")
     lines.append(f"{'size':>8}  {'share':>6}  {'objects':>11}  class  [mod]")
     for e in sorted(h.entries, key=lambda e: -e.size)[:top_n]:
-        owner = _heap_owner(e.cls)
-        tag = f"  [{owner}]" if owner not in _NOT_MODS else ""
-        lines.append(f"{_bytes(e.size):>8}  {_pct(e.size, total)}  {e.instances:>11,}  {e.cls}{tag}")
+        owner = heap_owner(e.cls)
+        tag = f"  [{owner}]" if owner not in NOT_MODS else ""
+        lines.append(f"{bytes_text(e.size):>8}  {_pct(e.size, total)}  {e.instances:>11,}  {e.cls}{tag}")
     lines.append("\n## By mod (arrays count for their element type)")
-    for owner, (size, count) in sorted(_by_owner(h.entries).items(), key=lambda kv: -kv[1][0])[:top_n]:
-        lines.append(f"{_bytes(size):>8}  {_pct(size, total)}  {count:>11,}  {owner}")
+    for owner, (size, count) in sorted(heap_by_owner(h.entries).items(), key=lambda kv: -kv[1][0])[:top_n]:
+        lines.append(f"{bytes_text(size):>8}  {_pct(size, total)}  {count:>11,}  {owner}")
     lines.append(
         "\nbyte[], int[], Object[] and String are shared by everything, so they rarely point at a culprit; a"
         " class from a mod with far more objects than expected does. A leak shows as growth: take a second"
@@ -1337,24 +1373,24 @@ def heap_compare(a: Heap, a_name: str, b: Heap, b_name: str, top_n: int = 25) ->
         deltas.append((cls, size, count, new))
     lines = heap_header(b, f"{a_name} -> {b_name}", "heap growth")
     lines.append(
-        f"Live objects: {_bytes(a.size)} -> {_bytes(b.size)} ({'+' if b.size >= a.size else '-'}"
-        f"{_bytes(abs(b.size - a.size))}). Growth between two summaries points at leaks; one moment can be noise."
+        f"Live objects: {bytes_text(a.size)} -> {bytes_text(b.size)} ({'+' if b.size >= a.size else '-'}"
+        f"{bytes_text(abs(b.size - a.size))}). Growth between two summaries points at leaks; one moment can be noise."
     )
     lines.append("\n## Grew the most")
     lines.append(f"{'+size':>9}  {'+objects':>11}  {'now':>8}  class  [mod]")
     for cls, size, count, new in sorted(deltas, key=lambda d: -d[1])[:top_n]:
         if size <= 0:
             break
-        owner = _heap_owner(cls)
-        tag = f"  [{owner}]" if owner not in _NOT_MODS else ""
-        now = _bytes(new.size) if new else "gone"
-        lines.append(f"{'+' + _bytes(size):>9}  {count:>+11,}  {now:>8}  {cls}{tag}")
+        owner = heap_owner(cls)
+        tag = f"  [{owner}]" if owner not in NOT_MODS else ""
+        now = bytes_text(new.size) if new else "gone"
+        lines.append(f"{'+' + bytes_text(size):>9}  {count:>+11,}  {now:>8}  {cls}{tag}")
     lines.append("\n## By mod")
-    old_owner, new_owner = _by_owner(a.entries), _by_owner(b.entries)
+    old_owner, new_owner = heap_by_owner(a.entries), heap_by_owner(b.entries)
     changes = {
         o: new_owner.get(o, [0, 0])[0] - old_owner.get(o, [0, 0])[0] for o in old_owner.keys() | new_owner.keys()
     }
     for owner, size in sorted(changes.items(), key=lambda kv: -abs(kv[1]))[:15]:
         if size:
-            lines.append(f"{'+' if size > 0 else '-'}{_bytes(abs(size)):>8}  {owner}")
+            lines.append(f"{'+' if size > 0 else '-'}{bytes_text(abs(size)):>8}  {owner}")
     return "\n".join(lines)

@@ -1,11 +1,15 @@
-import asyncio
+"""Terminal UI on Textual: the repo, PR, pack and tools tabs, their keys, menus and dialogs.
+
+What the tabs show comes from views.py, the data and the work on it from workbench.py; both are shared with the
+desktop UI. `nh-workbench web` serves this same UI in a browser tab.
+"""
+
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Group, RenderableType
-from rich.table import Table
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -16,303 +20,43 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
 from textual.widgets.option_list import Option
 
-from . import config, git, github, keys, ops, pack, proc, render, skill
+from . import config, github, keys, ops, pack, proc, render, skill
 from .config import Config
-from .models import Branch, CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
-
-VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
-    "all": ("All", lambda st: True),
-    "off": ("Off main", lambda st: st.off_main),
-    "behind": ("Behind", lambda st: st.is_behind),
-    "dirty": ("Dirty", lambda st: st.dirty),
-    "branches": ("Branches", lambda st: bool(st.extra_branches)),
-    "other": ("Other", lambda st: st.group != "gtnh"),
-    "mine": ("My PRs", None),
-    "reviews": ("Reviews", None),
-    "org": ("All PRs", None),
-    "pack": ("Pack", None),
-    "tools": ("Tools", None),
-}
-# Where a group of tabs starts (repos, then pull requests, then the rest): both UIs draw a divider before it.
-TAB_GROUP_STARTS = ("mine", "pack")
-SORTS: dict[str, tuple[str, Callable[[RepoState], object]]] = {
-    "name": ("name", ops.by_repo),
-    "recent": ("last commit", lambda st: -(st.date.timestamp() if st.date else 0)),
-    "behind": ("most behind", lambda st: -(st.behind + st.main_behind)),
-    "branch": ("off main first", lambda st: (not st.off_main, (st.head or "").lower())),
-}
-HEADER_SORT = {"Repo": "name", "Last commit": "recent", "Sync": "behind", "Branch": "branch"}
-# The PR lists keep their own order: "updated" is the order they arrive in (for you first, then newest).
-PR_SORTS = render.PR_SORTS
-PR_HEADER_SORT = {"Updated": "updated", "Size": "small", "Repo": "repo"}
-REPO_ONLY_ACTIONS = {"fetch", "pull", "to_main", "cleanup"}  # hidden on the Reviews and Pack tabs
-# views with their own table; the rest share #repos
-TABLES = {"pack": "#pack", "reviews": "#reviews", "mine": "#mine", "org": "#org", "tools": "#tools"}
-PR_VIEWS = ("reviews", "mine", "org")  # views listing pull requests rather than repos
-REPO_COLUMNS = ("Repo", "Group", "Branch", "State", "Sync", "Daily", "Release", "Result", "Last commit")
-PACK_COLUMNS = ("Mod", "Kind", "Daily", "Release", "Local", "Source")
-TOOL_COLUMNS = ("Tool", "What it does")
-# (key, name, what it does, longer help for the detail pane)
-TOOLS = [
-    (
-        "spark",
-        "spark profiles",
-        "Read a spark.lucko.me link (a lag report) as a short text report",
-        "Paste a spark link or code: server stats, the worst minutes, where the time goes. Enter on a method"
-        " shows what it calls, c who calls it, y copies the report for an LLM. Same as `nh-workbench tools spark`.",
-    ),
-    (
-        "clone",
-        "Clone missing repos",
-        "Clone the pack mods, or the org repos, you do not have yet",
-        "Lists what is missing first and asks before cloning, a few at a time; folders that already exist are"
-        " skipped. Uses SSH or HTTPS as chosen in Settings.",
-    ),
-    (
-        "jars",
-        "Closed-source jars",
-        "Download the jars of closed-source pack mods, where DreamAssemblerXXL expects them",
-        "Into _GTNH_Closed_Source in the repo folder; jars already there are left alone. Same as `nh-workbench jars`.",
-    ),
-    (
-        "clean",
-        "Clean built jars",
-        "Delete the jars Gradle left in build/libs of the org's repos",
-        "Only *.jar files directly in build/libs, of checkouts with a remote in the org; lists them with their"
-        " size and asks first. They are deleted for good, the next build makes them again.",
-    ),
-    (
-        "skill",
-        "Install AI skill",
-        "Let Claude Code, Codex or OpenCode read spark links with this tool, in any project",
-        "Installs the spark-profile skill for the agent you pick. Same as `nh-workbench tools install-skill`.",
-    ),
-]
-NOT_ON_TOOLS = {"sort", "open_ide", "open_web", "filter", "clone"}
-BACKPORTS_SHOWN = 4  # release-branch commit subjects listed in the detail pane
-
-
-def pr_matches(item: ReviewItem, needle: str) -> bool:
-    """The PR filter: a name, title or author, or a size like <200 for PRs under 200 changed lines."""
-    if needle.startswith("<") and needle[1:].strip().isdigit():
-        return item.pr.size < int(needle[1:])
-    return needle in f"{item.repo} {item.pr.title} {item.author}".lower()
-
-
-def local_branch(item: ReviewItem, states: Iterable[RepoState]) -> tuple[RepoState, str] | None:
-    """The checkout and local branch a pull request was opened from, when it is here."""
-    for st in states:
-        for br in st.branches:
-            if br.pr and br.pr.url == item.pr.url:
-                return st, br.name
-    return None
-
-
-def repo_for(item: ReviewItem, states: Iterable[RepoState]) -> RepoState | None:
-    """The checkout a pull request belongs to: the one with its branch, or any with its repo as a remote."""
-    states = list(states)
-    local = local_branch(item, states)
-    if local:
-        return local[0]
-    wanted = item.repo.lower()
-    # Any remote counts: a PR to an upstream repo still belongs to the fork checked out here.
-    for st in sorted(states, key=lambda s: s.worktree_of is not None):
-        if any((r.slug or "").lower() == wanted for r in st.remotes.values()) or (st.slug or "").lower() == wanted:
-            return st
-    return None
-
-
-def org_mark(item: ReviewItem, mine: Iterable[ReviewItem], reviews: Iterable[ReviewItem], reviewed: set[str]) -> str:
-    """How you are involved in an org PR: author, requested (your review), reviewed, or not at all."""
-    url = item.pr.url
-    if any(i.pr.url == url for i in mine):
-        return "author"
-    if any(i.pr.url == url for i in reviews):
-        return "requested"
-    return "reviewed" if url in reviewed else ""
-
-
-def org_shown(
-    items: Iterable[ReviewItem],
-    drafts: bool,
-    filters: Iterable[str],
-    states: Iterable[RepoState],
-    entries: Iterable[PackEntry],
-) -> list[ReviewItem]:
-    """The org PRs the All PRs tab lists: drafts only when asked, then the "show only" filters."""
-    items = [i for i in items if drafts or not i.pr.draft]
-    filters = list(filters)
-    if not filters:
-        return items
-    return github.filter_prs(items, filters, ops.local_slugs(states), pack.pack_slugs(entries))
-
-
-def tool_status(key: str, cfg: Config, entries: list[PackEntry], states: Iterable[RepoState]) -> str:
-    """The current state a tool of the Tools tab would act on, for the detail pane."""
-    if key == "clone":
-        if not entries:
-            return "Pack data not loaded yet."
-        missing = pack.missing_jobs(entries, cfg.root, cfg.clone_protocol)
-        return f"Pack mods not checked out: {len(missing)}. Org repos are listed from GitHub when you pick them."
-    if key == "jars":
-        closed = sum(1 for e in entries if e.closed)
-        return f"Closed-source mods in the pack: {closed}" if entries else "Pack data not loaded yet."
-    if key == "clean":
-        found = ops.built_jars(states, cfg.org)
-        files = [p for _, jars in found for p in jars]
-        size = render.megabytes(sum(ops.file_size(p) for p in files))
-        return f"Now: {len(files)} built jars, {size}, in {len(found)} repos." if files else "No built jars now."
-    if key == "skill":
-        found = [
-            f"{label} {'installed' if skill.installed(a) else 'not installed'}" for a, label in skill.AGENTS.items()
-        ]
-        return ", ".join(found) + "."
-    return ""
-
-
-def action_shown(action: str, view: str, ide_off: bool = False, repo_selected: bool = True) -> bool:
-    """Whether an action belongs on a tab. The terminal UI's footer and the desktop UI's toolbar both ask this,
-    so a tab or an action added later shows up the same way in both.
-
-    repo_selected: a local checkout goes with the selected line (on PR tabs, the PR's repo is checked out here).
-    """
-    if view == "tools" and action in NOT_ON_TOOLS:
-        return False
-    if action in REPO_ONLY_ACTIONS:
-        return view not in TABLES
-    if action == "sort":
-        return view != "pack"
-    if action == "clone":
-        return view == "pack"
-    if action == "checkout":
-        return view in PR_VIEWS
-    if action == "toggle_team":
-        return view == "reviews"
-    if action in ("toggle_drafts", "pr_filters"):
-        return view == "org"
-    if action == "rescan":
-        return view not in PR_VIEWS
-    if action == "reload_prs":
-        return view in ("mine", "reviews")
-    if action == "reload_org":
-        return view == "org"
-    if action == "open_ide":
-        return not ide_off and (view not in PR_VIEWS or repo_selected)
-    return True
-
-
-def repo_cells(st: RepoState, width: int = 48) -> list[Text]:
-    return [
-        render.name_text(st),
-        Text(st.group, "dim"),
-        render.branch_text(st),
-        render.state_text(st),
-        render.sync_text(st),
-        render.daily_text(st),
-        render.release_text(st),
-        render.note_text(st.note),
-        render.last_text(st, width),
-    ]
-
-
-def pack_line(st: RepoState, info: PackInfo) -> Text:
-    """Where a checkout stands in the pack: daily version, released version, release branch activity."""
-    text = Text.assemble(("pack  ", "dim"), "daily ", (st.daily or "—", "bold"))
-    if st.daily_ahead:
-        text.append(f" (+{st.daily_ahead} on {st.tracked} since)", "cyan")
-    text.append(f"   {info.release or 'release'} ").append(st.release or "—", "bold")
-    branch = pack.release_branch(info.release) if info.release else ""
-    if branch in st.release_branches and st.release:
-        if st.release_ahead is None:
-            text.append(f"   {branch}: tag {st.release} not found locally", "dim")
-        else:
-            style = "cyan" if st.release_ahead else "dim"
-            text.append(f"   {branch}: {st.release_ahead} commits since {st.release}", style)
-    if st.release_delta:
-        text.append(f"   {st.tracked}: Δ{st.release_delta} since {st.release}", render.delta_style(st.release_delta))
-    return text
-
-
-def repo_detail(st: RepoState, info: PackInfo | None = None) -> RenderableType:
-    head = Text.assemble(
-        (st.name, "bold"), "  ", (st.slug or "no GitHub remote", "dim"), "  main: ", (st.tracked or "?", "green")
-    )
-    head.append(f"  {st.path}", "dim").append("  Enter: actions", "dim italic")
-    lines: list[RenderableType] = [head]
-    if st.subject or st.date:
-        lines.append(Text.assemble(("last commit  ", "dim"), (render.ago(st.date), "dim"), f"  {st.subject}"))
-    if st.worktree_of:
-        lines.append(Text(f"working tree of {st.worktree_of}", "dim"))
-    for tree in st.worktrees:
-        lines.append(Text(f"other working tree: {tree.path}  on {tree.branch or 'a detached commit'}", "dim"))
-    if info and st.in_pack:
-        lines.append(pack_line(st, info))
-        for subject in st.release_commits[:BACKPORTS_SHOWN]:
-            lines.append(Text(f"        {render.clip(subject, 100)}", "dim cyan"))
-        if len(st.release_commits) > BACKPORTS_SHOWN:
-            lines.append(Text(f"        ... {len(st.release_commits) - BACKPORTS_SHOWN} more", "dim"))
-    if not st.extra_branches:
-        return Group(*lines, Text("no other local branches", "dim"))
-    table = Table(box=None, pad_edge=False, show_header=False)
-    for _ in range(4):
-        table.add_column(no_wrap=True)
-    table.add_column(no_wrap=True, overflow="ellipsis")
-    for br in st.extra_branches:
-        table.add_row(*render.branch_row(st, br))
-    return Group(*lines, table)
-
-
-def review_detail(
-    item: ReviewItem, local: RepoState | None, k: dict[str, str] = keys.DEFAULT_LETTERS
-) -> RenderableType:
-    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
-    where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
-    hint = f"Enter or {k['open_web']}: open in the browser   {k['toggle_team']}: show or hide team requests"
-    hint = Text(f"{item.pr.url}   {hint}", "dim")
-    return Group(head, Text(item.pr.title), where, hint)
-
-
-def org_detail(
-    item: ReviewItem, mark: str, local: RepoState | None, k: dict[str, str] = keys.DEFAULT_LETTERS
-) -> RenderableType:
-    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr), f"  by {item.author}")
-    concern = {"author": "your PR", "requested": "your review is requested", "reviewed": "you reviewed it"}
-    where = Text(f"checked out at {local.path}", "green") if local else Text("not checked out", "dim")
-    if mark:
-        where = Text.assemble((concern[mark], "bold"), "   ", where)
-    hint = (
-        f"Enter or {k['open_web']}: open   {k['checkout']}: check out   {k['toggle_drafts']}: drafts   "
-        f"{k['pr_filters']}: show only   {k['reload_org']}: search again"
-    )
-    hint = Text(f"{item.pr.url}   {hint}", "dim")
-    return Group(head, Text(item.pr.title), where, hint)
-
-
-def mine_detail(
-    item: ReviewItem, local: tuple[RepoState, str] | None, k: dict[str, str] = keys.DEFAULT_LETTERS
-) -> RenderableType:
-    head = Text.assemble((f"{item.repo} ", "bold"), render.pr_text(item.pr))
-    if local:
-        where = Text(f"branch {local[1]} in {local[0].path}", "green")
-    else:
-        where = Text("branch not checked out here", "dim")
-    hint = Text(f"{item.pr.url}   Enter or {k['open_web']}: open in the browser", "dim")
-    return Group(head, Text(item.pr.title), where, hint)
-
-
-def pack_detail(entry: PackEntry, info: PackInfo, k: dict[str, str] = keys.DEFAULT_LETTERS) -> RenderableType:
-    release = f"{info.release or 'release'} {entry.release_version or '—'}"
-    versions = f"  {entry.kind}  daily {entry.version or '—'}  {release}"
-    lines = [render.pack_header(info), Text.assemble((entry.name, "bold"), versions)]
-    lines.append(Text(f"licence: {entry.license or 'unknown'}   {entry.url or ''}", "dim"))
-    if entry.dev_status or entry.note:
-        lines.append(Text(" · ".join(part for part in (entry.dev_status, entry.note) if part), "dim italic"))
-    if entry.local:
-        lines.append(Text(f"checked out at {entry.local.path}", "green"))
-    elif entry.status == "missing":
-        at = f" @ {entry.branch}" if entry.branch else ""
-        lines.append(Text(f"press {k['clone']} to clone {entry.repo}{at}", "yellow"))
-    return Group(*lines)
+from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
+from .views import (
+    HEADER_SORT,
+    PACK_COLUMNS,
+    PR_HEADER_SORT,
+    PR_SORTS,
+    PR_VIEWS,
+    REPO_COLUMNS,
+    SORTS,
+    TAB_GROUP_STARTS,
+    TABLES,
+    TOOL_COLUMNS,
+    TOOLS,
+    VIEWS,
+    action_shown,
+    cleanup_body,
+    local_branch,
+    mine_detail,
+    no_cleanup_note,
+    org_detail,
+    org_mark,
+    org_shown,
+    pack_detail,
+    pr_matches,
+    repo_actions,
+    repo_cells,
+    repo_detail,
+    repo_for,
+    review_detail,
+    to_main_body,
+    tool_behind,
+    tool_entry,
+    tool_status,
+)
+from .workbench import Workbench
 
 
 class CloseButton(Static):
@@ -398,34 +142,6 @@ class PromptScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-def repo_actions(st: RepoState, ide_off: bool = False) -> list[tuple[str, str, str, str | None]]:
-    """(hotkey, id, label, reason it is unavailable) for the single-repo menu."""
-    main = st.tracked or "main"
-    merged = sum(1 for b in st.extra_branches if b.name != st.head and not b.keep and b.pr and b.pr.state == "MERGED")
-    kept = sum(1 for b in st.branches if b.keep)
-    pr = st.current.pr if st.current else None
-    if not st.off_main:
-        no_switch = f"already on {main}" if st.tracked else "no main branch known"
-    else:
-        elsewhere = st.checked_out_elsewhere(st.tracked)
-        no_switch = "uncommitted changes" if st.dirty else None
-        if elsewhere:
-            no_switch = f"{main} is checked out in {elsewhere.path.name}"
-    return [
-        ("f", "fetch", "Fetch", None),
-        ("p", "pull", f"Pull: fast-forward {main} if safe", None),
-        ("m", "main", f"Switch to {main} and pull", no_switch),
-        ("d", "cleanup", f"Delete merged branches ({merged})", None if merged else "none merged"),
-        ("k", "keep", f"Protect branches from cleanup ({kept})", None),
-        ("o", "ide", "Open in IntelliJ", "turned off in Settings" if ide_off else None),
-        ("w", "web", f"Open PR #{pr.number}" if pr else "Open on GitHub", None if st.slug else "no GitHub remote"),
-        ("e", "folder", "Open folder", None),
-        ("b", "main_branch", f"Set main branch (now {main})", None),
-        ("u", "group", f"Set group (now {st.group})", None),
-        ("h", "hide", "Hide this repo from the tool", None),
-    ]
-
-
 class MenuScreen(ModalScreen[str | None]):
     """A list of (hotkey, id, label, reason it is unavailable) actions; dismisses with the chosen id."""
 
@@ -465,98 +181,6 @@ class RepoMenu(MenuScreen):
     def __init__(self, st: RepoState, ide_off: bool = False) -> None:
         super().__init__(Text.assemble((st.name, "bold"), "  ", render.branch_text(st)), repo_actions(st, ide_off))
         self._st = st
-
-
-def tool_checkout() -> Path | None:
-    """The checkout this tool runs from, which can update itself; None when installed as a package."""
-    return skill.own_checkout()
-
-
-def tool_behind(st: RepoState | None) -> int:
-    """New commits for the tool's own checkout (st: that checkout, fetched)."""
-    if st is None or st.error:
-        return 0
-    return st.main_behind if st.off_main else st.behind
-
-
-def tool_entry(st: RepoState | None, updated: bool) -> tuple[str, str | None]:
-    """Label of the Settings entry that updates the tool, and why it cannot be used now."""
-    label = "Update NH Workbench"
-    if tool_checkout() is None:
-        return label, "installed as a package: uv tool upgrade or uvx --refresh"
-    if updated:
-        return label, "updated: restart the tool to use it"
-    if st is None:
-        return label, "checking for updates"
-    if st.error or (st.note and st.note.kind == "failed"):
-        return label, f"could not check: {st.error or st.note.text}"
-    behind = tool_behind(st)
-    if behind:
-        return f"{label} ({behind} new commit{'s' if behind > 1 else ''})", None
-    return label, f"up to date, {st.head or 'detached'} at {st.head_sha[:7]}"
-
-
-async def update_tool(cfg: Config, st: RepoState | None) -> tuple[RepoState | None, str, bool]:
-    """Pull the tool's own checkout. Returns its new state, what to tell (a warning), and whether it updated."""
-    path = tool_checkout()
-    if path is None or st is None or not st.tracked:
-        return st, "", False
-    subjects = await git.subjects_between(path, st.tracked, f"{st.tracked}@{{u}}") or []
-    new = await ops.pull_repo(cfg, path)
-    note = new.note
-    if not note or note.kind != "updated":
-        return new, f"Not updated: {note.text if note else 'nothing to pull'}", False
-    if new.off_main:
-        return (
-            new,
-            f"{new.tracked} updated in {path}, but the checkout is on {new.head}:"
-            f" switch to {new.tracked} and restart the tool to use it",
-            True,
-        )
-    latest = f": {subjects[0]}" + (f" and {len(subjects) - 1} more" if len(subjects) > 1 else "") if subjects else ""
-    return new, f"Updated{latest}. Restart the tool to use it.", True
-
-
-def no_cleanup_note(unpushed: list) -> str:
-    kept = f" ({len(unpushed)} merged ones kept: local commits not in their PR)" if unpushed else ""
-    return f"No merged branches to clean up{kept}"
-
-
-def cleanup_body(safe: list[tuple[RepoState, Branch]], parked: dict[Path, RepoState]) -> Text:
-    """The branches and remotes a cleanup deletes, one per line."""
-    body = Text("\n").join(
-        Text.assemble(
-            (st.name, "bold"),
-            f"  {br.name}",
-            (f"  PR #{br.pr.number}" if br.pr else "", "dim"),
-            (f"  checked out, switches to {st.tracked} first" if st.path in parked else "", "yellow"),
-        )
-        for st, br in safe
-    )
-    for st, remote in ops.orphaned_remotes(safe):
-        body.append("\n").append_text(
-            Text.assemble((st.name, "bold"), f"  remote {remote.name}", ("  no longer tracked", "dim"))
-        )
-    return body
-
-
-def finish_cleanup(report: ops.CleanupReport) -> tuple[str, bool]:
-    """Append the undo commands to the log; what to tell after a cleanup, and whether something failed."""
-    log_file = config.cache_dir() / "deleted-branches.log"
-    if report.restore:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with log_file.open("a", encoding="utf-8") as f:
-            f.writelines(f"{datetime.now():%Y-%m-%d %H:%M} {line}\n" for line in report.restore)
-    note = f"Deleted {report.branches} branches and {report.remotes} remotes, undo commands in {log_file}"
-    failed = len(report.failed)
-    return note + (f"; {failed} failed" if failed else ""), bool(failed)
-
-
-def to_main_body(candidates: Iterable[RepoState]) -> Text:
-    return Text("\n").join(
-        Text.assemble((st.name, "bold"), f"  {st.head} → {st.tracked}", (f"  PR #{st.current.pr.number}", "dim"))
-        for st in candidates
-    )
 
 
 class ExtrasMenu(MenuScreen):
@@ -676,25 +300,63 @@ class RepoApp(App[None]):
 
     def __init__(self, cfg: Config, root_override: Path | None = None) -> None:
         super().__init__()
-        self.cfg = cfg
+        self.wb = Workbench(
+            cfg,
+            on_repo=self._update_row,
+            on_change=self._on_change,
+            on_progress=self._on_progress,
+            notify=lambda text, severity: self.notify(text, severity=severity),
+            name_of=lambda action: f"{keys.BY_ID[action].label} ({keys.hint(self.cfg, action)})",
+        )
         self.root_override = root_override  # --root on the command line wins over the config file
         self.sort = "name"
         self.pr_sort = "updated"
-        self.team_reviews = False
-        self.states: dict[str, RepoState] = {}
-        self.prs = github.PrData()
-        self.entries: list[PackEntry] = []
-        self.pack_info: PackInfo | None = None
-        self.reviews: list[ReviewItem] = []
-        self.mine: list[ReviewItem] = []
-        self.org: github.OrgPrs | None = None  # loaded the first time the All PRs tab opens
-        self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
-        self.tool_updated = False
         self.org_drafts = False
         self.last_loaded = time.monotonic()
         self.view = "all"
         self.needle = ""
-        self.busy = ""
+        self.pack_labelled: PackInfo | None = None  # the pack data the Pack tab's headers name
+
+    # The data lives in the Workbench, which the desktop UI uses too.
+    @property
+    def cfg(self) -> Config:
+        return self.wb.cfg
+
+    @cfg.setter
+    def cfg(self, cfg: Config) -> None:
+        self.wb.cfg = cfg
+
+    @property
+    def states(self) -> dict[str, RepoState]:
+        return self.wb.states
+
+    @property
+    def pack_info(self) -> PackInfo | None:
+        return self.wb.pack_info
+
+    @property
+    def entries(self) -> list[PackEntry]:
+        return self.wb.entries
+
+    @property
+    def mine(self) -> list[ReviewItem]:
+        return self.wb.mine
+
+    @property
+    def reviews(self) -> list[ReviewItem]:
+        return self.wb.reviews
+
+    @property
+    def org(self) -> github.OrgPrs | None:
+        return self.wb.org  # loaded the first time the All PRs tab opens
+
+    @property
+    def busy(self) -> str:
+        return self.wb.busy
+
+    @property
+    def tool_updated(self) -> bool:
+        return self.wb.tool_updated
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -750,30 +412,20 @@ class RepoApp(App[None]):
 
     @work(group="tool-update", exclusive=True)
     async def _check_tool(self) -> None:
-        """Fetch the tool's own checkout once per start, and say when it has new commits."""
-        path = tool_checkout()
-        if path is None:
-            return
-        self.tool = await ops.fetch_repo(self.cfg, path)
-        behind = self._tool_behind()
-        if behind:
-            self.notify(f"NH Workbench has {behind} new commit(s): {self._settings} updates it", timeout=10)
+        await self.wb.check_tool()
 
     @property
     def _settings(self) -> str:
         return f"Settings ({keys.hint(self.cfg, 'extras')})"
 
     def _tool_behind(self) -> int:
-        return tool_behind(self.tool)
+        return tool_behind(self.wb.tool)
 
     def _tool_entry(self) -> tuple[str, str | None]:
-        return tool_entry(self.tool, self.tool_updated)
+        return tool_entry(self.wb.tool, self.wb.tool_updated)
 
     async def _update_tool(self) -> None:
-        self.tool, message, updated = await update_tool(self.cfg, self.tool)
-        self.tool_updated = self.tool_updated or updated
-        if message:
-            self.notify(message, severity="warning", timeout=30 if updated else 15)
+        await self.wb.update_tool()
 
     def _save_theme(self, theme) -> None:
         """Keep the theme picked in the command palette for the next start."""
@@ -799,55 +451,16 @@ class RepoApp(App[None]):
     @work(exclusive=True, group="load")
     async def load_everything(self, fetch: bool = False) -> None:
         self.last_loaded = time.monotonic()
-        if fetch:
-            loaded = await self._batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), reset=True)
-        else:
-            loaded = await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), reset=True)
-        if not loaded:
-            return
-        # Independent sources: none of them should hold the others up.
-        await asyncio.gather(self._load_prs(), self._load_reviews(quiet=True), self._load_mine(), self._load_pack())
+        await self.wb.load(fetch)
 
-    async def _load_mine(self) -> None:
-        items, error = await github.fetch_mine()
-        if items or not error:
-            self.mine = items
-            self._refresh()
-
-    async def _load_prs(self) -> None:
-        data = await github.fetch_prs(self.states.values())
-        if data.error:
-            self.notify(f"PR status unavailable: {data.error}", severity="warning")
-        if data.prs or data.canonical or not data.error:
-            self.prs = data
-            github.attach(self.states.values(), data)
-            await self._relink()  # canonical names can change which pack mod a repo matches
-            self._refresh()
-
-    async def _load_reviews(self, quiet: bool = False) -> None:
-        items, error = await github.fetch_reviews(self.team_reviews)
-        if error and not quiet:
-            self.notify(f"Review requests: {error}", severity="warning")
-        if items or not error:
-            self.reviews = items
-            self._refresh()
-
-    def _open_org(self) -> None:
+    @work(group="org")
+    async def _open_org(self) -> None:
         """Show the saved org search at once; search again only when it is missing or old."""
-        if self.org is None:
-            self.org = github.cached_org(self.cfg.org)
-        if self.org is None or time.time() - self.org.fetched > github.ORG_MAX_AGE:
-            self.reload_org()
+        await self.wb.open_org()
 
-    @work(group="org", exclusive=True)
+    @work(group="org")
     async def reload_org(self) -> None:
-        self.notify(f"Searching all open PRs of {self.cfg.org}, this takes a while...")
-        found = await github.fetch_org(self.cfg.org)
-        if found.error:
-            self.notify(f"Org PRs: {found.error}", severity="warning")
-        if found.items or not found.error:
-            self.org = found
-            self._refresh()
+        await self.wb.reload_org()
 
     def _org_shown(self) -> list[ReviewItem]:
         items = self.org.items if self.org else []
@@ -856,69 +469,21 @@ class RepoApp(App[None]):
     def _org_mark(self, item: ReviewItem) -> str:
         return org_mark(item, self.mine, self.reviews, self.org.reviewed if self.org else set())
 
-    async def _load_pack(self, force: bool = False) -> None:
-        try:
-            self.pack_info = await pack.load(self.cfg, force)
-            self.entries = self.pack_info.entries
-            # Rebuild the headers so they name the daily build and the release.
+    def _on_change(self, *_lists) -> None:
+        if self.pack_info is not self.pack_labelled:  # rebuild the headers so they name the daily and the release
+            self.pack_labelled = self.pack_info
             table = self.query_one("#pack", DataTable)
             labels = render.pack_labels(self.pack_info)
             table.clear(columns=True)
             for column in PACK_COLUMNS:
                 table.add_column(labels.get(column, column), key=column)
-        except pack.PackError as e:
-            self.notify(str(e), severity="warning")
-        await self._relink()
         self._refresh()
 
-    async def _relink(self, paths: list[Path] | None = None) -> None:
-        """Copy pack versions onto the repos, and recount release-branch commits for the given ones."""
-        if not self.pack_info:
-            return
-        pack.link_local(self.entries, self.states.values())
-        keys = self.states if paths is None else [str(p) for p in paths]
-        states = [self.states[k] for k in keys if k in self.states]
-        branch = pack.release_branch(self.pack_info.release) if self.pack_info.release else ""
-        await ops.pack_progress(states, branch, self.cfg.concurrency)
-
-    async def _batch(
-        self,
-        label: str,
-        worker: Callable[[Path], Awaitable[RepoState]],
-        paths: list[Path] | None = None,
-        reset: bool = False,
-    ) -> bool:
-        if self.busy:
-            self.notify(f"{self.busy} is still running", severity="warning")
-            return False
-        self.busy = label
-        try:
-            if paths is None:
-                paths = ops.discover(self.cfg)
-            if reset:
-                keep = {str(p) for p in paths}
-                self.states = {k: v for k, v in self.states.items() if k in keep}
-            done = 0
-
-            def on_done(st: RepoState) -> None:
-                nonlocal done
-                done += 1
-                github.attach([st], self.prs)
-                old = self.states.get(str(st.path))
-                if old:  # keep the pack columns steady until they are recomputed after the batch
-                    st.daily, st.release, st.release_ahead = old.daily, old.release, old.release_ahead
-                    st.daily_ahead, st.release_commits = old.daily_ahead, old.release_commits
-                    st.release_delta = old.release_delta
-                self.states[str(st.path)] = st
-                self._update_row(st)
-                self.sub_title = f"{label} {done}/{len(paths)}"
-
-            await ops.run_all(paths, worker, self.cfg.concurrency, on_done)
-        finally:
-            self.busy = ""
-        await self._relink(paths)
-        self._refresh()
-        return True
+    def _on_progress(self, label: str, done: int, total: int) -> None:
+        if label:
+            self.sub_title = f"{label} {done}/{total}"
+        else:  # the job is over: back to the summary
+            self._refresh()
 
     # --- rendering ------------------------------------------------------------
 
@@ -1091,11 +656,11 @@ class RepoApp(App[None]):
         choice = await self.push_screen_wait(RepoMenu(st, self.cfg.ide_off))
         one = [st.path]
         if choice == "fetch":
-            await self._batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)
+            await self.wb.batch("Fetching", lambda p: ops.fetch_repo(self.cfg, p), one)
         elif choice == "pull":
-            await self._batch("Pulling", lambda p: ops.pull_repo(self.cfg, p), one)
+            await self.wb.batch("Pulling", lambda p: ops.pull_repo(self.cfg, p), one)
         elif choice == "main":
-            await self._batch("Switching", lambda p: ops.to_main(self.cfg, st), one)
+            await self.wb.batch("Switching", lambda p: ops.to_main(self.cfg, st), one)
         elif choice == "cleanup":
             await self._cleanup([st])
         elif choice == "ide":
@@ -1204,7 +769,7 @@ class RepoApp(App[None]):
         if key == "clone":
             await self._clone_many_menu()
         elif key == "jars":
-            await self._download_jars()
+            await self.wb.download_jars()
         elif key == "clean":
             await self._purge_jars()
         elif key == "skill":
@@ -1224,26 +789,9 @@ class RepoApp(App[None]):
         choice = await self.push_screen_wait(MenuScreen(Text("Install the spark-profile skill", "bold"), actions, info))
         if not choice:
             return
-        for agent in skill.AGENTS if choice == "all" else [choice]:
-            try:
-                folder, _ = await asyncio.to_thread(skill.install, None, agent)
-            except OSError as e:
-                self.notify(f"{skill.AGENTS[agent]}: {e}", severity="error")
-                continue
-            self.notify(f"Skill installed for {skill.AGENTS[agent]} in {folder}; new sessions pick it up", timeout=10)
+        await self.wb.install_skill(list(skill.AGENTS) if choice == "all" else [choice])
         if self.view == "tools":
             self._update_detail()
-
-    async def _download_jars(self) -> None:
-        if not any(e.closed for e in self.entries):
-            self.notify("Pack data not loaded yet", severity="warning")
-            return
-        folder = self.cfg.root / pack.JAR_FOLDER
-        self.notify("Downloading closed-source jars...")
-        report = await pack.download_closed(self.entries, folder)
-        for line in report.failed:
-            self.notify(line, severity="error")
-        self.notify(f"{report.summary} in {folder}")
 
     def action_filter(self) -> None:
         box = self.query_one("#filter", Input)
@@ -1274,10 +822,10 @@ class RepoApp(App[None]):
     async def action_toggle_team(self) -> None:
         if self._modal() or self.view != "reviews":
             return
-        self.team_reviews = not self.team_reviews
-        if self.team_reviews:
+        on = not self.wb.team_reviews
+        if on:
             self.notify("Loading team review requests, this takes a few seconds...")
-        await self._load_reviews()
+        await self.wb.toggle_team(on)
 
     @work(group="dialog")
     async def action_pr_filters(self) -> None:
@@ -1316,7 +864,7 @@ class RepoApp(App[None]):
         if self._modal() or self.view not in ("mine", "reviews"):
             return
         self.notify("Refreshing from GitHub...")
-        await asyncio.gather(self._load_prs(), self._load_reviews(), self._load_mine())
+        await self.wb.reload_prs()
 
     def action_reload_org(self) -> None:
         if not self._modal() and self.view == "org":
@@ -1336,7 +884,7 @@ class RepoApp(App[None]):
             if not st:
                 return
             paths = [st.path]
-        await self._batch(label, worker, paths)
+        await self.wb.batch(label, worker, paths)
 
     def action_open_ide(self) -> None:
         st = self._selected_repo()
@@ -1395,7 +943,7 @@ class RepoApp(App[None]):
         choice = await self.push_screen_wait(ExtrasMenu(self.cfg, self.pack_info, self._tool_entry()))
         if choice == "refresh":
             self.notify("Refreshing pack data...")
-            await self._load_pack(force=True)
+            await self.wb.refresh_pack()
             self.notify("Pack data refreshed")
         elif choice in ("config", "logs"):
             self.action_open_folder(choice)
@@ -1482,11 +1030,7 @@ class RepoApp(App[None]):
         title = f"Delete {len(files)} built jars ({render.megabytes(total)}) in {len(found)} repos?"
         if not await self.push_screen_wait(ConfirmScreen(title, Text("\n").join(lines))):
             return
-        freed, failed = await asyncio.to_thread(ops.delete_files, files)
-        for line in failed[:5]:
-            self.notify(line, severity="error", timeout=10)
-        more = f", {len(failed)} could not be deleted (in use?)" if failed else ""
-        self.notify(f"Freed {render.megabytes(freed)}{more}", severity="warning" if failed else "information")
+        await self.wb.delete_jars(files)
 
     async def _clone_many_menu(self) -> None:
         protocol = self.cfg.clone_protocol
@@ -1505,14 +1049,10 @@ class RepoApp(App[None]):
         if choice == "pack":
             jobs, what = pack_jobs, "pack mods"
         else:
-            self.notify(f"Listing the repos of {org}...")
-            repos, error = await github.org_repos(org)
-            if error:
-                self.notify(f"{org} repos: {error}", severity="error")
-                if not repos:
-                    return
-            repos = [r for r in repos if not r.archived]
-            jobs, what = ops.org_jobs(repos, self.states.values(), self.cfg.root, protocol), f"{org} repos"
+            found = await self.wb.org_jobs()
+            if found is None:
+                return
+            jobs, what = found, f"{org} repos"
         if not jobs:
             self.notify(f"Every one of the {what} is checked out already")
             return
@@ -1522,28 +1062,7 @@ class RepoApp(App[None]):
 
     @work(group="clone")
     async def _clone_many(self, jobs: list[CloneJob]) -> None:
-        if self.busy:
-            self.notify(f"{self.busy} is still running", severity="warning")
-            return
-        self.busy = "Cloning"
-        done = 0
-
-        def on_done(job: CloneJob, why: str | None) -> None:
-            nonlocal done
-            done += 1
-            self.sub_title = f"Cloning {done}/{len(jobs)}"
-
-        try:
-            failed = await ops.clone_all(jobs, min(4, self.cfg.concurrency), on_done)
-        finally:
-            self.busy = ""
-        for job, why in failed[:5]:
-            self.notify(f"{job.name}: {why}", severity="error", timeout=10)
-        cloned = [j.dest for j in jobs if j.dest.is_dir() and j not in {f for f, _ in failed}]
-        if cloned:
-            await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), cloned)
-        more = f", {len(failed)} failed" if failed else ""
-        self.notify(f"Cloned {len(cloned)} repos{more}", severity="warning" if failed else "information")
+        await self.wb.clone_many(jobs)
 
     @work(group="dialog")
     async def _first_root(self) -> None:
@@ -1600,7 +1119,7 @@ class RepoApp(App[None]):
     async def _cleanup(self, states: list[RepoState]) -> None:
         if self.busy:
             return
-        safe, unpushed = await ops.cleanup_candidates(states, parked=True)
+        safe, unpushed = await self.wb.find_cleanup(states)
         if not safe:
             self.notify(no_cleanup_note(unpushed))
             return
@@ -1610,24 +1129,13 @@ class RepoApp(App[None]):
         screen = ConfirmScreen(f"Delete {len(safe)} merged local branches?", body, option, self.cfg.cleanup_to_main)
         if not await self.push_screen_wait(screen):
             return
-        if parked:
-            if screen.checked != self.cfg.cleanup_to_main:
-                self.cfg.cleanup_to_main = screen.checked
-                try:
-                    config.save_setting(("cleanup_to_main",), screen.checked)
-                except config.ConfigError as e:
-                    self.notify(str(e), severity="error")
-            if screen.checked:
-                await self._batch("Switching", lambda p: ops.to_main(self.cfg, parked[p]), list(parked))
-            # Whatever is still checked out (unticked, or the switch failed) stays.
-            safe = [(st, br) for st, br in safe if self.states.get(str(st.path), st).head != br.name]
-            if not safe:
-                self.notify("Nothing deleted: the merged branches are still checked out")
-                return
-        report = await ops.cleanup(safe)
-        note, failed = finish_cleanup(report)
-        await self._batch("Scanning", lambda p: ops.scan_repo(self.cfg, p), list({st.path for st, _ in safe}))
-        self.notify(note, severity="warning" if failed else "information")
+        if parked and screen.checked != self.cfg.cleanup_to_main:
+            self.cfg.cleanup_to_main = screen.checked
+            try:
+                config.save_setting(("cleanup_to_main",), screen.checked)
+            except config.ConfigError as e:
+                self.notify(str(e), severity="error")
+        await self.wb.cleanup(safe, parked, screen.checked)
 
     @work(group="dialog")
     async def action_to_main(self) -> None:
@@ -1640,8 +1148,7 @@ class RepoApp(App[None]):
         body = to_main_body(candidates.values())
         if not await self.push_screen_wait(ConfirmScreen(f"Switch {len(candidates)} repos back to main?", body)):
             return
-        if await self._batch("Switching", lambda p: ops.to_main(self.cfg, candidates[p]), list(candidates)):
-            self.notify(f"Switched. Press {keys.hint(self.cfg, 'cleanup')} to delete the merged branches.")
+        await self.wb.to_main_many(candidates)
 
     @work(group="checkout")
     async def action_checkout(self) -> None:
@@ -1655,20 +1162,7 @@ class RepoApp(App[None]):
             self.notify(f"{st.name} has uncommitted changes", severity="error")
             return
         self.notify(f"Checking out #{item.pr.number} in {st.name}...")
-        head, error = await github.pr_head(item.repo, item.pr.number, self.cfg.clone_protocol)
-        if not head:
-            self.notify(f"#{item.pr.number}: {error}", severity="error")
-            return
-        if not await self._batch("Checking out", lambda p: ops.checkout_pr(self.cfg, st, head), [st.path]):
-            return
-        new = self.states.get(str(st.path))
-        if new and new.note:
-            if new.note.kind != "failed" and new.head:
-                # Link the PR right away instead of waiting for the next PR reload.
-                self.prs.prs[(new.name, new.head)] = item.pr
-                github.attach([new], self.prs)
-                self._refresh()
-            self.notify(f"{st.name}: {new.note.text}", severity="error" if new.note.kind == "failed" else "information")
+        await self.wb.checkout(item, st)
 
     @work(group="clone")
     async def action_clone(self) -> None:
@@ -1679,11 +1173,4 @@ class RepoApp(App[None]):
         if entry.local:
             return
         self.notify(f"Cloning {entry.repo or entry.name}...")
-        res = await pack.clone(entry, self.cfg.root, self.cfg.clone_protocol)
-        if not res.ok:
-            self.notify(f"{entry.name}: {res.message}", severity="error")
-            return
-        await self._batch(
-            "Scanning", lambda p: ops.scan_repo(self.cfg, p), [self.cfg.root / entry.repo.partition("/")[2]]
-        )
-        self.notify(f"Cloned {entry.repo}")
+        await self.wb.clone(entry)

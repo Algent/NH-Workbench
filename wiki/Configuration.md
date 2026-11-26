@@ -22,7 +22,7 @@ Linux follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` when set. Folders from befo
 | `org` | `GTNewHorizons` | Its repos form the `gtnh` group; All PRs lists its PRs |
 | `refresh_minutes` | `15` | The UI rescans this often; `0` turns it off |
 | `clone_protocol` | `ssh` | `ssh` or `https`, for clones and the fork remotes PR checkout adds. Existing remotes are left alone |
-| `theme` | Textual's | The UI's theme; picking one in the command palette (`Ctrl+P`) or the desktop UI's Settings saves it here |
+| `theme` | `textual-dark` | The UI's theme; picking one in the command palette (`Ctrl+P`) or the desktop UI's Settings saves it here |
 | `font_size` | `11` | Text size of the desktop UI, in points |
 | `refresh_fetch` | `false` | Auto-refresh fetches every repo instead of only rescanning |
 | `pr_filters` | none | All PRs filters, set with `v`: `local`, `pack`, `unreviewed`, `stale` |

@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import config, gui_theme, proc, render, tui
+from . import config, gui_theme, proc, render, views
 from . import keys as keytable
 
 if TYPE_CHECKING:
@@ -252,7 +252,7 @@ class SettingsDialog(QDialog):
         keys_button = QPushButton("Keys...")
         keys_button.setToolTip("Change the main keys and shortcuts (saved on their own)")
         keys_button.clicked.connect(lambda: KeysDialog(owner).exec())
-        label, why = tui.tool_entry(owner.wb.tool, owner.wb.tool_updated)
+        label, why = views.tool_entry(owner.wb.tool, owner.wb.tool_updated)
         self.update_button = QPushButton(f"{label}: {why}" if why else label)
         self.update_button.setEnabled(why is None)
         self.update_button.clicked.connect(lambda: (owner.update_tool(), self.update_button.setEnabled(False)))

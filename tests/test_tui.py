@@ -777,7 +777,7 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
         return [
             github.OrgRepo("o/new"),
             github.OrgRepo("o/old", archived=True),
-            github.OrgRepo("o/fork", fork=True),
+            github.OrgRepo("o/fork"),
         ], None
 
     monkeypatch.setattr(github, "org_repos", fake_org_repos)
@@ -949,7 +949,7 @@ async def test_tools_tab_spark(sandbox, offline, monkeypatch, tmp_path):
 
 
 def test_method_and_window_on_report_lines():
-    from nh_workbench.tui_spark import method_on_line, window_on_line
+    from nh_workbench.spark import method_on_line, window_on_line
 
     assert method_on_line(" 41.8%  galaxyspace.core.Craters.makeCrater") == "galaxyspace.core.Craters.makeCrater"
     line = " 41.7%     3.4s            Craters.createCraters > Craters.makeCrater  (own 41.7%)"
@@ -1076,10 +1076,10 @@ async def test_theme_is_kept(sandbox, offline, monkeypatch, tmp_path):
 
 
 async def test_tool_updates_itself(sandbox, offline, monkeypatch):
-    from nh_workbench import tui
+    from nh_workbench import views
     from nh_workbench.tui import MenuScreen
 
-    monkeypatch.setattr(tui, "tool_checkout", lambda: sandbox.work)  # stands in for the tool's checkout
+    monkeypatch.setattr(views, "tool_checkout", lambda: sandbox.work)  # stands in for the tool's checkout
     tip = sandbox.push_upstream("new feature")
     app = RepoApp(sandbox.cfg)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -1095,12 +1095,12 @@ async def test_tool_updates_itself(sandbox, offline, monkeypatch):
         assert app._tool_entry()[1] == "updated: restart the tool to use it"
         assert any("Restart the tool" in n.message for n in app._notifications)
 
-    monkeypatch.setattr(tui, "tool_checkout", lambda: None)
+    monkeypatch.setattr(views, "tool_checkout", lambda: None)
     assert RepoApp(sandbox.cfg)._tool_entry()[1].startswith("installed as a package")
 
 
 def test_action_shown_per_tab():
-    from nh_workbench.tui import action_shown
+    from nh_workbench.views import action_shown
 
     assert action_shown("fetch", "all") and not action_shown("fetch", "pack") and not action_shown("fetch", "mine")
     assert action_shown("clone", "pack") and not action_shown("clone", "all")

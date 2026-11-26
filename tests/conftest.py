@@ -72,9 +72,9 @@ def no_mcp_download(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def no_self_update(monkeypatch: pytest.MonkeyPatch) -> None:
     """The UI fetches its own checkout at start; tests must not touch the real one."""
-    from nh_workbench import tui
+    from nh_workbench import views
 
-    monkeypatch.setattr(tui, "tool_checkout", lambda: None)
+    monkeypatch.setattr(views, "tool_checkout", lambda: None)
 
 
 @pytest.fixture(autouse=True)

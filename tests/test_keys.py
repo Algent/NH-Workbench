@@ -39,7 +39,7 @@ def test_keys_are_read_from_the_config(tmp_path):
 
 def test_detail_hints_name_the_current_keys():
     from nh_workbench.models import PackEntry, PackInfo, PrInfo, ReviewItem
-    from nh_workbench.tui import org_detail, pack_detail
+    from nh_workbench.views import org_detail, pack_detail
 
     letters = keys.letters(config.Config(root=Path("."), keys={"open_web": "b", "clone": "k"}))
     pr = PrInfo(1, "OPEN", False, None, None, "", "https://example.invalid/pull/1", "PR 1")

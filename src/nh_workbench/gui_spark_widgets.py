@@ -329,7 +329,7 @@ class Timeline(QWidget):
         marks = max(1, n // 6)
         for i in range(0, n, marks):
             w = self.windows[i]
-            at = spark._span(w.start - start) if w.start and start else str(i)
+            at = spark.span_text(w.start - start) if w.start and start else str(i)
             x = plot.left() + slot * (i + 0.5)
             p.drawText(QRectF(x - 40, plot.bottom() + 4, 80, 16), Qt.AlignmentFlag.AlignCenter, at)
         self._legend(p, c)
@@ -359,7 +359,7 @@ class Timeline(QWidget):
             return
         w = self.windows[i]
         start = self.profile.start if self.profile else 0
-        at = spark._span(w.start - start) if w.start and start else "?"
+        at = spark.span_text(w.start - start) if w.start and start else "?"
         counts = [f"players {w.players}", f"entities {w.entities}", f"chunks {w.chunks}"]
         tip = (
             f"Minute {w.id}, at {at}\n"
@@ -463,13 +463,13 @@ class CallTreeModel(QAbstractItemModel):
         above = self.mod(node.parent.chain[-1].key) if node.parent and node.parent is not self.root else ""
         for m in node.chain:
             owner = self.mod(m.key)
-            if owner not in spark._NOT_MODS and owner != above:
+            if owner not in spark.NOT_MODS and owner != above:
                 return owner
             above = owner
         return ""
 
     def label(self, node: _Node) -> str:
-        names = [spark._short(m.key) for m in node.chain]
+        names = [spark.short_name(m.key) for m in node.chain]
         sep = " < " if self.up else " > "
         if len(names) > 3:
             names = [names[0], f"... {len(names) - 2} frames ...", names[-1]]

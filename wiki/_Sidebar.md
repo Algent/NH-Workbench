@@ -7,5 +7,6 @@
 - [What it will and won't do](Safety)
 - [Pack and GitHub data](Pack-and-GitHub-Data)
 - [Configuration](Configuration)
+- [Development](Development)
 
 [Repository](https://github.com/Algent/NH-Workbench)

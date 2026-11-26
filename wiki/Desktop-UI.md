@@ -60,11 +60,16 @@ letters are shared with the terminal UI; `Tab`, `Ctrl+Tab`, `Esc` and the letter
 
 ## Settings
 
-The cog at the end of the toolbar, `x` or `Ctrl+,`: theme, text size, repo folder, clone over SSH or HTTPS,
-auto-refresh interval and whether it fetches, IntelliJ launcher (or none), hidden repos and protected branches.
-Save writes them to the config file, keeping its comments. Its buttons download the pack data again, open the
-config or cache folder, change the keys and shortcuts (a dialog of its own, saved with its own Save), and update the tool itself (as in the terminal UI, a message says when its checkout has
-new commits).
+Open it with the cog at the end of the toolbar, `x` or `Ctrl+,`. It holds the theme, text size, repo folder,
+clone over SSH or HTTPS, auto-refresh interval and whether it fetches, the IntelliJ launcher (or none), hidden
+repos and protected branches. Save writes them to the config file, keeping its comments.
+
+The buttons along the bottom act at once:
+
+- download the pack data again
+- open the config or cache folder
+- change the keys and shortcuts, in a dialog of its own with its own Save
+- update the tool itself; as in the terminal UI, a message says when its checkout has new commits
 
 ## Themes
 

@@ -203,7 +203,6 @@ async def _graphql_once(query: str) -> tuple[dict | None, str | None]:
 class OrgRepo:
     slug: str  # owner/name
     archived: bool = False
-    fork: bool = False
 
 
 async def org_repos(org: str) -> tuple[list[OrgRepo], str | None]:
@@ -214,14 +213,14 @@ async def org_repos(org: str) -> tuple[list[OrgRepo], str | None]:
         cursor = f", after: {json.dumps(after)}" if after else ""
         query = (
             f"query {{ organization(login: {json.dumps(org)}) {{ repositories(first: 100{cursor}) {{"
-            " pageInfo { hasNextPage endCursor } nodes { nameWithOwner isArchived isFork isEmpty } } } }"
+            " pageInfo { hasNextPage endCursor } nodes { nameWithOwner isArchived isEmpty } } } }"
         )
         data, error = await _graphql(query)
         if data is None:
             return repos, error
         page = ((data.get("organization") or {}).get("repositories")) or {}
         repos += [
-            OrgRepo(n["nameWithOwner"], bool(n.get("isArchived")), bool(n.get("isFork")))
+            OrgRepo(n["nameWithOwner"], bool(n.get("isArchived")))
             for n in page.get("nodes") or []
             if n and not n.get("isEmpty")
         ]
