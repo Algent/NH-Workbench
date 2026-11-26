@@ -64,8 +64,8 @@ HINTS = {
     "mods": "Own time: time in the mod's own code, library calls it makes included. Double click: its methods",
     "entities": "Right click or double click a chunk to copy a /tp command to it",
     "heap": "Arrays count for their element type in the per-mod totals",
-    "report": "Enter or double click on a method: what it calls (t)   c: who calls it   Enter on a minute: only that"
-    " minute   Esc: step back   s: summary   y: copy for an LLM",
+    "report": "Enter, double click or t on a method: what it calls   c: who calls it   Enter on a minute: only that"
+    " minute   Esc or Backspace: back   s: summary   y: copy for an LLM",
 }
 
 
@@ -435,18 +435,14 @@ class SparkWindow(QWidget):
         self._add_tab("heap", split, "Memory by class")
 
     def _build_report(self) -> None:
-        self.buttons: list[QPushButton] = []
+        # What it calls / who calls it are Enter, t and c on a line: only the way back needs buttons.
+        self.back_button = QPushButton("Back (Esc)")
+        self.back_button.clicked.connect(self.back)
+        self.summary_button = QPushButton("Summary (s)")
+        self.summary_button.clicked.connect(self.summary)
         row = QHBoxLayout()
-        for label, slot in (
-            ("Summary (s)", self.summary),
-            ("Calls (t)", lambda: self.tree_report(False)),
-            ("Callers (c)", lambda: self.tree_report(True)),
-            ("Back (Esc)", self.back),
-        ):
-            button = QPushButton(label)
-            button.clicked.connect(slot)
-            row.addWidget(button)
-            self.buttons.append(button)
+        row.addWidget(self.back_button)
+        row.addWidget(self.summary_button)
         row.addStretch(1)
         self.report = Report(self._key)
         self.highlighter = ReportHighlighter(self.report.document(), self.ink)
@@ -465,6 +461,8 @@ class SparkWindow(QWidget):
     def _tab_changed(self, index: int) -> None:
         if 0 <= index < len(self.tab_keys):
             self.hint.setText(HINTS[self.tab_keys[index]])
+            if self.tab_keys[index] == "report":
+                self.report.setFocus()  # its keys work straight away, not in the link box
 
     def _enable(self) -> None:
         """Only the tabs and buttons that make sense for what is loaded."""
@@ -475,8 +473,7 @@ class SparkWindow(QWidget):
         }  # fmt: skip
         for i, key in enumerate(self.tab_keys):
             self.tabs.setTabVisible(i, shown[key])
-        for i, button in enumerate(self.buttons):  # a heap summary has no call trees
-            button.setEnabled(profile or (heap and i in (0, 3)))
+        self._enable_report_buttons()
         self.threads.setEnabled(profile)
         self.copy_button.setEnabled(profile or heap)
         self.all_minutes.setVisible(bool(self.windows))
@@ -981,6 +978,7 @@ class SparkWindow(QWidget):
     def _put(self, text: str, row: int) -> None:
         self.text = text
         self.report.show_text(text, row)
+        self._enable_report_buttons()
         where = [self.name_]
         if self.profile is not None:
             where.append(self.thread or "server thread")
@@ -1011,9 +1009,12 @@ class SparkWindow(QWidget):
 
         self._call(self._view(), shown, failed)
 
+    def _enable_report_buttons(self) -> None:
+        self.back_button.setEnabled(bool(self.history))
+        self.summary_button.setEnabled(self.method is not None)
+
     def back(self) -> None:
         if not self.history:
-            self.close()
             return
         windows = self.windows
         self.method, self.up, self.windows, row = self.history.pop()
@@ -1022,7 +1023,7 @@ class SparkWindow(QWidget):
             self._refresh_digest()
 
     def summary(self) -> None:
-        """Straight back to the summary (minute kept); Esc then closes."""
+        """Straight back to the summary (minute kept)."""
         if self.profile is None and self.heap is None:
             return
         self.history.clear()
@@ -1077,14 +1078,13 @@ class SparkWindow(QWidget):
         return False
 
     def keyPressEvent(self, event) -> None:
-        """Esc that no child took: step back in the report or the call tree, else close."""
-        if event.key() != Qt.Key.Key_Escape:
-            super().keyPressEvent(event)
-            return
+        """Keys no child took (focus on a button or the tabs): Esc steps back in the call tree, and on the
+        text report its keys still work. Nothing here closes the window."""
         key = self.tab_keys[self.tabs.currentIndex()] if self.tabs.currentIndex() >= 0 else ""
-        if key == "calls" and self.focus is not None:
+        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+        if event.key() == Qt.Key.Key_Escape and key == "calls" and self.focus is not None:
             self.show_tree(None)
-        elif key == "report":
+        elif event.key() == Qt.Key.Key_Escape and key == "report":
             self.back()
-        else:
-            self.close()
+        elif not (key == "report" and plain and self._key(event.key(), event.text().lower())):
+            super().keyPressEvent(event)

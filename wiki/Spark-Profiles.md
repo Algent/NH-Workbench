@@ -55,7 +55,8 @@ Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the
 
 ## Desktop UI
 
-The spark window has the same text report and keys under **Text report**, plus tabs to browse the profile.
+The spark window has the same text report and keys under **Text report** (except that `Esc` there never closes
+the window), plus tabs to browse the profile.
 **Copy report for an LLM** (`y`) is always at the top.
 
 - **Overview:** cards for TPS, tick time, CPU, memory, GC pauses and the world, each with a coloured stripe

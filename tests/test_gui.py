@@ -346,6 +346,11 @@ def test_spark_window(window, monkeypatch):
         sw.load()
         wait_for(lambda: sw.text.startswith("summary"))
         sw.show_tab("report")
+        assert QApplication.focusWidget() in (sw.report, None)  # None: the offscreen window is not active
+        assert not sw.back_button.isEnabled()
+        sw.back()
+        QTest.keyClick(sw.report, Qt.Key.Key_Escape)
+        assert sw.isVisible()  # nothing to go back to: the window stays
         sw.report.show_text(sw.text, 1)  # the cursor on the method line
         sw.report.setFocus()
         QTest.keyClick(sw.report, Qt.Key.Key_Return)  # what it calls
