@@ -7,7 +7,7 @@ launchers. The same in a window: [Desktop UI](Desktop-UI).
 `nh-workbench-web.cmd` / `nh-workbench-web.sh` launchers, which install it the first time. Each tab
 runs its own copy of the UI on this computer; links open in the browser, the IDE and folders open locally.
 
-![The terminal UI on the All tab](images/terminal-ui.svg)
+![The terminal UI on the All tab](images/terminal-ui.png)
 
 ## Tabs
 

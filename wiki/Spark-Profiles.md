@@ -56,6 +56,8 @@ defaults, changed in Settings > Keys):
 
 ## Desktop UI
 
+![The spark window's overview of a profile whose slow ticks are mostly world generation](images/spark-overview.png)
+
 The spark window has the same text report and keys under **Text report** (except that `Esc` there never closes
 the window), plus tabs to browse the profile.
 **Copy report for an LLM** (`y`) is always at the top.
@@ -74,6 +76,8 @@ the window), plus tabs to browse the profile.
 - For a heap summary, **Memory by class** lists every class and the total per mod.
 
 The thread picker at the top switches every tab to another thread.
+
+![The call tree of the same profile: chunk generation set off by a Galacticraft packet](images/spark-call-tree.png)
 
 ## On the command line
 

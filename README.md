@@ -13,7 +13,7 @@ Keeps a folder full of GTNH mod checkouts under control:
 
 Works on Windows, Linux and macOS. Everything else is in the [wiki](https://github.com/Algent/NH-Workbench/wiki).
 
-<img src="wiki/images/terminal-ui.svg" width="800" alt="The terminal UI: one line per checkout with its branch, state, and pack versions, and details on the selected repo">
+<img src="wiki/images/terminal-ui.png" width="800" alt="The terminal UI: one line per checkout with its branch, state, and pack versions, and details on the selected repo">
 
 ## Getting started
 
