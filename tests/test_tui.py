@@ -494,6 +494,39 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
         assert len(org_searches) == 2
 
 
+async def test_pack_and_prs_load_during_the_scan(sandbox, offline, monkeypatch):
+    import asyncio
+
+    from nh_workbench import ops
+
+    gate = asyncio.Event()
+    scan = ops.scan_repo
+
+    async def held(cfg, path):
+        await gate.wait()
+        return await scan(cfg, path)
+
+    monkeypatch.setattr(ops, "scan_repo", held)
+    relinked = []
+    app = RepoApp(sandbox.cfg)
+    relink = app.wb._relink
+
+    async def spy(paths=None):
+        relinked.append(paths)
+        await relink(paths)
+
+    app.wb._relink = spy
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert app.wb.busy == "Scanning"
+        assert len(app.entries) == 2 and app.mine and app.reviews  # before the scan is done
+        assert relinked == [] and app.wb.unlinked
+        gate.set()
+        await settle(app, pilot)
+        assert relinked[0] is None and not app.wb.unlinked  # every repo linked once the scan ended
+        assert str(app.query_one("#view-pack").label) == "Pack 2"
+
+
 async def test_batch_progress_strip_and_marks(sandbox, offline):
     import asyncio
 

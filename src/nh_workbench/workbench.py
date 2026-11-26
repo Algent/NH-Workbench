@@ -47,6 +47,7 @@ class Workbench:
         self.depth = 0  # steps of the job in progress: a cleanup scans, a clone too
         self.waiting: set[str] = set()  # repos (paths) the batch has yet to start on
         self.working: set[str] = set()  # repos it is on now
+        self.unlinked = False  # pack data came in during a batch: link it to every repo when the batch ends
         self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
         self.tool_updated = False
 
@@ -74,12 +75,19 @@ class Workbench:
     # --- loading -------------------------------------------------------------
 
     async def load(self, fetch: bool = False) -> None:
-        """Scan (or fetch) every repo, then load the PRs and the pack data."""
+        """Scan (or fetch) every repo and load the PRs and the pack data.
+
+        The pack data, your PRs and review requests do not need the repos: they load during the scan. The PRs of
+        local branches do, and wait for it."""
         worker = ops.fetch_repo if fetch else ops.scan_repo
-        if not await self.batch("Fetching" if fetch else "Scanning", lambda p: worker(self.cfg, p), reset=True):
-            return
         # Independent sources: none of them should hold the others up.
-        await asyncio.gather(self._load_prs(), self._load_pack(), self._load_mine(), self._load_reviews(quiet=True))
+        early = asyncio.gather(self._load_pack(), self._load_mine(), self._load_reviews(quiet=True))
+        try:
+            scanned = await self.batch("Fetching" if fetch else "Scanning", lambda p: worker(self.cfg, p), reset=True)
+        except BaseException:
+            early.cancel()
+            raise
+        await (asyncio.gather(early, self._load_prs()) if scanned else early)
 
     async def batch(
         self,
@@ -134,7 +142,8 @@ class Workbench:
                 self.busy = ""
                 self.waiting.clear()
                 self.working.clear()
-            await self._relink(paths)
+            await self._relink(None if self.unlinked else paths)
+            self.unlinked = False
             self._changed()
             return True
 
@@ -207,7 +216,10 @@ class Workbench:
             self.pack_info = await pack.load(self.cfg, force)
         except pack.PackError as e:
             self.notify(str(e), "warning")
-        await self._relink()
+        if self.busy:  # half the repos are not scanned yet: the batch links them all when it ends
+            self.unlinked = True
+        else:
+            await self._relink()
         self._changed()
 
     async def refresh_pack(self) -> None:
