@@ -53,6 +53,26 @@ Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the
 | `Esc` | Step back to the previous view (on the summary: close) |
 | `q` | Close |
 
+## Desktop UI
+
+The spark window has the same text report and keys under **Text report**, plus tabs to browse the profile.
+**Copy report for an LLM** (`y`) is always at the top.
+
+- **Overview:** cards for TPS, tick time, CPU, memory, GC pauses and the world, each with a coloured stripe
+  when it looks wrong. Then come the findings, a bar of where the server thread's time goes (hover a part for
+  its mods), a chart of each minute (slowest tick, median tick, the 50 ms line), and the machine and Java.
+  Click a minute in the chart to show only that minute in every tab.
+- **Call tree:** what the thread does as an expandable tree with a share bar per row. `[Mod]` and bold mark
+  where a mod's code starts. Type a method and press Enter, or right click a row, for what it calls or who
+  calls it. `t` and `c` do the same on the current row, and `Esc` goes back to the whole thread.
+- **Methods**, **Mods**: sortable, filterable tables of own and total time. A double click on a mod lists its
+  methods.
+- **Entities:** by type, by world, and every chunk with entities. Right click or double click a chunk to copy
+  a `/tp` command to it.
+- For a heap summary, **Memory by class** lists every class and the total per mod.
+
+The thread picker at the top switches every tab to another thread.
+
 ## On the command line
 
 `--thread NAME` picks another thread, `--window ID` (repeatable) narrows everything to the minutes listed under

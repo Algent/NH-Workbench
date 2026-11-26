@@ -329,10 +329,12 @@ def test_tools_tab(window, monkeypatch, tmp_path):
 
 
 def test_spark_window(window, monkeypatch):
+    from test_spark import profile_bytes
+
     from nh_workbench import spark
 
     asked = []
-    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (object(), "abc"))
+    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (spark.parse(profile_bytes()), "abc"))
     monkeypatch.setattr(spark, "summary", lambda p, name, thread, windows, *a: "summary\n  12.5%  1.2s  a.B.tick")
     monkeypatch.setattr(
         spark, "focus_report", lambda p, name, method, up, *a: asked.append((method, up)) or f"report of {method}"
@@ -343,6 +345,7 @@ def test_spark_window(window, monkeypatch):
         sw.source.setEditText("abc")
         sw.load()
         wait_for(lambda: sw.text.startswith("summary"))
+        sw.show_tab("report")
         sw.report.show_text(sw.text, 1)  # the cursor on the method line
         sw.report.setFocus()
         QTest.keyClick(sw.report, Qt.Key.Key_Return)  # what it calls
@@ -354,6 +357,65 @@ def test_spark_window(window, monkeypatch):
         QTest.keyClick(sw.report, Qt.Key.Key_C)  # who calls it
         wait_for(lambda: len(asked) == 2)
         assert asked[1] == ("a.B.tick", True)
+    finally:
+        sw.close()
+
+
+def test_spark_overview_and_tabs(window, monkeypatch):
+    from test_spark import profile_bytes
+
+    from nh_workbench import spark
+
+    monkeypatch.setattr(spark, "mod_packages", lambda: {"a": "Mod A"})
+    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (spark.parse(profile_bytes()), "abc"))
+    window._open_tool("spark")
+    sw = window.spark_window
+    try:
+        sw.source.setEditText("abc")
+        sw.load()
+        wait_for(lambda: sw.digest is not None)
+        assert sw.tabs.currentIndex() == sw.tab_keys.index("overview")
+        assert sw.cards["tps"].value.text() == "14.7" and "far behind" in sw.cards["tps"].title.text()
+        assert sw.cards["gc"].value.text() == "2.9 s" and "MarkSweepCompact" in sw.cards["gc"].detail.text()
+        assert "32-bit Java" in sw.findings.text()
+        heap_tab = sw.tab_keys.index("heap")
+        assert not sw.tabs.isTabVisible(heap_tab) and sw.tabs.isTabVisible(sw.tab_keys.index("entities"))
+        rows = range(sw.methods.proxy.rowCount())
+        methods = {sw.methods.proxy.index(r, 0).data(Qt.ItemDataRole.UserRole) for r in rows}
+        assert {"a.Mod.tick", "a.Mod.helper", "x.Main.run"} <= methods
+        assert sw.mods.proxy.index(0, 0).data() == "Mod A"
+        tree = sw.tree.model()
+        assert tree.data(tree.index(0, 0)).startswith("[x?] Main.run") and tree.data(tree.index(0, 1)) == "100.0%"
+        sw._method_action("helper", True)  # who calls it, in the call tree tab
+        assert sw.tabs.currentIndex() == sw.tab_keys.index("calls") and sw.focus == ("helper", True)
+        assert sw.tree_title.text().startswith("Who calls Mod.helper")
+        sw.timeline.picked.emit(101)  # a click on the second minute: every tab shows only it
+        wait_for(lambda: sw.digest.view.whole == 10)
+        assert sw.windows == [101] and sw.all_minutes.isVisible() and "101" in sw.minute.text()
+        sw.all_minutes.click()
+        wait_for(lambda: sw.digest.view.whole == 20)
+        assert sw.windows is None
+        chunk = sw.chunks.proxy.index(0, 0).data(Qt.ItemDataRole.UserRole)
+        sw._copy_tp(chunk)
+        assert QApplication.clipboard().text() == "/tp -120 ~ 104"
+    finally:
+        sw.close()
+
+
+def test_spark_lists_profiles_saved_since_it_was_opened(window, monkeypatch):
+    from pathlib import Path
+
+    from nh_workbench import gui_spark
+
+    monkeypatch.setattr(gui_spark, "saved_profiles", lambda: [])
+    window._open_tool("spark")
+    sw = window.spark_window
+    try:
+        assert sw.source.count() == 0
+        monkeypatch.setattr(gui_spark, "saved_profiles", lambda: [Path("cache/spark/new.sparkprofile")])
+        sw.hide()
+        window._open_tool("spark")
+        assert sw.source.findText("new.sparkprofile") == 0
     finally:
         sw.close()
 
