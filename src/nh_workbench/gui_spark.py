@@ -269,6 +269,8 @@ class SparkWindow(QWidget):
 
         self.threads = QComboBox()
         self.threads.setToolTip("The thread the tabs and the report show")
+        # Filled after the window is first shown: the default would keep the width it had while empty.
+        self.threads.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.threads.currentIndexChanged.connect(self._thread_picked)
         self.minute = QLabel("All minutes")
         self.all_minutes = QPushButton("Back to all minutes")
