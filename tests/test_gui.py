@@ -366,6 +366,35 @@ def test_spark_window(window, monkeypatch):
         sw.close()
 
 
+def test_spark_keys_come_from_settings(window, monkeypatch):
+    from test_spark import profile_bytes
+
+    from nh_workbench import spark
+
+    asked = []
+    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (spark.parse(profile_bytes()), "abc"))
+    monkeypatch.setattr(spark, "summary", lambda p, name, thread, windows, *a: "summary\n  12.5%  1.2s  a.B.tick")
+    monkeypatch.setattr(spark, "focus_report", lambda p, name, method, up, *a: asked.append(up) or "report")
+    window.cfg.keys["spark_callers"] = "K"
+    window._open_tool("spark")
+    sw = window.spark_window
+    try:
+        sw.source.setEditText("abc")
+        sw.load()
+        wait_for(lambda: sw.text.startswith("summary"))
+        sw.show_tab("report")
+        assert "K: who calls it" in sw.hint.text()
+        sw.report.show_text(sw.text, 1)
+        QTest.keyClick(sw.report, Qt.Key.Key_C)  # no longer a key
+        QTest.keyClick(sw.report, Qt.Key.Key_K)  # lower case k is not K either
+        QApplication.processEvents()
+        assert asked == []
+        QTest.keyClicks(sw.report, "K")  # typed as K, as Shift+k is
+        wait_for(lambda: asked == [True])
+    finally:
+        sw.close()
+
+
 def test_spark_overview_and_tabs(window, monkeypatch):
     from test_spark import profile_bytes
 

@@ -16,6 +16,7 @@ class KeyAction:
     letter: str
     shortcut: str = ""  # "": none in the desktop UI
     shown_as: str = ""  # the action action_shown() knows it by, when not its id; "-": shown on every tab
+    screen: str = ""  # "": the main window's tabs; "spark": the spark tool, whose keys clash only among themselves
 
     @property
     def shown(self) -> str:
@@ -45,6 +46,18 @@ ACTIONS = [
     KeyAction("open_config", "Open config folder", "C", shown_as="-"),
     KeyAction("open_logs", "Open logs folder", "L", shown_as="-"),
     KeyAction("quit", "Quit", "q", "Ctrl+Q", shown_as="-"),
+    # The spark tool: the desktop window's text report and call tree use the first four, the terminal UI all.
+    KeyAction("spark_calls", "spark: what the method calls", "t", screen="spark"),
+    KeyAction("spark_callers", "spark: who calls the method", "c", screen="spark"),
+    KeyAction("spark_summary", "spark: back to the summary", "s", screen="spark"),
+    KeyAction("spark_copy", "spark: copy the report for an LLM", "y", screen="spark"),
+    KeyAction("spark_window", "spark: pick a minute (terminal UI)", "w", screen="spark"),
+    KeyAction("spark_thread", "spark: pick a thread (terminal UI)", "h", screen="spark"),
+    KeyAction("spark_save", "spark: save the report (terminal UI)", "e", screen="spark"),
+    KeyAction("spark_open", "spark: open another profile (terminal UI)", "o", screen="spark"),
+    KeyAction("spark_reload", "spark: download again (terminal UI)", "r", screen="spark"),
+    KeyAction("spark_compare", "spark: compare heap summaries (terminal UI)", "m", screen="spark"),
+    KeyAction("spark_leave", "spark: close (terminal UI)", "q", screen="spark"),
 ]
 BY_ID = {a.id: a for a in ACTIONS}
 DEFAULT_LETTERS = {a.id: a.letter for a in ACTIONS}
@@ -71,6 +84,8 @@ def letter_error(letter: str) -> str | None:
 def _views_of(action: KeyAction) -> set[str]:
     from .tui import VIEWS, action_shown  # imports this module
 
+    if action.screen:
+        return {action.screen}
     return {view for view in VIEWS if action.shown == "-" or action_shown(action.shown, view)}
 
 

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import keys as keytable
 from . import spark
 from .gui_spark_widgets import (
     BAD,
@@ -61,16 +62,24 @@ if TYPE_CHECKING:
 
 SAVED_COLUMNS = ["Profile", "Kind", "Recorded", "Downloaded", ""]
 DELETE_COLUMN = 4  # the cross that deletes a saved file
+# {calls}, {callers}, {summary} and {copy} are the keys set in Settings > Keys.
 HINTS = {
-    "overview": "Click a minute in the chart to show only that minute in every tab   y: copy the report for an LLM",
-    "calls": "t: what the method calls   c: who calls it   right click for more   Esc: whole thread",
+    "overview": "Click a minute in the chart to show only that minute in every tab   {copy}: copy the report for an"
+    " LLM",
+    "calls": "{calls}: what the method calls   {callers}: who calls it   right click for more   Esc: whole thread",
     "methods": "Double click: what the method calls   right click: who calls it   type to filter",
     "mods": "Own time: time in the mod's own code, library calls it makes included. Double click: its methods",
     "entities": "Right click or double click a chunk to copy a /tp command to it",
     "heap": "Arrays count for their element type in the per-mod totals",
-    "report": "Enter, double click or t on a method: what it calls   c: who calls it   Enter on a minute: only that"
-    " minute   Esc or Backspace: back   s: summary   y: copy for an LLM",
+    "report": "Enter, double click or {calls} on a method: what it calls   {callers}: who calls it   Enter on a minute:"
+    " only that minute   Esc or Backspace: back   {summary}: summary   {copy}: copy for an LLM",
 }
+
+
+def _plain(event) -> bool:
+    """No modifier but Shift (letters keep their case: f and F are different keys)."""
+    mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+    return mods in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier)
 
 
 @dataclass
@@ -185,8 +194,8 @@ class Report(QPlainTextEdit):
         self.setTextInteractionFlags(flags)
 
     def keyPressEvent(self, event) -> None:
-        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
-        if plain and self.on_key(event.key(), event.text().lower()):
+        plain = _plain(event)
+        if plain and self.on_key(event.key(), event.text()):
             return
         super().keyPressEvent(event)
 
@@ -219,8 +228,8 @@ class CallTree(QTreeView):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
     def keyPressEvent(self, event) -> None:
-        text = event.text().lower()
-        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+        text = event.text()
+        plain = _plain(event)
         if plain and text and self.on_key(text):
             return
         super().keyPressEvent(event)
@@ -296,7 +305,7 @@ class SparkWindow(QWidget):
         self.minute = QLabel("All minutes")
         self.all_minutes = QPushButton("Back to all minutes")
         self.all_minutes.clicked.connect(lambda: self.set_scope(windows=None))
-        self.copy_button = QPushButton("Copy report for an LLM (y)")
+        self.copy_button = QPushButton()
         self.copy_button.clicked.connect(self.copy)
         scope = QHBoxLayout()
         scope.addWidget(QLabel("Thread"))
@@ -320,7 +329,7 @@ class SparkWindow(QWidget):
         self._build_heap()
         self._build_report()
         self.tabs.currentChanged.connect(self._tab_changed)
-        self.hint = QLabel(HINTS["overview"])
+        self.hint = QLabel()
         self.hint.setEnabled(False)  # greyed, like the TUI's dim hints
 
         layout = QVBoxLayout(self)
@@ -330,6 +339,7 @@ class SparkWindow(QWidget):
         layout.addWidget(self.tabs, 1)
         layout.addWidget(self.hint)
         self._enable()
+        self._show_keys()
 
     def ink(self) -> Ink:
         return ink(self, self.owner.theme_name)
@@ -459,7 +469,7 @@ class SparkWindow(QWidget):
         # What it calls / who calls it are Enter, t and c on a line: only the way back needs buttons.
         self.back_button = QPushButton("Back (Esc)")
         self.back_button.clicked.connect(self.back)
-        self.summary_button = QPushButton("Summary (s)")
+        self.summary_button = QPushButton()
         self.summary_button.clicked.connect(self.summary)
         row = QHBoxLayout()
         row.addWidget(self.back_button)
@@ -481,7 +491,7 @@ class SparkWindow(QWidget):
 
     def _tab_changed(self, index: int) -> None:
         if 0 <= index < len(self.tab_keys):
-            self.hint.setText(HINTS[self.tab_keys[index]])
+            self._show_keys()
             if self.tab_keys[index] == "report":
                 self.report.setFocus()  # its keys work straight away, not in the link box
 
@@ -612,7 +622,22 @@ class SparkWindow(QWidget):
 
     def showEvent(self, event) -> None:
         self._fill_saved()
+        self._show_keys()
         super().showEvent(event)
+
+    def letters(self) -> dict[str, str]:
+        """The keys set in Settings > Keys, read each time: a change there applies at once."""
+        return keytable.letters(self.owner.cfg)
+
+    def _show_keys(self) -> None:
+        """The hint and the buttons that name a key, with the current keys."""
+        k = self.letters()
+        named = {name: k[f"spark_{name}"] for name in ("calls", "callers", "summary", "copy")}
+        index = self.tabs.currentIndex()
+        tab = self.tab_keys[index] if 0 <= index < len(self.tab_keys) else "overview"
+        self.hint.setText(HINTS[tab].format(**named))
+        self.copy_button.setText(f"Copy report for an LLM ({named['copy']})")
+        self.summary_button.setText(f"Summary ({named['summary']})")
 
     def _source(self) -> str:
         text = self.source.currentText().strip()
@@ -992,11 +1017,12 @@ class SparkWindow(QWidget):
         return model.key(index) if isinstance(model, CallTreeModel) and index.isValid() else None
 
     def _tree_key(self, text: str) -> bool:
+        k = self.letters()
         method = self._tree_method()
-        if text in ("t", "c") and method:
-            self._method_action(method, text == "c")
+        if text in (k["spark_calls"], k["spark_callers"]) and method:
+            self._method_action(method, text == k["spark_callers"])
             return True
-        if text == "y":
+        if text == k["spark_copy"]:
             self.copy()
             return True
         return False
@@ -1155,11 +1181,12 @@ class SparkWindow(QWidget):
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.dig()
             return True
+        k = self.letters()
         actions = {
-            "t": lambda: self.tree_report(False),
-            "c": lambda: self.tree_report(True),
-            "s": self.summary,
-            "y": self.copy,
+            k["spark_calls"]: lambda: self.tree_report(False),
+            k["spark_callers"]: lambda: self.tree_report(True),
+            k["spark_summary"]: self.summary,
+            k["spark_copy"]: self.copy,
         }
         if text in actions:
             actions[text]()
@@ -1173,10 +1200,10 @@ class SparkWindow(QWidget):
         """Keys no child took (focus on a button or the tabs): Esc steps back in the call tree, and on the
         text report its keys still work. Nothing here closes the window."""
         key = self.tab_keys[self.tabs.currentIndex()] if self.tabs.currentIndex() >= 0 else ""
-        plain = event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+        plain = _plain(event)
         if event.key() == Qt.Key.Key_Escape and key == "calls" and self.focus is not None:
             self.show_tree(None)
         elif event.key() == Qt.Key.Key_Escape and key == "report":
             self.back()
-        elif not (key == "report" and plain and self._key(event.key(), event.text().lower())):
+        elif not (key == "report" and plain and self._key(event.key(), event.text())):
             super().keyPressEvent(event)

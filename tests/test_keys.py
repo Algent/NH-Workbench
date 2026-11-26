@@ -18,6 +18,12 @@ def test_keys_may_be_shared_only_by_actions_never_on_the_same_tab():
     assert keys.clash_text({**letters, "fetch": "R"}, "fetch") is None  # letters keep their case
 
 
+def test_spark_keys_clash_only_among_themselves():
+    letters = keys.letters(config.Config(root=Path(".")))
+    assert keys.clash_text({**letters, "spark_copy": "t"}, "spark_copy") == "t is already spark: what the method calls"
+    assert keys.clash_text({**letters, "spark_copy": "f"}, "spark_copy") is None  # f is Fetch all, on other screens
+
+
 def test_shortcuts_compare_without_case():
     shortcuts = keys.shortcuts(config.Config(root=Path("."), shortcuts={"pull": "ctrl+shift+f"}))
     assert keys.clashes(shortcuts) == [("fetch", "pull")]

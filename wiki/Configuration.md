@@ -38,6 +38,10 @@ Settings, Keys in either UI, which refuses clashes. Actions: `fetch`, `fetch_one
 `cleanup`, `rescan`, `reload_prs`, `reload_org`, `clone`, `checkout`, `toggle_team`, `toggle_drafts`, `pr_filters`,
 `open_web`, `open_ide`, `filter`, `sort`, `extras` (Settings), `open_config`, `open_logs`, `quit`.
 
+The spark tool's keys clash only with each other: `spark_calls`, `spark_callers`, `spark_summary`, `spark_copy`
+(both UIs), and in the terminal UI also `spark_window`, `spark_thread`, `spark_save`, `spark_open`,
+`spark_reload`, `spark_compare`, `spark_leave`.
+
 ```toml
 [keys]
 fetch = "g"

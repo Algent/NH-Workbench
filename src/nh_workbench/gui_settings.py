@@ -110,7 +110,8 @@ class KeysDialog(QDialog):
 
         note = QLabel(
             "Key: on the list, shared with the terminal UI. Shortcut: anywhere in this window.\n"
-            "Actions never on the same tab may share a key, as Rescan and Search again do."
+            "Actions never on the same tab may share a key, as Rescan and Search again do.\n"
+            "spark: keys of the spark tool's text report and call tree, apart from the main ones."
         )
         note.setEnabled(False)
         defaults = QPushButton("Defaults")

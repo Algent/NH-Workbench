@@ -13,7 +13,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import spark
+from . import keys, spark
 from .config import cache_dir
 from .tui import MenuScreen, PromptScreen
 
@@ -26,8 +26,8 @@ RECENT = 20  # saved profiles listed
 INSTALL = "install-skill"  # id of the list entry that installs the skill
 HINTS = {
     "pick": "Paste a link or code and press Enter, or pick a saved profile. F2: install the AI skill.",
-    "read": "Enter on a method: what it calls (t), c: who calls it, Enter on a minute: only that minute,"
-    " Esc: step back, s: summary, y: copy for an LLM",
+    "read": "Enter on a method: what it calls ({spark_calls}), {spark_callers}: who calls it, Enter on a minute: only"
+    " that minute, Esc: step back, {spark_summary}: summary, {spark_copy}: copy for an LLM",  # keys from Settings
 }
 
 
@@ -63,18 +63,18 @@ class SparkScreen(Screen[None]):
 
     BINDINGS = [
         Binding("escape", "back", "Back"),
-        Binding("q", "leave", "Close"),
+        Binding("q", "leave", "Close", id="spark_leave"),
         Binding("enter", "dig", "Dig in", show=False),
-        Binding("o", "open", "Open other"),
-        Binding("s", "summary", "Summary"),
-        Binding("t", "tree(False)", "Calls"),
-        Binding("c", "tree(True)", "Callers"),
-        Binding("w", "window", "Minute"),
-        Binding("h", "thread", "Thread"),
-        Binding("y", "copy", "Copy"),
-        Binding("e", "save", "Save"),
-        Binding("r", "reload", "Download again"),
-        Binding("m", "compare", "Compare later"),
+        Binding("o", "open", "Open other", id="spark_open"),
+        Binding("s", "summary", "Summary", id="spark_summary"),
+        Binding("t", "tree(False)", "Calls", id="spark_calls"),
+        Binding("c", "tree(True)", "Callers", id="spark_callers"),
+        Binding("w", "window", "Minute", id="spark_window"),
+        Binding("h", "thread", "Thread", id="spark_thread"),
+        Binding("y", "copy", "Copy", id="spark_copy"),
+        Binding("e", "save", "Save", id="spark_save"),
+        Binding("r", "reload", "Download again", id="spark_reload"),
+        Binding("m", "compare", "Compare later", id="spark_compare"),
         Binding("f2", "install_skill", "Install AI skill"),  # a letter would go into the text box
     ]
 
@@ -115,7 +115,8 @@ class SparkScreen(Screen[None]):
         self.query_one("#spark-input", Input).display = picking
         self.query_one("#spark-recent", OptionList).display = picking
         self.query_one("#spark-report", TextArea).display = not picking and self._loaded()
-        self.query_one("#spark-hint", Static).update(Text(HINTS["pick" if picking else "read"], "dim"))
+        hint = HINTS["pick" if picking else "read"].format(**keys.letters(self.app.cfg))
+        self.query_one("#spark-hint", Static).update(Text(hint, "dim"))
         self.refresh_bindings()
 
     def _loaded(self) -> bool:

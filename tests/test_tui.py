@@ -966,6 +966,42 @@ def test_method_and_window_on_report_lines():
     assert window_on_line(" 41.8%  a.B.c") is None
 
 
+async def test_spark_screen_keys_come_from_settings(sandbox, offline, monkeypatch, tmp_path):
+    from test_spark import profile_bytes
+    from textual.widgets import Input
+
+    from nh_workbench import spark, tui_spark
+    from nh_workbench.tui_spark import SparkScreen
+
+    cache = tmp_path / "cache"
+    (cache / "spark").mkdir(parents=True)
+    (cache / "spark" / "Saved12345.sparkprofile").write_bytes(profile_bytes())
+    monkeypatch.setattr(spark, "cache_dir", lambda: cache)
+    monkeypatch.setattr(tui_spark, "cache_dir", lambda: cache)
+    sandbox.cfg.keys["spark_copy"] = "k"
+    copied = []
+    app = RepoApp(sandbox.cfg)
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(app, pilot)
+        screen = SparkScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one(Input).value = "Saved12345"
+        await pilot.press("enter")
+        for _ in range(100):
+            await pilot.pause()
+            if screen.text:
+                break
+        assert "k: copy for an LLM" in str(screen.query_one("#spark-hint").render())
+        await pilot.press("y")
+        await pilot.pause()
+        assert copied == []
+        await pilot.press("k")
+        await pilot.pause()
+        assert copied == [screen.text]
+
+
 async def test_spark_screen_heap_summary(sandbox, offline, monkeypatch, tmp_path):
     from test_spark import HEAP_A, HEAP_B, heap_bytes
     from textual.widgets import Input

@@ -40,7 +40,8 @@ shows. In the UI, `m` on a heap summary compares it with a later one.
 
 ## In the UI
 
-Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report:
+Tools tab, Enter on spark, then paste a link (saved profiles are listed). On the report (the letters are the
+defaults, changed in Settings > Keys):
 
 | Key | Action |
 |---|---|
