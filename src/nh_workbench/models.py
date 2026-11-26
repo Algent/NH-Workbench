@@ -55,6 +55,7 @@ class CloneJob:
     url: str
     dest: Path
     branch: str | None = None
+    private: bool = False  # clones only for accounts with access
 
 
 @dataclass(frozen=True)

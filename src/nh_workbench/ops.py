@@ -183,6 +183,8 @@ async def clone_all(
     async def one(job: CloneJob) -> None:
         res = await git.clone(job.url, job.dest, job.branch)
         why = None if res.ok else git.clone_error(res)
+        if why and job.private:
+            why += " (a private repo: your GitHub account needs access)"
         if why:
             failed.append((job, why))
         if on_done:

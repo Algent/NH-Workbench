@@ -883,7 +883,7 @@ async def test_extras_clone_protocol_and_clone_missing(sandbox, offline, monkeyp
 
         await open_tool(app, pilot, "clone")
         assert isinstance(app.screen, MenuScreen)
-        await pilot.press("p")  # the fake pack has one missing mod, o/m
+        await pilot.press("d")  # the fake daily has one missing mod, o/m
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("y")

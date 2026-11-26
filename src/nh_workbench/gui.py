@@ -94,6 +94,8 @@ from .views import (
     TOOLS,
     VIEWS,
     action_shown,
+    clone_choices,
+    clone_list,
     local_branch,
     mine_detail,
     org_detail,
@@ -1460,15 +1462,10 @@ class MainWindow(QMainWindow):
 
     def _tool_clone(self) -> None:
         protocol, org = self.cfg.clone_protocol, self.cfg.org
-        pack_jobs = pack.missing_jobs(self.pack.source.rows, self.cfg.root, protocol)
-        no_pack = None if pack_jobs else ("pack data not loaded" if not self.pack.source.rows else "none missing")
-        actions = [
-            ("p", "pack", f"Pack mods not checked out ({len(pack_jobs)})", no_pack),
-            ("o", "org", f"{org} repos not checked out, archived ones left out (asks GitHub)", None),
-        ]
+        actions, picks = clone_choices(self.cfg, self.wb.pack_info)
         choice = self._ask(f"Clone missing repos into {self.cfg.root} over {protocol.upper()}", actions)
-        if choice == "pack":
-            self._confirm_clone(pack_jobs, "pack mods")
+        if choice in picks:
+            self._confirm_clone(*picks[choice])
         elif choice == "org":
             self._then(self.wb.org_jobs(), lambda jobs: jobs is not None and self._confirm_clone(jobs, f"{org} repos"))
 
@@ -1477,7 +1474,7 @@ class MainWindow(QMainWindow):
             self._notify(f"Every one of the {what} is checked out already")
             return
         text = "Folders that already exist are skipped."
-        if self._confirm(f"Clone {len(jobs)} {what}?", text, "\n".join(j.name for j in jobs)):
+        if self._confirm(f"Clone {len(jobs)} {what}?", text, clone_list(jobs)):
             if self._start(f"Cloning {len(jobs)} {what}", []) is not None:
                 self.run(self.wb.clone_many(jobs))
 

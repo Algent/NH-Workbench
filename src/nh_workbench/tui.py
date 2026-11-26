@@ -32,7 +32,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from . import config, github, keys, ops, pack, proc, render, skill
+from . import config, github, keys, ops, proc, render, skill
 from .config import Config
 from .models import CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 from .views import (
@@ -51,6 +51,8 @@ from .views import (
     VIEWS,
     action_shown,
     cleanup_body,
+    clone_choices,
+    clone_list,
     local_branch,
     mine_detail,
     no_cleanup_note,
@@ -1150,21 +1152,14 @@ class RepoApp(App[None]):
         await self.wb.delete_jars(files)
 
     async def _clone_many_menu(self) -> None:
-        protocol = self.cfg.clone_protocol
-        pack_jobs = pack.missing_jobs(self.entries, self.cfg.root, protocol)
-        org = self.cfg.org
-        actions = [
-            ("p", "pack", f"Pack mods not checked out ({len(pack_jobs)})", None if pack_jobs else "none missing"),
-            ("o", "org", f"{org} repos not checked out, archived ones left out (asks GitHub)", None),
-        ]
-        if not self.entries:
-            actions[0] = (*actions[0][:3], "pack data not loaded")
+        protocol, org = self.cfg.clone_protocol, self.cfg.org
+        actions, picks = clone_choices(self.cfg, self.pack_info)
         info = Text(f"Into {self.cfg.root} over {protocol.upper()}. Folders that already exist are skipped.", "dim")
         choice = await self.push_screen_wait(MenuScreen(Text("Clone missing repos", "bold"), actions, info))
         if not choice:
             return
-        if choice == "pack":
-            jobs, what = pack_jobs, "pack mods"
+        if choice in picks:
+            jobs, what = picks[choice]
         else:
             found = await self.wb.org_jobs()
             if found is None:
@@ -1173,7 +1168,7 @@ class RepoApp(App[None]):
         if not jobs:
             self.notify(f"Every one of the {what} is checked out already")
             return
-        body = Text("\n".join(j.name for j in jobs))
+        body = Text(clone_list(jobs))
         if await self.push_screen_wait(ConfirmScreen(f"Clone {len(jobs)} {what}?", body)):
             self._clone_many(jobs)
 

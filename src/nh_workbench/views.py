@@ -14,7 +14,7 @@ from rich.text import Text
 
 from . import config, git, github, ops, pack, render, skill
 from .config import Config
-from .models import Branch, PackEntry, PackInfo, RepoState, ReviewItem
+from .models import Branch, CloneJob, PackEntry, PackInfo, RepoState, ReviewItem
 
 VIEWS: dict[str, tuple[str, Callable[[RepoState], bool] | None]] = {
     "all": ("All", lambda st: True),
@@ -60,9 +60,10 @@ TOOLS = [
     (
         "clone",
         "Clone missing repos",
-        "Clone the pack mods, or the org repos, you do not have yet",
+        "Clone the mods of the daily or of the release, or the org repos, you do not have yet",
         "Lists what is missing first and asks before cloning, a few at a time; folders that already exist are"
-        " skipped. Uses SSH or HTTPS as chosen in Settings.",
+        " skipped. Private repos clone only if your GitHub account can read them. Uses SSH or HTTPS as chosen"
+        " in Settings.",
     ),
     (
         "jars",
@@ -144,13 +145,46 @@ def org_shown(
     return github.filter_prs(items, filters, ops.local_slugs(states), pack.pack_slugs(entries))
 
 
+def clone_choices(
+    cfg: Config, info: PackInfo | None
+) -> tuple[list[tuple[str, str, str, str | None]], dict[str, tuple[list[CloneJob], str]]]:
+    """The Clone missing repos menu: its (key, id, label, reason it is unavailable), and the pack choices' jobs
+    with what the confirmation calls them. The org choice asks GitHub when picked."""
+    entries = info.entries if info else []
+    release = f"release {info.release}" if info and info.release else "the latest release"
+    picks = {
+        "daily": (pack.missing_jobs(entries, cfg.root, cfg.clone_protocol, "daily"), "mods of the daily"),
+        "release": (pack.missing_jobs(entries, cfg.root, cfg.clone_protocol, "release"), f"mods of {release}"),
+    }
+
+    def why(jobs: list[CloneJob]) -> str | None:
+        return "pack data not loaded" if not entries else None if jobs else "none missing"
+
+    daily_jobs, release_jobs = picks["daily"][0], picks["release"][0]
+    actions = [
+        ("d", "daily", f"Mods of the daily not checked out ({len(daily_jobs)})", why(daily_jobs)),
+        ("r", "release", f"Mods of {release} not checked out ({len(release_jobs)})", why(release_jobs)),
+        ("o", "org", f"{cfg.org} repos not checked out, archived ones left out (asks GitHub)", None),
+    ]
+    return actions, picks
+
+
+def clone_list(jobs: list[CloneJob]) -> str:
+    """The repos a confirmation lists, private ones marked: they clone only with access."""
+    return "\n".join(f"{j.name}  (private: needs access)" if j.private else j.name for j in jobs)
+
+
 def tool_status(key: str, cfg: Config, entries: list[PackEntry], states: Iterable[RepoState]) -> str:
     """The current state a tool of the Tools tab would act on, for the detail pane."""
     if key == "clone":
         if not entries:
             return "Pack data not loaded yet."
-        missing = pack.missing_jobs(entries, cfg.root, cfg.clone_protocol)
-        return f"Pack mods not checked out: {len(missing)}. Org repos are listed from GitHub when you pick them."
+        daily = pack.missing_jobs(entries, cfg.root, cfg.clone_protocol, "daily")
+        release = pack.missing_jobs(entries, cfg.root, cfg.clone_protocol, "release")
+        return (
+            f"Not checked out: {len(daily)} mods of the daily, {len(release)} of the latest release."
+            " Org repos are listed from GitHub when you pick them."
+        )
     if key == "jars":
         closed = sum(1 for e in entries if e.closed)
         return f"Closed-source mods in the pack: {closed}" if entries else "Pack data not loaded yet."

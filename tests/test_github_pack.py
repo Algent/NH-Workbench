@@ -546,11 +546,32 @@ def test_missing_pack_jobs(tmp_path):
         PackEntry("Closed", "external", "1", closed=True),
     ]
     jobs = pack.missing_jobs(entries, tmp_path, "https")
-    assert [(j.url, j.dest.name, j.branch) for j in jobs] == [
-        ("https://github.com/o/A.git", "A", None),
-        ("https://gitlab.com/x/B.git", "B", "1.7.10"),
+    assert [(j.url, j.dest.name, j.branch, j.private) for j in jobs] == [
+        ("https://github.com/o/A.git", "A", None, False),
+        ("https://gitlab.com/x/B.git", "B", "1.7.10", False),
+        ("https://github.com/o/P.git", "P", None, True),  # private: clones for accounts with access
     ]
     assert pack.missing_jobs(entries[:1], tmp_path)[0].url == "git@github.com:o/A.git"
+
+
+def test_clone_choices_split_daily_and_release(tmp_path):
+    from nh_workbench.config import Config
+    from nh_workbench.models import PackEntry, PackInfo
+    from nh_workbench.views import clone_choices, clone_list
+
+    entries = [
+        PackEntry("Both", "github", "1", repo="o/Both", release_version="0.9"),
+        PackEntry("New", "github", "1", repo="o/New"),  # in the daily only
+        PackEntry("Gone", "github", "", repo="o/Gone", release_version="2", private=True),  # in the release only
+    ]
+    cfg = Config(root=tmp_path)
+    actions, picks = clone_choices(cfg, PackInfo(entries=entries, release="2.8.4"))
+    assert [j.name for j in picks["daily"][0]] == ["o/Both", "o/New"]
+    assert [j.name for j in picks["release"][0]] == ["o/Both", "o/Gone"]
+    assert picks["release"][1] == "mods of release 2.8.4"
+    assert [a[1] for a in actions] == ["daily", "release", "org"] and all(a[3] is None for a in actions)
+    assert clone_list(picks["release"][0]) == "o/Both\no/Gone  (private: needs access)"
+    assert clone_choices(cfg, None)[0][0][3] == "pack data not loaded"
 
 
 async def test_org_repos_and_pr_head_use_the_protocol(monkeypatch):

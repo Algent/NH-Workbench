@@ -270,12 +270,18 @@ def clone_job(entry: PackEntry, root: Path, protocol: str = "ssh") -> CloneJob |
     if not entry.repo:
         return None
     url = git.clone_url(entry.host, entry.repo, protocol)
-    return CloneJob(entry.repo, url, root / entry.repo.partition("/")[2], entry.branch)
+    return CloneJob(entry.repo, url, root / entry.repo.partition("/")[2], entry.branch, entry.private)
 
 
-def missing_jobs(entries: Iterable[PackEntry], root: Path, protocol: str = "ssh") -> list[CloneJob]:
-    """Pack mods with a known, public source that are not checked out and whose folder is free."""
-    jobs = (clone_job(e, root, protocol) for e in entries if e.status == "missing" and not e.private)
+def missing_jobs(entries: Iterable[PackEntry], root: Path, protocol: str = "ssh", build: str = "") -> list[CloneJob]:
+    """Pack mods with a known source that are not checked out and whose folder is free. Private ones are in: they
+    clone for accounts with access. build: "daily" or "release" keeps the mods of that one."""
+
+    def wanted(e: PackEntry) -> bool:
+        in_build = {"daily": e.version, "release": e.release_version}.get(build, True)
+        return e.status == "missing" and bool(in_build)
+
+    jobs = (clone_job(e, root, protocol) for e in entries if wanted(e))
     by_dest = {j.dest: j for j in jobs if j and not j.dest.exists()}  # one repo can ship several mods
     return list(by_dest.values())
 
