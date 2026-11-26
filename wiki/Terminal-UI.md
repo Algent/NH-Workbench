@@ -27,6 +27,9 @@ on this computer.
 The panel at the bottom gives details on the selected line: branches and their PRs, the last commit, and the
 commits waiting on the release branch.
 
+While a fetch, pull, cleanup or clone runs, a bar above the keys shows how far it got, the time left and the
+last repo done. In the Result column, repos it is on spin and repos still to do say `waiting`.
+
 ## Keys
 
 | Key | Action |

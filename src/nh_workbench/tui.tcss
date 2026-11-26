@@ -11,6 +11,26 @@ Tab.group-start {
     height: 1fr;
 }
 
+#progress {
+    height: 1;
+    padding: 0 1;
+    background: $primary-muted;
+}
+
+#progress-label {
+    width: auto;
+    margin-right: 2;
+}
+
+#progress-bar {
+    width: auto;
+}
+
+#progress-info {
+    width: 1fr;
+    margin-left: 2;
+}
+
 #detail {
     height: auto;
     max-height: 18;
@@ -83,7 +103,7 @@ ConfirmScreen, MenuScreen {
 #spark-status {
     height: 1;
     padding: 0 1;
-    background: $boost;
+    background: $panel;
 }
 
 #spark-input {

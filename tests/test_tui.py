@@ -494,6 +494,43 @@ async def test_all_prs_tab_loads_only_when_opened(sandbox, offline):
         assert len(org_searches) == 2
 
 
+async def test_batch_progress_strip_and_marks(sandbox, offline):
+    import asyncio
+
+    from textual.widgets import ProgressBar
+
+    from nh_workbench import ops
+
+    other = sandbox.root / "second"
+    sandbox.git(sandbox.root, "clone", str(sandbox.origin), str(other))
+    app = RepoApp(sandbox.cfg)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settle(app, pilot)
+        strip, table = app.query_one("#progress"), app.query_one("#repos")
+        assert not strip.display
+        first, second = str(sandbox.work), str(other)
+        gate = asyncio.Event()
+
+        async def slow(path):
+            if str(path) == second:
+                await gate.wait()
+            return await ops.scan_repo(app.cfg, path)
+
+        app.cfg.concurrency = 1  # one at a time: the second waits for its turn
+        job = asyncio.create_task(app.wb.batch("Fetching", slow, [other, sandbox.work]))
+        await pilot.pause(0.3)
+        assert strip.display and app.query_one(ProgressBar).total == 2
+        assert table.get_cell(second, "Result").plain.endswith("fetching")
+        assert table.get_cell(first, "Result").plain == "· waiting"
+
+        gate.set()
+        await job
+        await pilot.pause(0.3)
+        assert not strip.display and not app.marks
+        assert "fetching" not in table.get_cell(second, "Result").plain
+        assert table.get_cell(first, "Result").plain != "· waiting"
+
+
 async def test_repo_menu_opens_a_terminal(sandbox, offline, monkeypatch):
     opened = []
     monkeypatch.setattr(proc, "open_terminal", opened.append)

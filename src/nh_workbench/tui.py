@@ -17,7 +17,19 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, OptionList, Static, Tab, Tabs
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    ProgressBar,
+    Static,
+    Tab,
+    Tabs,
+)
 from textual.widgets.option_list import Option
 
 from . import config, github, keys, ops, pack, proc, render, skill
@@ -58,6 +70,14 @@ from .views import (
     tool_status,
 )
 from .workbench import Workbench
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+RESULT = REPO_COLUMNS.index("Result")
+
+
+def duration(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
 
 
 class CloseButton(Static):
@@ -319,6 +339,13 @@ class RepoApp(App[None]):
         self.view = "all"
         self.needle = ""
         self.pack_labelled: PackInfo | None = None  # the pack data the Pack tab's headers name
+        # The batch in progress, for the strip above the footer and the marks in the Result column.
+        self.progress_label = ""
+        self.progress_count = (0, 0)  # done, total
+        self.progress_started = 0.0
+        self.last_done = ""  # the repo the batch finished last
+        self.marks: dict[str, str] = {}  # repo -> the mark its Result cell shows now
+        self.spin = 0
 
     # The data lives in the Workbench, which the desktop UI uses too.
     @property
@@ -378,6 +405,10 @@ class RepoApp(App[None]):
         yield DataTable(id="org", cursor_type="row", zebra_stripes=True)
         yield DataTable(id="tools", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
+        with Horizontal(id="progress"):
+            yield Static(id="progress-label")
+            yield ProgressBar(id="progress-bar", show_eta=False)
+            yield Static(id="progress-info")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -395,6 +426,8 @@ class RepoApp(App[None]):
             for column in columns:
                 table.add_column(column, key=column)
         self.query_one("#filter").display = False
+        self.query_one("#progress").display = False
+        self.ticker = self.set_interval(0.1, self._tick, pause=True)
         for table_id in TABLES.values():
             self.query_one(table_id).display = False
         self.query_one("#repos").focus()
@@ -483,10 +516,72 @@ class RepoApp(App[None]):
         self._refresh()
 
     def _on_progress(self, label: str, done: int, total: int) -> None:
+        strip = self.query_one("#progress")
         if label:
-            self.sub_title = f"{label} {done}/{total}"
+            if not done or label != self.progress_label:  # a batch starts; a cleanup runs two in turn
+                self.progress_label, self.progress_started, self.last_done = label, time.monotonic(), ""
+                strip.display = True
+                self.ticker.resume()
+            self.progress_count = (done, total)
+            self.query_one("#progress-label", Static).update(Text(label, "bold"))
+            self.query_one(ProgressBar).update(total=max(total, 1), progress=done)
+            self._show_progress()
         else:  # the job is over: back to the summary
+            strip.display = False
+            self.ticker.pause()
+            self.progress_label = ""
+            self._mark_rows()
             self._refresh()
+
+    def _tick(self) -> None:
+        self.spin += 1
+        self._show_progress()
+        self._mark_rows()
+
+    def _show_progress(self) -> None:
+        done, total = self.progress_count
+        elapsed = time.monotonic() - self.progress_started
+        rest = [duration(elapsed)]
+        if 0 < done < total:
+            rest.append(f"~{duration(elapsed / done * (total - done))} left")
+        if self.last_done:
+            rest.append(self.last_done)
+        info = Text.assemble((f"{done}/{total}", "bold"), ("  ·  " + "  ·  ".join(rest), "dim"))
+        self.query_one("#progress-info", Static).update(info)
+
+    def _mark(self, key: str) -> Text | None:
+        """What the Result cell of a repo shows while the batch has yet to finish it."""
+        if key in self.wb.working:
+            return Text(f"{SPINNER[self.spin % len(SPINNER)]} {self.progress_label.lower()}", "cyan")
+        if key in self.wb.waiting:
+            return Text("· waiting", "dim")
+        return None
+
+    def _cells(self, st: RepoState) -> list[Text]:
+        cells = repo_cells(st)
+        key = str(st.path)
+        mark = self._mark(key)
+        if mark:
+            cells[RESULT] = mark
+            self.marks[key] = mark.plain
+        else:
+            self.marks.pop(key, None)
+        return cells
+
+    def _mark_rows(self) -> None:
+        """Bring the marks up to date: started repos spin, finished ones get their result back."""
+        table = self.query_one("#repos", DataTable)
+        for key in set(self.marks) | self.wb.working | self.wb.waiting:
+            mark = self._mark(key)
+            if (mark.plain if mark else None) == self.marks.get(key):
+                continue
+            st = self.states.get(key)
+            if key in table.rows and st:
+                table.update_cell(key, "Result", mark or render.note_text(st.note), update_width=True)
+            if mark:
+                self.marks[key] = mark.plain
+            else:
+                self.marks.pop(key, None)
 
     # --- rendering ------------------------------------------------------------
 
@@ -539,8 +634,10 @@ class RepoApp(App[None]):
     def _update_row(self, st: RepoState) -> None:
         table = self.query_one("#repos", DataTable)
         key = str(st.path)
+        if self.progress_label:
+            self.last_done = st.name
         if key in table.rows:
-            for column, cell in zip(REPO_COLUMNS, repo_cells(st), strict=True):
+            for column, cell in zip(REPO_COLUMNS, self._cells(st), strict=True):
                 table.update_cell(key, column, cell, update_width=True)
 
     def _refresh(self) -> None:
@@ -580,19 +677,18 @@ class RepoApp(App[None]):
         else:
             wanted = VIEWS[self.view][1]
             shown = [st for st in states if wanted(st) and self.needle in st.name.lower()]
-            self._fill(self.query_one("#repos", DataTable), [(str(st.path), repo_cells(st)) for st in shown])
-        if not self.busy:
-            if self.view in PR_VIEWS:
-                order = "" if self.pr_sort == "updated" else f"  ·  PRs sorted by {PR_SORTS[self.pr_sort][0]}"
-                if self.view == "org" and self.org:
-                    when = datetime.fromtimestamp(self.org.fetched, UTC) if self.org.fetched else None
-                    drafts = "with drafts" if self.org_drafts else "no drafts"
-                    order += f"  ·  {self.cfg.org} PRs as of {render.ago(when) or 'now'} ago, {drafts}"
-                    only = [github.PR_FILTERS[f] for f in self.cfg.pr_filters if f in github.PR_FILTERS]
-                    order += f", only {' and '.join(only)}" if only else ""
-            else:
-                order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
-            self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
+            self._fill(self.query_one("#repos", DataTable), [(str(st.path), self._cells(st)) for st in shown])
+        if self.view in PR_VIEWS:
+            order = "" if self.pr_sort == "updated" else f"  ·  PRs sorted by {PR_SORTS[self.pr_sort][0]}"
+            if self.view == "org" and self.org:
+                when = datetime.fromtimestamp(self.org.fetched, UTC) if self.org.fetched else None
+                drafts = "with drafts" if self.org_drafts else "no drafts"
+                order += f"  ·  {self.cfg.org} PRs as of {render.ago(when) or 'now'} ago, {drafts}"
+                only = [github.PR_FILTERS[f] for f in self.cfg.pr_filters if f in github.PR_FILTERS]
+                order += f", only {' and '.join(only)}" if only else ""
+        else:
+            order = "" if self.sort == "name" else f"  ·  sorted by {SORTS[self.sort][0]}"
+        self.sub_title = f"{self.cfg.root}  ·  {render.summary(states).plain}{order}"
         self._update_detail()
 
     def _pr_items(self, items: list[ReviewItem]) -> list[ReviewItem]:

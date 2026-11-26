@@ -30,8 +30,8 @@ class Workbench:
         name_of: Callable[[str], str] | None = None,
     ) -> None:
         """on_repo: one repo was scanned. on_change: the lists changed (repos, pack mods, PR tab -> its PRs).
-        on_progress: label, done, total; an empty label when the job is over. name_of: how a message names an
-        action of keys.ACTIONS, with its key, as in "Settings (x)"."""
+        on_progress: label, done, total (done is 0 as a batch starts); an empty label when the job is over.
+        name_of: how a message names an action of keys.ACTIONS, with its key, as in "Settings (x)"."""
         self.cfg = cfg
         self.on_repo, self.on_change, self.on_progress, self.notify = on_repo, on_change, on_progress, notify
         self.name_of = name_of or (lambda action: action)
@@ -45,6 +45,8 @@ class Workbench:
         self.org_searching = False
         self.busy = ""  # the batch running now; one at a time
         self.depth = 0  # steps of the job in progress: a cleanup scans, a clone too
+        self.waiting: set[str] = set()  # repos (paths) the batch has yet to start on
+        self.working: set[str] = set()  # repos it is on now
         self.tool: RepoState | None = None  # the tool's own checkout, once fetched at start
         self.tool_updated = False
 
@@ -116,9 +118,22 @@ class Workbench:
                     self.on_repo(st)
                     self.on_progress(label, done, len(paths))
 
-                await ops.run_all(paths, worker, self.cfg.concurrency, on_done)
+                async def tracked(path: Path) -> RepoState:
+                    key = str(path)
+                    self.waiting.discard(key)
+                    self.working.add(key)
+                    try:
+                        return await worker(path)
+                    finally:
+                        self.working.discard(key)
+
+                self.waiting = {str(p) for p in paths}
+                self.on_progress(label, 0, len(paths))
+                await ops.run_all(paths, tracked, self.cfg.concurrency, on_done)
             finally:
                 self.busy = ""
+                self.waiting.clear()
+                self.working.clear()
             await self._relink(paths)
             self._changed()
             return True
@@ -292,6 +307,7 @@ class Workbench:
                 self.on_progress("Cloning", done, len(jobs))
 
             try:
+                self.on_progress("Cloning", 0, len(jobs))
                 failed = await ops.clone_all(jobs, min(4, self.cfg.concurrency), on_done)
             finally:
                 self.busy = ""
