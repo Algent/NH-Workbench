@@ -13,10 +13,18 @@ nh-workbench tools spark callers XXXXXXXXXX ASMEventHandler.invoke  # who calls 
 ## What the report shows
 
 The summary has the platform, how the profile was recorded (every tick, or only ticks over N ms, which
-changes how to read the percentages), TPS, MSPT, memory, GC, CPU and JVM arguments, the worst minutes, then
-for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
+changes how to read the percentages), TPS, MSPT, uptime, memory (heap used, allocated and max, the old
+generation after the last GC, GC during the profile and since start), CPU, swap, disk, Java and JVM arguments.
+Then come the findings, the worst minutes, and for the server thread: the methods with the most own time and total time, own time per mod, and the hot call
 paths, with `[Mod]` where a mod's code starts. Entities are listed by type, by world, and the busiest chunks
 with their block coordinates.
+
+Findings are rules of thumb for GTNH, `[warn]` for problems and `[info]` for notes: frozen ticks, low TPS,
+long GC pauses, a small or nearly full heap, 32-bit Java, few CPU threads, swap in use, a full disk, a mod
+taking a large share, and an entity pile-up in one chunk. They also show where the server thread's time goes
+(entities, tile entities, world generation, chunk loading, saving, backups, network) and how long it waits
+between ticks, which is its headroom. Work set off inside other work counts for the inner kind, so world
+generation set off by a packet counts as world generation.
 
 Heap summaries (`/spark heapsummary`) read the same way: `summary` lists the biggest classes in memory and
 the total per mod, and `compare EARLIER LATER` shows what grew between two of them, which is how a leak

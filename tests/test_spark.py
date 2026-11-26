@@ -91,10 +91,13 @@ def profile_bytes() -> bytes:
     platform = num(1, 0) + blob(2, "Forge") + blob(3, "10.13.4.1614") + blob(4, "1.7.10") + num(7, 2)
     stats = blob(4, dbl(1, 14.7) + dbl(2, 18.7) + dbl(3, 19.5))
     stats += blob(5, blob(1, dbl(1, 20) + dbl(2, 900) + dbl(4, 16.5) + dbl(5, 35.2)))
-    stats += blob(1, blob(1, num(1, 1_600_000_000) + num(2, 3_000_000_000))) + num(7, 2)
+    old_gen = blob(1, "G1 Old Gen") + blob(3, num(1, 3_000_000_000))
+    heap = num(1, 1_600_000_000) + num(2, 3_000_000_000) + num(4, 3_500_000_000)
+    stats += blob(1, blob(1, heap) + blob(3, old_gen)) + num(7, 2) + num(3, 1_800_000)
     stats += blob(8, world_stats())
     java = blob(1, "Adoptium") + blob(2, "25") + blob(4, "-Xmx8G --add-opens=java.base/java.io=ALL-UNNAMED")
-    system = blob(6, java)
+    full_gc = blob(3, blob(1, "MarkSweepCompact") + blob(2, num(1, 7) + dbl(2, 2858.0)))
+    system = blob(1, num(1, 2)) + full_gc + blob(6, java) + blob(9, blob(1, "OpenJDK 32-Bit Server VM"))
     creator = num(1, 1) + blob(2, "SomePlayer") + blob(3, "d96247b3-0000")
     aggregator = num(1, 1) + num(3, 200_000) + num(4, 34)
     meta = blob(1, creator) + num(2, START) + num(3, 4000) + blob(5, aggregator) + blob(7, platform)
@@ -269,6 +272,50 @@ def test_entities_by_world_and_chunk(profile):
     text = spark.summary(profile, "abc")
     assert "## Entities: 17" in text and "By world: Overworld 17" in text and "Nether" not in text
     assert "   15  Overworld  x -120 z 104      Cow 12, Item 3" in text
+
+
+def test_memory_and_machine_details(profile):
+    assert (profile.heap_max, profile.old_gen_live, profile.uptime_ms) == (3_500_000_000, 3_000_000_000, 1_800_000)
+    assert profile.gc_since_start["MarkSweepCompact"].collections == 7 and profile.engine == "java"
+    text = spark.summary(profile, "abc")
+    assert "heap 1.6 GB used, 3.0 GB allocated, 3.5 GB max; old gen after the last GC 3.0 GB" in text
+    assert "GC since start MarkSweepCompact 7x avg 2.9 s" in text and "up 30m00s" in text
+    assert "Java Adoptium 25 (OpenJDK 32-Bit Server VM)" in text
+
+
+def test_findings(profile):
+    text = spark.summary(profile, "abc")
+    findings = text[text.index("## Findings") : text.index("## Worst minutes")]
+    for expected in (
+        "[warn] GC MarkSweepCompact: 7 collections since start, 2.9 s each on average",
+        "[warn] Max heap 3.5 GB: GTNH usually needs 6 GB or more",
+        "[warn] After the last GC 3.0 GB of 3.5 GB was still in use",
+        "[warn] 32-bit Java",
+        "[warn] Only 2 CPU thread(s)",
+    ):
+        assert expected in findings
+    assert "froze" not in findings  # the slowest tick took 900 ms
+
+
+def test_where_the_tick_goes(monkeypatch):
+    monkeypatch.setattr(spark, "mod_packages", lambda: {"galaxyspace": "GalaxySpace", "serverutils": "ServerUtilities"})
+    frames = [
+        spark.Frame("net.minecraft.server.MinecraftServer", "run", 0, [20], [1, 3, 5]),
+        spark.Frame("net.minecraft.network.NetworkSystem", "networkTick", 0, [8], [2]),
+        spark.Frame("galaxyspace.Gen", "provideChunk", 0, [6], []),  # set off by a packet: world generation
+        spark.Frame("java.lang.Thread", "sleep", 0, [2], []),  # between ticks
+        spark.Frame("java.lang.Thread", "sleep", 0, [3], []),  # waiting for the backup's chunk writes
+        spark.Frame("serverutils.task.backup.BackupTask", "execute", 0, [4], [4]),
+    ]
+    p = spark.Profile(threads=[spark.Thread("Server thread", frames, [0], [20])])
+    view = spark.View(p, p.threads[0])
+    parts = {label: total for label, (total, _) in spark.tick_parts(view).items()}
+    assert parts == {"network": 2, "world generation": 6, "waiting between ticks": 2, "backups": 4}
+    found = [f"[{f.level}] {f.text}" for f in spark.findings(p, view)]
+    assert "[warn] World generation takes 30% of the server thread's time (GalaxySpace 30.0%)" in found[0]
+    assert "[warn] Backups take 20% of the server thread's time" in found
+    assert not any(f.startswith("[warn] GalaxySpace") for f in found)  # already named for world generation
+    assert "[info] The server thread waits 10.0% of the time between ticks (headroom)" in found
 
 
 HEAP_A = [("[B", 1000, 50_000_000), ("a.Machine", 10, 1_000), ("java.lang.String", 500, 20_000_000)]

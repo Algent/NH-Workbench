@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cache
@@ -202,8 +202,15 @@ class Profile:
     tps: tuple[float, float, float] = (0, 0, 0)
     mspt: dict[str, float] = field(default_factory=dict)  # last 1m: mean, median, p95, max
     heap_used: int = 0
-    heap_total: int = 0
-    gc: dict[str, Gc] = field(default_factory=dict)
+    heap_total: int = 0  # committed
+    heap_max: int = 0
+    old_gen_live: int = 0  # the old generation right after the last GC: roughly what memory is really needed
+    non_heap: int = 0
+    gc: dict[str, Gc] = field(default_factory=dict)  # during the profile
+    gc_since_start: dict[str, Gc] = field(default_factory=dict)
+    uptime_ms: int = 0
+    client: bool = False
+    engine: str = ""  # "async" (async-profiler) or "java" (spark's own sampler)
     players: int = 0
     entities: int = 0
     entity_counts: dict[str, int] = field(default_factory=dict)
@@ -215,8 +222,13 @@ class Profile:
     cpu_system: tuple[float, float] = (0, 0)
     ram_used: int = 0
     ram_total: int = 0
+    swap_used: int = 0
+    swap_total: int = 0
+    disk_used: int = 0
+    disk_total: int = 0
     os: str = ""
     java: str = ""
+    jvm: str = ""  # e.g. "OpenJDK 64-Bit Server VM"
     vm_args: str = ""
     mods: dict[str, str] = field(default_factory=dict)  # name -> version, when the platform reports them
     class_sources: dict[str, str] = field(default_factory=dict)  # class -> mod, when the platform reports them
@@ -246,6 +258,7 @@ class Heap:
     spark_version: int = 0
     heap_used: int = 0
     heap_total: int = 0
+    heap_max: int = 0
     gc: dict[str, Gc] = field(default_factory=dict)
     players: int = 0
     entries: list[HeapEntry] = field(default_factory=list)
@@ -267,6 +280,17 @@ def _entity_counts(entries: list["_Msg"]) -> dict[str, int]:
             name = "Player" if m[1] in ("EntityPlayerMP", "EntityPlayer") else m[1]
         out[name] += e.int(2)
     return dict(out)
+
+
+def _gcs(m: "_Msg", n: int) -> dict[str, Gc]:
+    return {name: Gc(g.int(1), g.double(2), g.double(3)) for name, g in m.msg_map(n).items()}
+
+
+def _old_gen_live(memory: "_Msg") -> int:
+    for pool in memory.msgs(3):
+        if any(word in pool.str(1) for word in ("Old Gen", "Tenured")):
+            return pool.msg(3).int(1)
+    return 0
 
 
 def parse(data: bytes) -> Profile:
@@ -302,7 +326,14 @@ def parse(data: bytes) -> Profile:
         mspt={k: mspt.double(n) for k, n in (("mean", 1), ("max", 2), ("median", 4), ("p95", 5))},
         heap_used=stats.msg(1).msg(1).int(1),
         heap_total=stats.msg(1).msg(1).int(2),
-        gc={name: Gc(g.int(1), g.double(2), g.double(3)) for name, g in stats.msg_map(2).items()},
+        heap_max=stats.msg(1).msg(1).int(4),
+        old_gen_live=_old_gen_live(stats.msg(1)),
+        non_heap=stats.msg(1).msg(2).int(1),
+        gc=_gcs(stats, 2),
+        gc_since_start=_gcs(system, 3),
+        uptime_ms=stats.int(3) or system.int(7),
+        client=platform.int(1) == 1,
+        engine="async" if meta.int(16) == 1 else "java",
         players=stats.int(7),
         entities=world.int(1),
         entity_counts=_entity_counts(world.msgs(2)),
@@ -319,6 +350,11 @@ def parse(data: bytes) -> Profile:
         cpu_system=(cpu.msg(3).double(1), cpu.msg(3).double(2)),
         ram_used=system.msg(2).msg(1).int(1),
         ram_total=system.msg(2).msg(1).int(2),
+        swap_used=system.msg(2).msg(2).int(1),
+        swap_total=system.msg(2).msg(2).int(2),
+        disk_used=system.msg(4).int(1),
+        disk_total=system.msg(4).int(2),
+        jvm=system.msg(9).str(1),
         os=" ".join(x for x in (osm.str(2), osm.str(3), osm.str(1)) if x),
         java=" ".join(x for x in (java.str(1), java.str(2)) if x),
         vm_args=java.str(4),
@@ -374,7 +410,8 @@ def parse_heap(data: bytes) -> Heap:
         spark_version=platform.int(7),
         heap_used=stats.msg(1).msg(1).int(1),
         heap_total=stats.msg(1).msg(1).int(2),
-        gc={name: Gc(g.int(1), g.double(2), g.double(3)) for name, g in stats.msg_map(2).items()},
+        heap_max=stats.msg(1).msg(1).int(4),
+        gc=_gcs(stats, 2),
         players=stats.int(7),
         entries=[HeapEntry(_class_name(e.str(4)), e.int(2), e.int(3)) for e in root.msgs(2)],
     )
@@ -715,6 +752,14 @@ def _span(ms: float) -> str:
     return f"{s // 60}m{s % 60:02d}s" if s >= 60 else f"{ms / 1000:.1f}s"
 
 
+def _ms(ms: float) -> str:
+    return f"{ms / 1000:.1f} s" if ms >= 1000 else f"{ms:.0f} ms"
+
+
+def _gc_text(gcs: dict[str, Gc]) -> str:
+    return ", ".join(f"{n} {g.collections}x avg {_ms(g.avg_ms)}" for n, g in gcs.items() if g.collections)
+
+
 def amount(profile: Profile, value: float) -> str:
     return _bytes(value) if profile.allocation else _span(value)
 
@@ -732,6 +777,7 @@ def header(p: Profile, name: str) -> list[str]:
     mc = f", Minecraft {p.minecraft}" if p.minecraft else ""
     lines = [f"# spark profile {name}: {p.platform} {p.platform_version}{mc}, spark v{p.spark_version}"]
     what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
+    what += {"async": " with async-profiler", "java": " with spark's Java sampler"}.get(p.engine, "")
     names = {"mcp": "; method names from MCP", "raw": "; func_ names left as is (MCP mappings unavailable)"}
     lines.append(f"Recorded {when} for {_span(p.duration_ms)}, sampling {what}{names.get(p.names, '')}")
     if p.ticked:
@@ -751,13 +797,21 @@ def header(p: Profile, name: str) -> list[str]:
         )
         if p.entities:
             server += f"; entities {p.entities}"
+        if p.uptime_ms:
+            server += f"; up {_span(p.uptime_ms)}"
         lines.append(server)
     memory = []
     if p.heap_total:
-        memory.append(f"heap {_bytes(p.heap_used)} of {_bytes(p.heap_total)}")
-    gcs = [f"{n} {g.collections}x avg {g.avg_ms:.0f} ms" for n, g in p.gc.items() if g.collections]
-    if gcs:
-        memory.append("GC " + ", ".join(gcs))
+        heap = f"heap {_bytes(p.heap_used)} used, {_bytes(p.heap_total)} allocated"
+        memory.append(heap + (f", {_bytes(p.heap_max)} max" if p.heap_max else ""))
+    if p.old_gen_live:
+        memory.append(f"old gen after the last GC {_bytes(p.old_gen_live)}")
+    if p.non_heap:
+        memory.append(f"non-heap {_bytes(p.non_heap)}")
+    if _gc_text(p.gc):
+        memory.append(f"GC during the profile {_gc_text(p.gc)}")
+    if _gc_text(p.gc_since_start):
+        memory.append(f"GC since start {_gc_text(p.gc_since_start)}")
     if memory:
         lines.append(f"Memory: {'; '.join(memory)}")
     machine = []
@@ -768,7 +822,12 @@ def header(p: Profile, name: str) -> list[str]:
         )
     if p.ram_total:
         machine.append(f"RAM {_bytes(p.ram_used)} of {_bytes(p.ram_total)}")
-    machine += [x for x in (p.os, f"Java {p.java}" if p.java else "") if x]
+    if p.swap_used:
+        machine.append(f"swap {_bytes(p.swap_used)} of {_bytes(p.swap_total)} in use")
+    if p.disk_total:
+        machine.append(f"disk {_bytes(p.disk_used)} of {_bytes(p.disk_total)}")
+    java = f"Java {p.java}" + (f" ({p.jvm})" if p.jvm else "") if p.java else ""
+    machine += [x for x in (p.os, java) if x]
     if machine:
         lines.append(f"Machine: {'; '.join(machine)}")
     if p.vm_args:
@@ -790,11 +849,12 @@ def timeline(p: Profile, worst: int = 5) -> list[str]:
     columns = [("players", "players"), ("entities", "entities"), ("tile_entities", "tiles"), ("chunks", "chunks")]
     columns = [(attr, title) for attr, title in columns if any(getattr(w, attr) >= 0 for w in shown)]
     width = max(len(str(w.id)) for w in shown)
-    head = f"{'id':<{width}}  {'at':>6}  {'ticks':>5}  {'TPS':>4}  {'median ms':>9}  {'max ms':>6}"
+    head = f"{'id':<{width}}  {'at':>6}  {'ticks':>5}  {'TPS':>4}  {'median ms':>9}  {'max ms':>6}  {'CPU':>4}"
     lines.append(head + "".join(f"  {title:>8}" for _, title in columns))
     for w in shown:
         at = _span(w.start - p.start) if w.start and p.start else "?"
         row = f"{w.id:<{width}}  {at:>6}  {w.ticks:5}  {w.tps:4.1f}  {w.mspt_median:9.1f}  {w.mspt_max:6.0f}"
+        row += f"  {100 * w.cpu_process:3.0f}%"
         counts = (getattr(w, attr) for attr, _ in columns)
         lines.append(row + "".join(f"  {str(n) if n >= 0 else '?':>8}" for n in counts))
     return lines
@@ -950,11 +1010,195 @@ def pick_thread(p: Profile, name: str | None) -> Thread:
     return found[0]
 
 
+@dataclass
+class Finding:
+    level: str  # "warn" or "info"
+    text: str
+
+
+def _is_worldgen(f: Frame) -> bool:
+    if f.key.endswith(("ChunkProviderServer.populate", "GameRegistry.generateWorld")):
+        return True
+    return f.method in ("provideChunk", "func_73154_d") and not f.cls.endswith(
+        ("ChunkProviderServer", "ChunkProviderClient")
+    )
+
+
+# Where the main thread's time goes, by the kind of frame its time is under (MCP names, else the raw ones).
+# A frame inside another kind counts for the inner one: world generation set off by a packet is world generation.
+_IDLE = "waiting between ticks"
+_TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
+    ("entities", lambda f: f.method in ("updateEntityWithOptionalForce", "func_72866_a")),
+    (
+        "tile entities",
+        lambda f: f.method in ("updateEntity", "func_145845_h") and not f.cls.startswith("net.minecraft.world.World"),
+    ),
+    ("world generation", _is_worldgen),
+    ("chunk loading from disk", lambda f: f.key.endswith("AnvilChunkLoader.loadChunk")),
+    ("world saving", lambda f: f.key.endswith(("MinecraftServer.saveAllWorlds", "WorldServer.saveAllChunks"))),
+    ("backups", lambda f: "backup" in f.cls.lower()),
+    ("network", lambda f: f.key.endswith("NetworkSystem.networkTick")),
+    (_IDLE, lambda f: f.key.startswith("java.lang.Thread.sleep")),
+]
+
+
+def tick_parts(view: View) -> dict[str, tuple[float, dict[str, float]]]:
+    """Per kind of work: its time, and that time per mod (mods only)."""
+    frames, owners = view.thread.frames, view.owners()
+    out: dict[str, tuple[float, dict[str, float]]] = {}
+    stack: list[tuple[int, str | None]] = [(r, None) for r in view.thread.roots]
+    while stack:
+        i, label = stack.pop()
+        f = frames[i]
+        found = next((name for name, wanted in _TICK_PARTS if wanted(f)), None)
+        if found and (found != _IDLE or label is None):  # a sleep inside other work is part of that work
+            label = found
+        if label:
+            total, by_mod = out.setdefault(label, (0.0, defaultdict(float)))
+            own = view.own(i)
+            out[label] = (total + own, by_mod)
+            if owners[i] not in _NOT_MODS:
+                by_mod[owners[i]] += own
+        stack += [(c, label) for c in f.children]
+    return out
+
+
+def _mod_name(mod: str) -> str:
+    return mod.replace(" (package)", "?")
+
+
+def _top_mods(by_mod: dict[str, float], whole: float, n: int = 3) -> str:
+    top = [(m, v) for m, v in sorted(by_mod.items(), key=lambda kv: -kv[1])[:n] if v >= whole * 0.01]
+    return ", ".join(f"{_mod_name(m)} {_pct(v, whole).strip()}" for m, v in top)
+
+
+def _pauses(name: str) -> bool:
+    """A collector whose average time is a pause of the whole game, not a concurrent cycle."""
+    return not any(word in name for word in ("Concurrent", "Cycles"))
+
+
+def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -> None:
+    whole, thread = view.whole, view.thread.name.lower()
+    of = "of the slow ticks" if p.ticked else f"of the {thread}'s time"
+    parts = tick_parts(view)
+    shown = []
+    for label, _ in _TICK_PARTS:
+        total, by_mod = parts.get(label, (0.0, {}))
+        if label == _IDLE or total < whole * 0.01:
+            continue
+        mods = _top_mods(by_mod, whole)
+        shown.append(f"{label} {_pct(total, whole).strip()}" + (f" ({mods})" if mods else ""))
+        share = f"{100 * total / whole:.0f}% {of}"
+        if label == "world generation" and total >= whole * 0.1:
+            by = f" ({mods})" if mods else ""
+            warn.append(f"World generation takes {share}{by}: pregenerate the world, or the dimension being explored")
+        elif label == "tile entities" and total >= whole * 0.3:
+            warn.append(f"Tile entities (machines, pipes, cables) take {share}: {mods or '?'}")
+        elif label == "entities" and total >= whole * 0.3:
+            most = f"; most: {_counts(p.entity_counts, 3)}" if p.entity_counts else ""
+            warn.append(f"Entities take {share} ({p.entities} entities{most})")
+        elif label == "backups" and total >= whole * 0.05:
+            warn.append(f"Backups take {share}")
+        elif label == "world saving" and total >= whole * 0.05:
+            warn.append(f"World saving takes {share}")
+        elif label == "chunk loading from disk" and total >= whole * 0.1:
+            warn.append(f"Loading chunks from disk takes {share}: a slow disk, or players flying fast")
+    for mod, value in sorted(view.own_by_package().items(), key=lambda kv: -kv[1]):
+        if value < whole * 0.15:
+            break
+        named = any(f"{_mod_name(mod)} " in w for w in warn)  # already blamed above
+        if mod not in _NOT_MODS and not named:
+            warn.append(f"{_mod_name(mod)} takes {_pct(value, whole).strip()} {of} in its own code")
+    if thread not in ("server thread", "client thread"):
+        return
+    if shown:
+        info.append(f"Where the {thread} goes: {'; '.join(shown)}")
+    if not p.ticked:  # slow ticks have no time between ticks to measure
+        idle = parts.get(_IDLE, (0.0, {}))[0]
+        if idle < whole * 0.05:
+            warn.append(f"The {thread} is busy {100 - 100 * idle / whole:.0f}% of the time: no headroom left")
+        else:
+            info.append(f"The {thread} waits {_pct(idle, whole).strip()} of the time between ticks (headroom)")
+
+
+def findings(p: Profile, view: View) -> list[Finding]:
+    """What stands out for a GTNH server or client, by rules of thumb: problems first, then notes."""
+    warn: list[str] = []
+    info: list[str] = []
+    game = "client" if p.client else "server"
+
+    windows = [w for w in p.windows if w.ticks]
+    if windows:
+        slowest = max(windows, key=lambda w: w.mspt_max)
+        if slowest.mspt_max >= 1000:
+            at = f" at {_span(slowest.start - p.start)}" if slowest.start and p.start else ""
+            warn.append(f"A tick took {_ms(slowest.mspt_max)}{at} (minute {slowest.id}): the {game} froze")
+        lowest = min(windows, key=lambda w: w.tps)
+        if 0 < lowest.tps < 19 and not p.client:
+            warn.append(f"TPS fell to {lowest.tps:.1f} in minute {lowest.id} (20 is full speed)")
+    if p.mspt.get("median", 0) >= 50:
+        warn.append(f"Median tick {p.mspt['median']:.0f} ms: over the 50 ms a tick may take, so TPS is below 20")
+    elif p.mspt.get("p95", 0) >= 50:
+        info.append(f"1 tick in 20 takes over 50 ms (p95 {p.mspt['p95']:.0f} ms): short stutters")
+
+    during = any(g.collections for g in p.gc.values())
+    for gc_name, g in (p.gc if during else p.gc_since_start).items():
+        if g.collections and _pauses(gc_name) and g.avg_ms >= 200:
+            warn.append(
+                f"GC {gc_name}: {g.collections} collections {'during the profile' if during else 'since start'},"
+                f" {_ms(g.avg_ms)} each on average; the {game} stops for each one"
+            )
+    if p.heap_max and p.heap_max < 4e9:
+        warn.append(f"Max heap {_bytes(p.heap_max)}: GTNH usually needs 6 GB or more (-Xmx)")
+    if p.heap_max and p.old_gen_live >= 0.8 * p.heap_max:
+        warn.append(
+            f"After the last GC {_bytes(p.old_gen_live)} of {_bytes(p.heap_max)} was still in use: memory is nearly"
+            " full (raise -Xmx, or look for a leak with /spark heapsummary)"
+        )
+    if "32-Bit" in p.jvm:
+        warn.append("32-bit Java: the heap can't grow past about 2-3 GB; install a 64-bit Java")
+    if 0 < p.cpu_threads <= 2:
+        warn.append(f"Only {p.cpu_threads} CPU thread(s): the game shares them with GC, chunk saving and networking")
+    if p.cpu_system[0] >= 0.9 and p.cpu_process[0] < 0.6 * p.cpu_system[0]:
+        warn.append(
+            f"The machine's CPU is {100 * p.cpu_system[0]:.0f}% busy but the game uses only"
+            f" {100 * p.cpu_process[0]:.0f}%: something else is using it"
+        )
+    if p.swap_used >= 256e6:
+        warn.append(f"{_bytes(p.swap_used)} of swap in use: the machine may be short on RAM")
+    if p.disk_total and p.disk_used >= 0.95 * p.disk_total:
+        warn.append(f"Disk {100 * p.disk_used / p.disk_total:.0f}% full")
+    if any(word.startswith("1.8") for word in p.java.split()):
+        info.append("Java 8: GTNH runs better on Java 17 or newer")
+
+    if not p.allocation:
+        _thread_findings(p, view, warn, info)
+
+    busiest = max(p.chunks, key=lambda c: c.total, default=None)
+    if busiest and busiest.total >= 50:
+        c = busiest
+        warn.append(
+            f"{c.total} entities in one chunk, {c.world} x {c.x * 16 + 8} z {c.z * 16 + 8} ({_counts(c.counts, 3)}):"
+            " a mob farm or items piling up"
+        )
+    if p.entity_counts.get("Item", 0) >= 500:
+        warn.append(f"{p.entity_counts['Item']} dropped items on the ground")
+    return [Finding("warn", t) for t in warn] + [Finding("info", t) for t in info]
+
+
+def findings_lines(found: list[Finding]) -> list[str]:
+    if not found:
+        return []
+    lines = ["\n## Findings (rules of thumb: check them against the numbers below)"]
+    return lines + [f"[{f.level}] {f.text}" for f in found]
+
+
 def summary(
     p: Profile, name: str, thread: str | None = None, windows: list[int] | None = None, top_n: int = 15,
     min_pct: float = 1.0, max_lines: int = 60,
 ) -> str:  # fmt: skip
-    lines = header(p, name) + timeline(p) + entities(p)
+    view = View(p, pick_thread(p, thread), windows)
+    lines = header(p, name) + findings_lines(findings(p, view)) + timeline(p) + entities(p)
     threads = busiest_threads(p)
     if len(threads) > 1:
         weights = [(t, sum(t.times)) for t in threads]
@@ -963,7 +1207,6 @@ def summary(
         lines.append(f"\nThreads: {listed}")
     if windows:
         lines.append(f"\nOnly window(s) {', '.join(map(str, windows))} below.")
-    view = View(p, pick_thread(p, thread), windows)
     lines += thread_report(view, top_n, min_pct, max_lines)
     lines.append(
         "\nNext: `tree SRC METHOD` for what a method calls, `callers SRC METHOD` for who calls it,"
@@ -1007,10 +1250,10 @@ def heap_header(h: Heap, name: str, what: str = "heap summary") -> list[str]:
     lines = [f"# spark {what} {name}: {h.platform} {h.platform_version}{mc}, spark v{h.spark_version}"]
     memory = []
     if h.heap_total:
-        memory.append(f"heap {_bytes(h.heap_used)} used of {_bytes(h.heap_total)}")
-    gcs = [f"{n} {g.collections}x avg {g.avg_ms:.0f} ms" for n, g in h.gc.items() if g.collections]
-    if gcs:
-        memory.append("GC " + ", ".join(gcs))
+        heap = f"heap {_bytes(h.heap_used)} used, {_bytes(h.heap_total)} allocated"
+        memory.append(heap + (f", {_bytes(h.heap_max)} max" if h.heap_max else ""))
+    if _gc_text(h.gc):
+        memory.append(f"GC {_gc_text(h.gc)}")
     if memory:
         lines.append(f"Memory: {'; '.join(memory)}; players {h.players}")
     return lines
