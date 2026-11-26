@@ -9,9 +9,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt
+from PySide6.QtCore import QEvent, QSortFilterProxyModel, Qt, QTimer
 from PySide6.QtGui import QFontDatabase, QStandardItem, QStandardItemModel, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -57,6 +59,8 @@ from .tui_spark import _when, method_on_line, saved_profiles, window_on_line
 if TYPE_CHECKING:
     from .gui import MainWindow
 
+SAVED_COLUMNS = ["Profile", "Kind", "Recorded", "Downloaded", ""]
+DELETE_COLUMN = 4  # the cross that deletes a saved file
 HINTS = {
     "overview": "Click a minute in the chart to show only that minute in every tab   y: copy the report for an LLM",
     "calls": "t: what the method calls   c: who calls it   right click for more   Esc: whole thread",
@@ -260,16 +264,22 @@ class SparkWindow(QWidget):
             "spark.lucko.me link (profile or heap summary), its code, or a downloaded file; or pick a saved one"
         )
         # The saved ones as a table in the popup; the box itself shows only the code (column 0).
-        self.saved = QStandardItemModel(0, 4)
-        self.saved.setHorizontalHeaderLabels(["Profile", "Kind", "Recorded", "Downloaded"])
+        self.saved = QStandardItemModel(0, len(SAVED_COLUMNS))
+        self.saved.setHorizontalHeaderLabels(SAVED_COLUMNS)
         self.source.setModel(self.saved)
         popup = QTableView()
         popup.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         popup.setShowGrid(False)
+        popup.setWordWrap(False)
         popup.verticalHeader().hide()
-        popup.horizontalHeader().setHighlightSections(False)
-        popup.horizontalHeader().setStretchLastSection(True)
+        header = popup.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)  # over the cells
         self.source.setView(popup)
+        # After the combo box's own filters, so these run first: a click on the cross must not pick the row.
+        self.saved_view, self.saved_viewport = popup, popup.viewport()  # kept: the filter must not ask the combo box
+        self.saved_viewport.installEventFilter(self)
+        popup.installEventFilter(self)
         self._fill_saved()
         self.source.lineEdit().returnPressed.connect(self.load)
         load = QPushButton("Load")
@@ -531,15 +541,74 @@ class SparkWindow(QWidget):
             code = QStandardItem(path.stem)
             code.setData(str(path), Qt.ItemDataRole.UserRole)
             code.setToolTip(str(path))
+            cross = QStandardItem("✕")
+            cross.setToolTip("Delete this saved file (asks first)")
+            cross.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             row = [code, QStandardItem(info.kind), QStandardItem(recorded), QStandardItem(_when(info.downloaded))]
-            self.saved.appendRow(row)
+            self.saved.appendRow([*row, cross])
         self.source.setCurrentIndex(-1)
         self.source.setEditText(text)
         self.source.blockSignals(False)
         popup = self.source.view()
-        popup.resizeColumnsToContents()
-        width = popup.horizontalHeader().length() + popup.verticalScrollBar().sizeHint().width() + 8
-        popup.setMinimumWidth(min(width, 1000))
+        header = popup.horizontalHeader()
+        resize = QHeaderView.ResizeMode
+        for col in range(len(SAVED_COLUMNS)):  # the last text column takes the room: the cross stays at the right
+            header.setSectionResizeMode(col, resize.Stretch if col == DELETE_COLUMN - 1 else resize.ResizeToContents)
+        width = sum(popup.sizeHintForColumn(c) for c in range(len(SAVED_COLUMNS)))
+        popup.setMinimumWidth(min(width + popup.verticalScrollBar().sizeHint().width() + 40, 1000))
+
+    def eventFilter(self, obj, event) -> bool:
+        """The saved list's cross (or Delete on a row) deletes that file, after asking.
+
+        Only Python references are compared before acting: while the window is torn down, the combo box is gone.
+        """
+        popup = self.saved_view
+        kind = event.type()
+        if obj is self.saved_viewport and kind in (
+            QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick
+        ):  # fmt: skip
+            index = popup.indexAt(event.position().toPoint())
+            if index.isValid() and index.column() == DELETE_COLUMN:
+                if kind == QEvent.Type.MouseButtonRelease:
+                    row = index.row()
+                    QTimer.singleShot(0, lambda: self._delete_saved(row))
+                return True
+        if obj is popup and kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Delete:
+            row = popup.currentIndex().row()
+            if row >= 0:
+                QTimer.singleShot(0, lambda: self._delete_saved(row))
+                return True
+        return super().eventFilter(obj, event)
+
+    def _confirm_delete(self, name: str, kind: str) -> bool:
+        question = f"Delete the saved {kind} {name}?"
+        box = QMessageBox(QMessageBox.Icon.Question, "Delete saved file", question, parent=self)
+        box.setInformativeText(
+            "It is removed from the cache folder. Its link downloads it again for as long as spark.lucko.me keeps it."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _delete_saved(self, row: int) -> None:
+        self.source.hidePopup()
+        code = self.saved.item(row, 0)
+        if code is None:
+            return
+        name, path = code.text(), Path(code.data(Qt.ItemDataRole.UserRole))
+        if not self._confirm_delete(name, self.saved.item(row, 1).text()):
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            self._say(f"Could not delete {path}: {e}", True)
+            return
+        if self.source.currentText().strip() == name:
+            self.source.setEditText("")
+        self._fill_saved()
+        self._say(f"Deleted the saved file {name}")
+        if self.saved.rowCount():
+            self.source.showPopup()  # to delete another
 
     def showEvent(self, event) -> None:
         self._fill_saved()

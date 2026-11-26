@@ -425,6 +425,34 @@ def test_spark_lists_profiles_saved_since_it_was_opened(window, monkeypatch):
         sw.close()
 
 
+def test_spark_deletes_a_saved_profile(window, monkeypatch, tmp_path):
+    from test_spark import profile_bytes
+
+    from nh_workbench import gui_spark
+
+    for name in ("aaa", "bbb"):
+        (tmp_path / f"{name}.sparkprofile").write_bytes(profile_bytes())
+    monkeypatch.setattr(gui_spark, "saved_profiles", lambda: sorted(tmp_path.glob("*.sparkprofile")))
+    asked = []
+    window._open_tool("spark")
+    sw = window.spark_window
+    monkeypatch.setattr(sw, "_confirm_delete", lambda name, kind: asked.append((name, kind)) or len(asked) > 1)
+    try:
+        assert [sw.saved.item(r, 0).text() for r in range(sw.saved.rowCount())] == ["aaa", "bbb"]
+        for times in (1, 2):  # declined, then confirmed
+            sw.source.showPopup()
+            popup = sw.source.view()
+            cross = popup.visualRect(sw.saved.index(0, gui_spark.DELETE_COLUMN)).center()
+            QTest.mouseClick(popup.viewport(), Qt.MouseButton.LeftButton, pos=cross)
+            wait_for(lambda n=times: len(asked) == n)
+        assert asked == [("aaa", "profile"), ("aaa", "profile")]
+        wait_for(lambda: sw.saved.rowCount() == 1)
+        assert not (tmp_path / "aaa.sparkprofile").exists() and sw.saved.item(0, 0).text() == "bbb"
+        assert sw.source.currentText() == ""  # the click on the cross did not pick the row
+    finally:
+        sw.close()
+
+
 def test_updates_keep_the_selected_line(window):
     loaded(window)
     window.select_view("pack")
