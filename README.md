@@ -72,7 +72,12 @@ GitHub Actions runs all three on Linux, Windows and macOS for every push and pul
 
 The wiki is generated from the `wiki` folder: edit the pages there, and every push to master that changes them
 publishes them (`.github/workflows/sync-wiki.yml`). Pages edited on GitHub are overwritten by the next sync.
-Pictures go in `wiki/images`; the terminal UI's screenshot is its own export (`Ctrl+P`, then Screenshot).
+Pictures go in `wiki/images`. The screenshots of both UIs and the spark window are retaken on your own checkouts,
+offscreen, with your home folder shown as `C:\Users\Player`:
+
+```
+uv run python scripts/wiki_screenshots.py                     # all; or any of: desktop terminal spark
+```
 
 spark reports name the mod of each class from a table of package prefixes, `src/nh_workbench/mod_packages.toml`,
 generated from a pack's jars (classes of mixins count for the mod that wrote them). After mods were added or
