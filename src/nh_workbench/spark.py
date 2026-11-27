@@ -24,7 +24,11 @@ from .config import cache_dir
 
 DATA_URL = "https://spark-usercontent.lucko.me/{code}"
 # Readable names for the func_ methods of Minecraft 1.7.10 (what GTNH development uses too).
-MCP_URL = "https://maven.minecraftforge.net/de/oceanlabs/mcp/mcp_stable/12-1.7.10/mcp_stable-12-1.7.10.zip"
+_MCP = "https://maven.minecraftforge.net/de/oceanlabs/mcp/mcp_stable/{0}/mcp_stable-{0}.zip"
+MCP_URL = _MCP.format("12-1.7.10")
+# A func_ id keeps its number while the method stays the same, and later MCP versions named many that 1.7.10's
+# left unnamed (func_147456_g: updateBlocks). The nearest version first: names drift further on.
+MCP_LATER_URLS = [_MCP.format(v) for v in ("22-1.8.9", "29-1.10.2", "39-1.12")]
 _CODE = re.compile(r"^[A-Za-z0-9]{6,16}$")
 _URL = re.compile(r"spark\.lucko\.me/([A-Za-z0-9]{6,16})")
 
@@ -559,12 +563,27 @@ def load_heap(source: str, refresh: bool = False) -> tuple[Heap, str]:
 
 @cache
 def mcp_names(minecraft: str) -> dict[str, str]:
-    """func_ name -> readable name from the MCP mappings, downloaded once. Empty when not available."""
-    if minecraft != "1.7.10":
-        return {}
-    path = cache_dir() / "mcp" / MCP_URL.rpartition("/")[2]
+    """func_ name -> readable name from the MCP mappings, downloaded once. Empty when not available.
+
+    1.7.10's own names first; the ones it left unnamed from later versions, when those can be had.
+    """
+    return _mcp_merged() if minecraft == "1.7.10" else {}
+
+
+def _mcp_merged() -> dict[str, str]:
+    names = _mcp_methods(MCP_URL)
+    if names:
+        for url in MCP_LATER_URLS:
+            for srg, name in _mcp_methods(url).items():
+                names.setdefault(srg, name)
+    return names
+
+
+def _mcp_methods(url: str) -> dict[str, str]:
+    """The methods.csv of one MCP mappings zip, downloaded into the cache folder once."""
+    path = cache_dir() / "mcp" / url.rpartition("/")[2]
     if not path.is_file():
-        req = urllib.request.Request(MCP_URL, headers={"User-Agent": APP_NAME})
+        req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 data = resp.read()
@@ -582,13 +601,16 @@ def mcp_names(minecraft: str) -> dict[str, str]:
 
 
 def readable(p: Profile) -> Profile:
-    """Rename func_ methods to their MCP names, when the mappings can be had."""
+    """Rename func_ methods to their MCP names, when the mappings can be had. A mixin's suffix stays:
+    func_78471_a$surround (Angelica wraps the method) becomes renderWorld$surround."""
     frames = [f for t in p.threads for f in t.frames if f.method.startswith("func_")]
     if not frames:
         return p
     names = mcp_names(p.minecraft)
     for f in frames:
-        f.method = names.get(f.method, f.method)
+        srg, dollar, rest = f.method.partition("$")
+        if srg in names:
+            f.method = names[srg] + dollar + rest
     p.names = "mcp" if names else "raw"
     return p
 

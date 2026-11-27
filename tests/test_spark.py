@@ -257,6 +257,23 @@ def test_readable_method_names(monkeypatch):
     assert spark.readable(p).names == "raw" and "func_ names left as is" in spark.summary(p, "abc")
 
 
+def test_unnamed_methods_take_later_names_and_keep_mixin_suffixes(monkeypatch):
+    mappings = {
+        spark.MCP_URL: {"func_78471_a": "renderWorld"},
+        spark.MCP_LATER_URLS[0]: {"func_147456_g": "updateBlocks", "func_78471_a": "renamedLater"},
+        spark.MCP_LATER_URLS[2]: {"func_147456_g": "tickBlocks", "func_72375_a": "preparePlayer"},
+    }
+    monkeypatch.setattr(spark, "_mcp_methods", lambda url: dict(mappings.get(url, {})))
+    names = spark._mcp_merged()
+    assert names["func_78471_a"] == "renderWorld"  # 1.7.10's own name wins
+    assert names["func_147456_g"] == "updateBlocks" and names["func_72375_a"] == "preparePlayer"  # nearest first
+    monkeypatch.setattr(spark, "mcp_names", lambda minecraft: names)
+    p = spark.parse(profile_bytes())
+    p.threads[0].frames[0].method = "func_78471_a$surround$1"  # Angelica wraps it
+    spark.readable(p)
+    assert p.threads[0].frames[0].method == "renderWorld$surround$1"
+
+
 def test_call_paths_name_the_mods(monkeypatch):
     monkeypatch.setattr(spark, "mod_packages", lambda: {"a": "Mod A"})
     p = spark.parse(profile_bytes())
