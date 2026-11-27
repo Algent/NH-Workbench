@@ -42,6 +42,7 @@ from .gui_spark_widgets import (
     BAD,
     BAR_ROLE,
     OK,
+    SERIES,
     SORT_ROLE,
     WARN,
     BarDelegate,
@@ -764,6 +765,7 @@ class SparkWindow(QWidget):
         mc = f"Minecraft {p.minecraft}" if p.minecraft else ""
         recorded = f"recorded {when} for {spark.span_text(p.duration_ms)}"
         parts = [self.name_, f"{p.platform} {p.platform_version}".strip(), mc, recorded, mode]
+        parts += spark.key_mods(p)
         if p.comment:
             parts.append(f"comment: {p.comment}")
         self.subtitle.setText("   ·   ".join(x for x in parts if x))
@@ -807,7 +809,9 @@ class SparkWindow(QWidget):
         else:
             c["tick"].set("-", "not reported")
         process = sum(w.cpu_process for w in picked) / len(picked) if picked else p.cpu_process[0]
-        if p.cpu_threads or process:
+        if not spark.cpu_reported(p):
+            c["cpu"].set("-", f"use not reported; {p.cpu_threads} threads" if p.cpu_threads else "not reported")
+        elif p.cpu_threads or process:
             busy = p.cpu_system[0] >= 0.9 and p.cpu_process[0] < 0.6 * p.cpu_system[0]
             few = 0 < p.cpu_threads <= 2
             state, label = (WARN, "few threads") if few else (WARN, "busy machine") if busy else ("", "")
@@ -843,11 +847,16 @@ class SparkWindow(QWidget):
         last = picked[-1] if picked else next((w for w in reversed(p.windows) if w.ticks), None)
         players = last.players if last else p.players
         entities = last.entities if last else p.entities
-        chunks = f", {last.chunks} chunks loaded" if last and last.chunks >= 0 else ""
-        c["world"].set(f"{players} player{'s' if players != 1 else ''}", f"{entities} entities{chunks}")
+        chunks = last.chunks if last else -1
+        if players >= 0:
+            loaded = f", {chunks} chunks loaded" if chunks >= 0 else ""
+            c["world"].set(f"{players} player{'s' if players != 1 else ''}", f"{entities} entities{loaded}")
+        else:  # a client reports no players or entities of its own
+            c["world"].set(f"{chunks} chunks" if chunks >= 0 else "-", "loaded" if chunks >= 0 else "not reported")
 
-    @staticmethod
-    def _tps_state(tps: float) -> tuple[str, str]:
+    def _tps_state(self, tps: float) -> tuple[str, str]:
+        if self.profile is not None and self.profile.client:  # a client's own ticks: no server falls behind
+            return "", ""
         if tps >= 19.5:
             return OK, "full speed"
         return (WARN, "behind") if tps >= 15 else (BAD, "far behind")
@@ -856,17 +865,18 @@ class SparkWindow(QWidget):
         view, whole = found.view, found.view.whole
         thread = view.thread.name.lower()
         self.parts_title.setText(f"Where the {thread} goes" + (" (slow ticks only)" if p.ticked else ""))
-        shown, accounted = [], 0.0
-        for slot, (label, _) in enumerate(spark.TICK_PARTS):
+        shown, idle, accounted = [], [], 0.0
+        for label, _ in spark.TICK_PARTS:  # colours in this fixed order; past the last colour, "other work"
             total, by_mod = found.parts.get(label, (0.0, {}))
-            accounted += total
-            if total < whole * 0.005:
+            if total < whole * 0.005 or (label != spark.IDLE and len(shown) == len(SERIES)):
                 continue
+            accounted += total
             mods = spark.top_mods_text(by_mod, whole, 5)
             tip = f"\n{mods}" if mods else ""
-            shown.append((label, total / whole, tip, -2 if label == spark.IDLE else slot))
-        idle = [s for s in shown if s[3] == -2]
-        shown = [s for s in shown if s[3] != -2]
+            if label == spark.IDLE:
+                idle.append((label, total / whole, tip, -2))
+            else:
+                shown.append((label, total / whole, tip, len(shown)))
         other = max(0.0, whole - accounted)
         if other >= whole * 0.005:
             shown.append(("other work", other / whole, "\nTicking worlds, players, events and the rest", -1))
@@ -1096,8 +1106,8 @@ class SparkWindow(QWidget):
         self.report.show_text(text, row)
         self._enable_report_buttons()
         where = [self.name_]
-        if self.profile is not None:
-            where.append(self.thread or "server thread")
+        if self.profile is not None and self.profile.threads:
+            where.append(self.thread or spark.pick_thread(self.profile, None).name.lower())
         if self.windows:
             where.append(f"minute {', '.join(map(str, self.windows))}")
         if self.heap is not None:

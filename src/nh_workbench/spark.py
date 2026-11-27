@@ -621,11 +621,14 @@ _BUILTIN = (
     ("io.netty.", "netty"),
     ("it.unimi.dsi.", "fastutil"),
     ("com.google.", "guava/gson"),
+    ("org.lwjgl.", "lwjgl"),
+    ("org.lwjglx.", "lwjgl"),
+    ("com.gtnewhorizons.retrofuturabootstrap.", "launcher"),  # RFB: starts the game, does no work of its own
     ("native", "native code"),
 )
-NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "native code"}
+NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "lwjgl", "launcher", "native code"}
 # Code that only does what its caller asked: its time counts for that caller in the per-mod totals.
-_CHARGED = {"java", "netty", "fastutil", "guava/gson", "native code"}
+_CHARGED = {"java", "netty", "fastutil", "guava/gson", "lwjgl", "native code"}
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
 
 
@@ -862,8 +865,9 @@ def header(p: Profile, name: str) -> list[str]:
         lines.append(f"Comment: {p.comment}")
     m = p.mspt
     if any(p.tps) or any(m.values()):
+        side = "Client" if p.client else "Server"
         server = (
-            f"Server: TPS {p.tps[0]:.1f} / {p.tps[1]:.1f} / {p.tps[2]:.1f} (1, 5, 15 min);"
+            f"{side}: TPS {p.tps[0]:.1f} / {p.tps[1]:.1f} / {p.tps[2]:.1f} (1, 5, 15 min);"
             f" tick ms median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.0f} (last min); players {p.players}"
         )
         if p.entities:
@@ -887,10 +891,12 @@ def header(p: Profile, name: str) -> list[str]:
         lines.append(f"Memory: {'; '.join(memory)}")
     machine = []
     if p.cpu_threads:
-        machine.append(
-            f"{p.cpu_model or 'CPU'} ({p.cpu_threads} threads), CPU use {100 * p.cpu_process[0]:.0f}% by the game,"
-            f" {100 * p.cpu_system[0]:.0f}% overall"
+        use = (
+            f"CPU use {100 * p.cpu_process[0]:.0f}% by the game, {100 * p.cpu_system[0]:.0f}% overall"
+            if cpu_reported(p)
+            else "CPU use not reported"
         )
+        machine.append(f"{p.cpu_model or 'CPU'} ({p.cpu_threads} threads), {use}")
     if p.ram_total:
         machine.append(f"RAM {bytes_text(p.ram_used)} of {bytes_text(p.ram_total)}")
     if p.swap_used:
@@ -907,8 +913,31 @@ def header(p: Profile, name: str) -> list[str]:
         dropped = f" (+{len(args) - len(kept)} --add-opens/--add-exports)" if len(kept) < len(args) else ""
         lines.append(f"JVM args: {' '.join(kept)}{dropped}")
     if p.mods:
-        lines.append(f"Mods reported: {len(p.mods)}")
+        key = key_mods(p)
+        lines.append(f"Mods reported: {len(p.mods)}" + (f"; {', '.join(key)}" if key else ""))
     return lines
+
+
+# Mods whose versions tell which GTNH build a profile comes from: mod id -> name shown.
+KEY_MODS = {
+    "dreamcraft": "NH Coremod",
+    "gregtech": "GregTech",
+    "gtnhlib": "GTNH Lib",
+    "hodgepodge": "Hodgepodge",
+    "angelica": "Angelica",
+    "lwjgl3ify": "lwjgl3ify",
+}
+
+
+def key_mods(p: Profile) -> list[str]:
+    """ "GregTech 5.09.55.36" and the like, for the mods of KEY_MODS the profile reports."""
+    by_id = {name.lower(): version for name, version in p.mods.items()}
+    return [f"{shown} {by_id[mod]}" for mod, shown in KEY_MODS.items() if by_id.get(mod)]
+
+
+def cpu_reported(p: Profile) -> bool:
+    """Some systems (Android, containers) report no CPU use: zeros there mean unknown, not idle."""
+    return any(p.cpu_process) or any(p.cpu_system)
 
 
 def timeline(p: Profile, worst: int = 5) -> list[str]:
@@ -1097,7 +1126,9 @@ def _is_worldgen(f: Frame) -> bool:
 
 # Where the main thread's time goes, by the kind of frame its time is under (MCP names, else the raw ones).
 # A frame inside another kind counts for the inner one: world generation set off by a packet is world generation.
-IDLE = "waiting between ticks"
+IDLE = "waiting (headroom)"  # for the next tick, or on a client for the next frame (frame limit or vsync)
+_FRAME_WAITS = ("FramePacer.beforePresent", "Display.sync")  # Angelica's frame pacer, vanilla's frame limit
+GPU = "waiting for the GPU"
 TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
     ("entities", lambda f: f.method in ("updateEntityWithOptionalForce", "func_72866_a")),
     (
@@ -1106,10 +1137,19 @@ TICK_PARTS: list[tuple[str, Callable[[Frame], bool]]] = [
     ),
     ("world generation", _is_worldgen),
     ("chunk loading from disk", lambda f: f.key.endswith("AnvilChunkLoader.loadChunk")),
+    (
+        "lighting",
+        lambda f: f.key.endswith(
+            ("LightingEngine.processLightUpdates", "World.updateAllLightTypes", "World.updateLightByType")
+        ),
+    ),
     ("world saving", lambda f: f.key.endswith(("MinecraftServer.saveAllWorlds", "WorldServer.saveAllChunks"))),
     ("backups", lambda f: "backup" in f.cls.lower()),
     ("network", lambda f: f.key.endswith("NetworkSystem.networkTick")),
-    (IDLE, lambda f: f.key.startswith("java.lang.Thread.sleep")),
+    ("rendering", lambda f: f.key.endswith(("EntityRenderer.updateCameraAndRender", "EntityRenderer.func_78480_b"))),
+    ("client ticking", lambda f: f.key.endswith(("Minecraft.runTick", "Minecraft.func_71407_l"))),
+    (GPU, lambda f: f.method in ("glClientWaitSync", "nglClientWaitSync", "glFinish", "nglFinish")),
+    (IDLE, lambda f: f.key.startswith("java.lang.Thread.sleep") or f.key.endswith(_FRAME_WAITS)),
 ]
 
 
@@ -1174,7 +1214,14 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
             warn.append(f"World saving takes {share}")
         elif label == "chunk loading from disk" and total >= whole * 0.1:
             warn.append(f"Loading chunks from disk takes {share}: a slow disk, or players flying fast")
-    for mod, value in sorted(view.own_by_package().items(), key=lambda kv: -kv[1]):
+        elif label == "lighting" and total >= whole * 0.15:
+            warn.append(f"Light updates take {share}" + (f" ({mods})" if mods else ""))
+        elif label == GPU and total >= whole * 0.15:
+            info.append(f"The client waits for the graphics card {share}: the GPU limits the frame rate")
+    # A frame limiter's sleep, or waiting on the graphics card, is no work of the mod that waits.
+    waits = [parts.get(label, (0.0, {}))[1] for label in (IDLE, GPU)]
+    busy = {mod: value - sum(w.get(mod, 0.0) for w in waits) for mod, value in view.own_by_package().items()}
+    for mod, value in sorted(busy.items(), key=lambda kv: -kv[1]):
         if value < whole * 0.15:
             break
         named = any(f"{_mod_name(mod)} " in w for w in warn)  # already blamed above
@@ -1184,12 +1231,19 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
         return
     if shown:
         info.append(f"Where the {thread} goes: {'; '.join(shown)}")
-    if not p.ticked:  # slow ticks have no time between ticks to measure
-        idle = parts.get(IDLE, (0.0, {}))[0]
-        if idle < whole * 0.05:
-            warn.append(f"The {thread} is busy {100 - 100 * idle / whole:.0f}% of the time: no headroom left")
-        else:
-            info.append(f"The {thread} waits {_pct(idle, whole).strip()} of the time between ticks (headroom)")
+    if p.ticked:  # slow ticks have no time between ticks to measure
+        return
+    idle = parts.get(IDLE, (0.0, {}))[0]
+    if p.client:  # a client always runs as fast as it may: no headroom is no problem
+        if idle >= whole * 0.05:
+            info.append(
+                f"The client thread waits {_pct(idle, whole).strip()} of the time for the next frame (frame limit"
+                " or vsync): the CPU is not what limits the frame rate"
+            )
+    elif idle < whole * 0.05:
+        warn.append(f"The {thread} is busy {100 - 100 * idle / whole:.0f}% of the time: no headroom left")
+    else:
+        info.append(f"The {thread} waits {_pct(idle, whole).strip()} of the time between ticks (headroom)")
 
 
 def findings(p: Profile, view: View) -> list[Finding]:
@@ -1199,13 +1253,19 @@ def findings(p: Profile, view: View) -> list[Finding]:
     game = "client" if p.client else "server"
 
     windows = [w for w in p.windows if w.ticks]
-    if windows:
-        slowest = max(windows, key=lambda w: w.mspt_max)
-        if slowest.mspt_max >= 1000:
-            at = f" at {span_text(slowest.start - p.start)}" if slowest.start and p.start else ""
-            warn.append(f"A tick took {_ms(slowest.mspt_max)}{at} (minute {slowest.id}): the {game} froze")
+    slowest = max(windows, key=lambda w: w.mspt_max, default=None)
+    if slowest and slowest.mspt_max >= 1000:
+        at = f" at {span_text(slowest.start - p.start)}" if slowest.start and p.start else ""
+        warn.append(f"A tick took {_ms(slowest.mspt_max)}{at} (minute {slowest.id}): the {game} froze")
+    elif p.mspt.get("max", 0) >= 1000:  # before the profile started, or in a minute not recorded on its own
+        warn.append(f"A tick took {_ms(p.mspt['max'])} in the last minute: the {game} froze")
+    seconds = p.duration_ms / 1000
+    if p.ticks and seconds >= 10 and p.ticks / seconds < 18:
+        rate = p.ticks / seconds
+        warn.append(f"Only {p.ticks} ticks in {span_text(p.duration_ms)}: about {rate:.1f} TPS during the profile")
+    elif windows and not p.client:
         lowest = min(windows, key=lambda w: w.tps)
-        if 0 < lowest.tps < 19 and not p.client:
+        if 0 < lowest.tps < 18:
             warn.append(f"TPS fell to {lowest.tps:.1f} in minute {lowest.id} (20 is full speed)")
     if p.mspt.get("median", 0) >= 50:
         warn.append(f"Median tick {p.mspt['median']:.0f} ms: over the 50 ms a tick may take, so TPS is below 20")
@@ -1235,10 +1295,11 @@ def findings(p: Profile, view: View) -> list[Finding]:
             f"The machine's CPU is {100 * p.cpu_system[0]:.0f}% busy but the game uses only"
             f" {100 * p.cpu_process[0]:.0f}%: something else is using it"
         )
-    if p.swap_used >= 256e6:
+    # Windows reports its page file in a way that reads as tens of GB in use on healthy machines: left out.
+    if p.swap_used >= 256e6 and not p.os.startswith("Windows"):
         warn.append(f"{bytes_text(p.swap_used)} of swap in use: the machine may be short on RAM")
-    if p.disk_total and p.disk_used >= 0.95 * p.disk_total:
-        warn.append(f"Disk {100 * p.disk_used / p.disk_total:.0f}% full")
+    if p.disk_total and p.disk_total - p.disk_used < 10e9:
+        warn.append(f"Only {bytes_text(p.disk_total - p.disk_used)} free on the disk: saves and backups may fail")
     if any(word.startswith("1.8") for word in p.java.split()):
         info.append("Java 8: GTNH runs better on Java 17 or newer")
 

@@ -323,12 +323,49 @@ def test_where_the_tick_goes(monkeypatch):
     p = spark.Profile(threads=[spark.Thread("Server thread", frames, [0], [20])])
     view = spark.View(p, p.threads[0])
     parts = {label: total for label, (total, _) in spark.tick_parts(view).items()}
-    assert parts == {"network": 2, "world generation": 6, "waiting between ticks": 2, "backups": 4}
+    assert parts == {"network": 2, "world generation": 6, spark.IDLE: 2, "backups": 4}
     found = [f"[{f.level}] {f.text}" for f in spark.findings(p, view)]
     assert "[warn] World generation takes 30% of the server thread's time (GalaxySpace 30.0%)" in found[0]
     assert "[warn] Backups take 20% of the server thread's time" in found
     assert not any(f.startswith("[warn] GalaxySpace") for f in found)  # already named for world generation
     assert "[info] The server thread waits 10.0% of the time between ticks (headroom)" in found
+
+
+def test_client_frame_limit_is_headroom(monkeypatch):
+    monkeypatch.setattr(spark, "mod_packages", lambda: {"com.gtnewhorizons.angelica": "Angelica"})
+    frames = [
+        spark.Frame("net.minecraft.client.Minecraft", "runGameLoop", 0, [20], [1, 3]),
+        spark.Frame("com.gtnewhorizons.angelica.rendering.FramePacer", "beforePresent", 0, [12], [2]),
+        spark.Frame("org.lwjgl.system.JNI", "invokeJV", 0, [12], []),  # the frame limiter's sleep, in LWJGL
+        spark.Frame("net.minecraft.client.renderer.EntityRenderer", "updateCameraAndRender", 0, [8], [4]),
+        spark.Frame("com.gtnewhorizons.angelica.Render", "draw", 0, [2], []),
+    ]
+    p = spark.Profile(client=True, threads=[spark.Thread("Client thread", frames, [0], [20])])
+    view = spark.View(p, p.threads[0])
+    assert view.own_by_package()["Angelica"] == 14  # LWJGL is a library: its time counts for its caller
+    parts = {label: total for label, (total, _) in spark.tick_parts(view).items()}
+    assert parts == {spark.IDLE: 12, "rendering": 8}
+    found = [f"[{f.level}] {f.text}" for f in spark.findings(p, view)]
+    assert not any(f.startswith("[warn]") for f in found)  # Angelica works 10%: its sleep is not counted
+    assert any("waits 60.0% of the time for the next frame" in f for f in found)
+
+
+def test_findings_on_ticks_machine_and_mods():
+    p = spark.Profile(
+        start=START, end=START + 21_000, ticks=26, mspt={"mean": 21, "max": 18_660, "median": 4, "p95": 6},
+        os="Windows 11 10.0 amd64",
+        swap_used=14_000_000_000, disk_used=95_000_000_000, disk_total=100_000_000_000, cpu_threads=8,
+        mods={"gregtech": "5.09.55.36", "dreamcraft": "2.10.16", "Waystones": "1.0"},
+        threads=[spark.Thread("Server thread", [spark.Frame("x.A", "run", 0, [1], [])], [0], [1])],
+    )  # fmt: skip
+    found = [f.text for f in spark.findings(p, spark.View(p, p.threads[0]))]
+    assert "A tick took 18.7 s in the last minute: the server froze" in found  # in no minute of the profile
+    assert "Only 26 ticks in 21.0s: about 1.2 TPS during the profile" in found
+    assert "Only 5.0 GB free on the disk: saves and backups may fail" in found
+    assert not any("swap" in f for f in found)  # Windows' page file figures read as tens of GB in use
+    text = "\n".join(spark.header(p, "abc"))
+    assert "CPU (8 threads), CPU use not reported" in text
+    assert "Mods reported: 3; NH Coremod 2.10.16, GregTech 5.09.55.36" in text
 
 
 HEAP_A = [("[B", 1000, 50_000_000), ("a.Machine", 10, 1_000), ("java.lang.String", 500, 20_000_000)]
