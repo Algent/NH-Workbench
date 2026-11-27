@@ -57,6 +57,29 @@ class Ink:
     def status(self, status: str) -> QColor | None:
         return {OK: self.good, WARN: self.warn, BAD: self.bad}.get(status)
 
+    def readable(self, color: QColor, ratio: float = 3.0) -> QColor:
+        """color, darkened (lightened on a dark theme) until it stands out from the background: the light themes'
+        orange warning is barely visible on their grey otherwise."""
+        out = QColor(color)
+        for _ in range(16):
+            if _contrast(out, self.surface) >= ratio:
+                break
+            out = out.lighter(112) if self.dark else out.darker(112)
+        return out
+
+
+def _luminance(c: QColor) -> float:
+    def channel(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * channel(c.redF()) + 0.7152 * channel(c.greenF()) + 0.0722 * channel(c.blueF())
+
+
+def _contrast(a: QColor, b: QColor) -> float:
+    """WCAG contrast ratio, 1 to 21."""
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
 
 def ink(widget: QWidget, theme: str) -> Ink:
     pal = widget.palette()
@@ -144,7 +167,7 @@ class Findings(QLabel):
         rows = []
         found = [f for f in found if not f.text.startswith("Where the")]  # the stacked bar shows that
         for title, level, mark, color in (
-            ("Problems", "warn", "&#9650;", c.warn),  # a triangle
+            ("Problems", "warn", "&#9650;", c.readable(c.warn)),  # a triangle
             ("Notes", "info", "&#9679;", c.muted),  # a dot
         ):
             items = [f for f in found if f.level == level]
@@ -580,23 +603,23 @@ class ReportHighlighter(QSyntaxHighlighter):
     def _share(self, c: Ink, match: re.Match, start: int) -> None:
         """Own time: 10% or more stands out, 30% or more is most of the work."""
         share = float(match[1])
-        color = c.bad if share >= 30 else c.warn if share >= 10 else None
+        color = c.readable(c.bad) if share >= 30 else c.readable(c.warn) if share >= 10 else None
         if color is not None:
             self.setFormat(start + match.start(), match.end() - match.start(), self._fmt(color, True))
 
     def highlightBlock(self, text: str) -> None:
         c = self.ink_of()
         if text.startswith("#"):
-            self.setFormat(0, len(text), self._fmt(c.primary, True))
+            self.setFormat(0, len(text), self._fmt(c.readable(c.primary), True))
             self.setCurrentBlockState(1 if "own time" in text.lower() else 0)  # a section of own time shares
             return
         self.setCurrentBlockState(max(0, self.previousBlockState()))
-        for marker, color in (("[warn]", c.warn), ("[info]", c.muted)):
+        for marker, color in (("[warn]", c.readable(c.warn)), ("[info]", c.muted)):
             if text.startswith(marker):
                 self.setFormat(0, len(marker), self._fmt(color, True))
                 return
         for m in self._TAG.finditer(text):
-            self.setFormat(m.start(), m.end() - m.start(), self._fmt(c.series(0), True))
+            self.setFormat(m.start(), m.end() - m.start(), self._fmt(c.readable(c.series(0)), True))
         for m in self._OWN.finditer(text):
             self.setFormat(m.start(), m.end() - m.start(), self._fmt(c.muted))
             inner = self._PCT.search(m[0])

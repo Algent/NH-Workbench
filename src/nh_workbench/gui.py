@@ -222,21 +222,35 @@ class AsyncLoop:
         self.thread = threading.Thread(target=self.loop.run_forever, name="nhwb-async", daemon=True)
         self.thread.start()
         self.stopping = False
+        self.tasks: set[asyncio.Task] = set()  # what was submitted and still runs: what stop() cancels
 
     def submit(self, coro: Coroutine) -> concurrent.futures.Future:
-        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+        async def tracked() -> object:
+            task = asyncio.current_task()
+            self.tasks.add(task)
+            try:
+                return await coro
+            finally:
+                self.tasks.discard(task)
+
+        return asyncio.run_coroutine_threadsafe(tracked(), self.loop)
 
     def stop(self) -> None:
-        """Cancel what is still running (a fetch when the window closes), let it clean up, then stop."""
+        """Cancel what is still running (a fetch when the window closes), let it clean up, then stop.
+
+        Only the submitted tasks are cancelled: their own tasks follow. Cancelling every task would also cancel
+        asyncio's own, such as the one that connects a new process's pipes, and a git call starting then would
+        wait for them for ever."""
         if self.stopping:  # the window was closed before
             return
         self.stopping = True
 
         async def shutdown() -> None:
-            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            tasks = set(self.tasks)
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            if tasks:
+                await asyncio.wait(tasks, timeout=2.5)  # the rest is left behind rather than holding the exit
             self.loop.stop()
 
         asyncio.run_coroutine_threadsafe(shutdown(), self.loop)
@@ -1260,6 +1274,8 @@ class MainWindow(QMainWindow):
     def _apply_keys(self) -> None:
         """Shortcuts, letters and the tooltips naming them, from the config."""
         self.letters = keytable.letters(self.cfg)
+        if getattr(self, "spark_window", None) is not None:  # its hint and buttons name the spark keys
+            self.spark_window._show_keys()
         shortcuts = keytable.shortcuts(self.cfg)
         for action_id, action in (self.tab_actions | self.key_actions).items():
             action.setShortcut(QKeySequence(shortcuts[action_id]))

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -391,6 +392,9 @@ def test_spark_keys_come_from_settings(window, monkeypatch):
         assert asked == []
         QTest.keyClicks(sw.report, "K")  # typed as K, as Shift+k is
         wait_for(lambda: asked == [True])
+        window.cfg.keys["spark_copy"] = "Y"
+        window._apply_keys()  # what saving Settings > Keys does: the open window follows
+        assert "Y: copy for an LLM" in sw.hint.text() and sw.copy_button.text().endswith("(Y)")
     finally:
         sw.close()
 
@@ -512,6 +516,16 @@ def test_spark_deletes_a_saved_profile(window, monkeypatch, tmp_path):
         assert sw.source.currentText() == ""  # the click on the cross did not pick the row
     finally:
         sw.close()
+
+
+def test_closing_cancels_what_runs_and_stops_the_loop():
+    loop = gui.AsyncLoop()
+    started = loop.submit(asyncio.sleep(60))
+    time.sleep(0.1)
+    begun = time.monotonic()
+    loop.stop()
+    assert not loop.thread.is_alive() and time.monotonic() - begun < 2.5
+    assert started.cancelled() and not loop.tasks
 
 
 def test_updates_keep_the_selected_line(window):

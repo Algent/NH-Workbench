@@ -54,17 +54,38 @@ async def run(*args: str, cwd: Path | None = None, stdin: str | None = None, tim
         data = stdin.encode() if stdin is not None else None
         out, err = await asyncio.wait_for(proc.communicate(data), timeout)
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await _kill_tree(proc)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(proc.wait(), 5)
         return Result(124, "", f"timed out after {timeout:.0f}s")
     except asyncio.CancelledError:
         # The caller gave up (a UI closing mid-fetch): stop the process instead of leaving it running, and wait
-        # for it so its pipes close now rather than after the event loop is gone.
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        await asyncio.shield(proc.wait())
+        # for it so its pipes close now rather than after the event loop is gone. Not for ever, should something
+        # still hold the pipes: the cancelled task would never end and the loop never stop.
+        await _kill_tree(proc)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(proc.wait()), 2)
         raise
     return Result(proc.returncode or 0, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
+
+
+async def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the process and what it started. On Windows, git.exe is a launcher that runs the real git as its child:
+    killing the launcher alone leaves that one running, holding the pipes open."""
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError):
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/F", "/T", "/PID", str(proc.pid), creationflags=_FLAGS,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )  # fmt: skip
+            await killer.wait()
+    else:  # started in a session of its own: its process group holds what it started
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, 9)
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()  # taskkill missing, or the group already gone
 
 
 def open_path(path: Path) -> None:
