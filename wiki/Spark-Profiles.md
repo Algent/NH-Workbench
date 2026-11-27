@@ -29,7 +29,8 @@ Findings are rules of thumb for GTNH, `[warn]` for problems and `[info]` for not
 they recur, how to record only those), low TPS (from the ticks the profile counted, too), autosaves long
 enough to stutter, long GC pauses, a small or nearly full heap, 32-bit Java, few CPU threads, swap in use while
 RAM is full (not on Windows, whose figures mislead), little disk space left, a mod taking a large share, an
-entity pile-up in one chunk, and Thermos or another Bukkit on Forge server with its share. They also show where the main thread's time goes (entities, tile
+entity pile-up in one chunk, Thermos or another Bukkit on Forge server with its share, and an Opis profiling
+run going on while spark recorded (its timers cost time and slow what they time). They also show where the main thread's time goes (entities, tile
 entities, world generation, chunk loading, lighting, saving, backups, network; on a client also rendering,
 client ticks and waiting for the GPU) and how long it waits, which is its headroom: between ticks on a server,
 for the next frame on a client (Angelica's frame pacer or the frame limit). Work set off inside other work

@@ -1217,6 +1217,15 @@ def _is_worldgen(f: Frame) -> bool:
 # Where the main thread's time goes, by the kind of frame its time is under (MCP names, else the raw ones).
 # A frame inside another kind counts for the inner one: world generation set off by a packet is world generation.
 AUTOSAVE_TICKS = 900  # MinecraftServer saves every world this often (45 s at 20 TPS)
+# Opis times these only during a profiling run of its own (else its hooks call a do-nothing profiler).
+OPIS_TIMERS = {
+    f"mcp.mobius.opis.data.profilers.{name}"
+    for name in (
+        "ProfilerEvent", "ProfilerEntityUpdate", "ProfilerTileEntityUpdate", "ProfilerDimBlockTick",
+        "ProfilerNetworkTick", "ProfilerRenderTileEntity", "ProfilerRenderEntity", "ProfilerRenderBlock",
+    )
+}  # fmt: skip
+_OPIS_HOOKS = "mcp.mobius.mobiuscore.profiler.ProfilerSection."
 IDLE = "waiting (headroom)"  # for the next tick, or on a client for the next frame (frame limit or vsync)
 _FRAME_WAITS = ("FramePacer.beforePresent", "Display.sync")  # Angelica's frame pacer, vanilla's frame limit
 GPU = "waiting for the GPU"
@@ -1320,6 +1329,14 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
             warn.append(f"Light updates take {share}" + (f" ({mods})" if mods else ""))
         elif label == GPU and total >= whole * 0.15:
             info.append(f"The client waits for the graphics card {share}: the GPU limits the frame rate")
+    totals = view.total_by_method()
+    timing = sum(t for key, t in totals.items() if key.rpartition(".")[0] in OPIS_TIMERS)
+    if timing >= whole * 0.005:  # a sample or two is a run starting or stopping, not one going on
+        cost = sum(t for key, t in totals.items() if key.startswith(_OPIS_HOOKS))
+        warn.append(
+            f"An Opis profiling run was on while spark recorded: Opis's timers take {_pct(cost, whole).strip()}"
+            f" {of} and slow what they time (tile entities, events); record again without one"
+        )
     # A frame limiter's sleep, or waiting on the graphics card, is no work of the mod that waits.
     waits = [parts.get(label, (0.0, {}))[1] for label in (IDLE, GPU)]
     busy = {mod: value - sum(w.get(mod, 0.0) for w in waits) for mod, value in view.own_by_package().items()}

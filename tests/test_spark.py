@@ -493,3 +493,20 @@ def test_thermos_recurring_freezes_and_autosaves():
     assert not any("Java 8" in f for f in found)  # Thermos runs only on Java 8
     assert not any("swap" in f for f in found)  # RAM is not full: Linux swaps idle pages anyway
     assert "with Thermos (Bukkit on Forge)" in spark.header(p, "abc")[0]
+
+
+def test_an_opis_run_during_the_profile_is_told():
+    def profile(timer_ms: float) -> spark.Profile:
+        frames = [
+            spark.Frame("net.minecraft.server.MinecraftServer", "run", 0, [1_000], [1]),
+            spark.Frame("mcp.mobius.mobiuscore.profiler.ProfilerSection", "stop", 0, [timer_ms + 5], [2]),
+            spark.Frame("mcp.mobius.opis.data.profilers.ProfilerTileEntityUpdate", "stop", 0, [timer_ms], []),
+        ]
+        return spark.Profile(threads=[spark.Thread("Server thread", frames, [0], [1_000])])
+
+    on = profile(40)  # Opis timing every tile entity: 4% of the thread
+    found = [f.text for f in spark.findings(on, spark.View(on, on.threads[0]))]
+    told = "An Opis profiling run was on while spark recorded: Opis's timers take 4.5%"
+    assert any(f.startswith(told) for f in found)
+    starting = profile(1)  # a sample as a run starts: no run going on
+    assert not any("Opis" in f.text for f in spark.findings(starting, spark.View(starting, starting.threads[0])))
