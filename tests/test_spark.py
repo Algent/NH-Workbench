@@ -309,7 +309,7 @@ def test_memory_and_machine_details(profile):
     assert (profile.heap_max, profile.old_gen_live, profile.uptime_ms) == (3_500_000_000, 3_000_000_000, 1_800_000)
     assert profile.gc_since_start["MarkSweepCompact"].collections == 7 and profile.engine == "java"
     text = spark.summary(profile, "abc")
-    assert "heap 1.6 GB used, 3.0 GB allocated, 3.5 GB max; old gen after the last GC 3.0 GB" in text
+    assert "heap 1.5 GB used, 2.8 GB allocated, 3.3 GB max; old gen after the last GC 2.8 GB" in text
     assert "GC since start MarkSweepCompact 7x avg 2.9 s" in text and "up 30m00s" in text
     assert "Java Adoptium 25 (OpenJDK 32-Bit Server VM)" in text
 
@@ -319,8 +319,8 @@ def test_findings(profile):
     findings = text[text.index("## Findings") : text.index("## Worst minutes")]
     for expected in (
         "[warn] GC MarkSweepCompact: 7 collections since start, 2.9 s each on average",
-        "[warn] Max heap 3.5 GB: GTNH usually needs 6 GB or more",
-        "[warn] After the last GC 3.0 GB of 3.5 GB was still in use",
+        "[warn] Max heap 3.3 GB: GTNH usually needs 6 GB or more",
+        "[warn] After the last GC 2.8 GB of 3.3 GB was still in use",
         "[warn] 32-bit Java",
         "[warn] Only 2 CPU thread(s)",
     ):
@@ -382,7 +382,7 @@ def test_findings_on_ticks_machine_and_mods():
     assert "Only 26 ticks in 21.0s: about 1.2 TPS during the profile" in found
     lone = [f for f in spark.findings(p, spark.View(p, p.threads[0])) if f.text.startswith("GC G1 Old")]
     assert [f.level for f in lone] == ["info"] and "while the world loaded" in lone[0].text  # one, at load
-    assert "Only 5.0 GB free on the disk: saves and backups may fail" in found
+    assert "Only 4.7 GB free on the disk: saves and backups may fail" in found
     assert not any("swap" in f for f in found)  # Windows' page file figures read as tens of GB in use
     text = "\n".join(spark.header(p, "abc"))
     assert "CPU (8 threads), CPU use not reported" in text
@@ -406,7 +406,7 @@ def test_heap_summary(monkeypatch, tmp_path):
         spark.load_profile(str(file))
 
     text = spark.heap_report(heap, name)
-    assert "SomePlayer" not in text and "Live objects: 1,510 in 3 classes, 70 MB" in text
+    assert "SomePlayer" not in text and "Live objects: 1,510 in 3 classes, 67 MB" in text
     assert text.index("byte[]") < text.index("java.lang.String") < text.index("a.Machine")
     assert "a.Machine  [Mod A]" in text
 
@@ -467,3 +467,25 @@ def test_libraries_are_not_mods():
     libraries = {"org.objectweb.asm.ClassWriter": "asm", "scala.Option": "scala", "akka.actor.Actor": "akka"}
     for cls, owner in libraries.items():
         assert spark.package_of(cls) == owner and owner in spark.NOT_MODS
+
+
+def test_thermos_recurring_freezes_and_autosaves():
+    frames = [
+        spark.Frame("net.minecraft.server.MinecraftServer", "run", 0, [100_000], [1, 2]),
+        spark.Frame("net.minecraft.world.WorldServer", "saveAllChunks", 0, [4_000], []),  # 4% of the thread
+        spark.Frame("thermos.wrapper.ChunkBlockHashMap", "get", 0, [3_000], []),
+    ]
+    slow = (60_000, 1200, 19.0, 40, 1500, 0.1, 3, 200, -1, 900)  # each minute had a 1.5 s tick
+    minutes = [spark.Window(i, START + i * 60_000, *slow) for i in range(4)]
+    p = spark.Profile(
+        start=START, end=START + 450_000, ticks=9_000, java="Temurin 1.8.0_512", windows=minutes,
+        swap_used=800 * 2**20, ram_used=90 * spark.GIB, ram_total=120 * spark.GIB, os="Debian GNU/Linux 12",
+        threads=[spark.Thread("Server thread", frames, [0], [100_000])],
+    )  # fmt: skip
+    found = [f.text for f in spark.findings(p, spark.View(p, p.threads[0]))]
+    assert any(f.startswith("Ticks over 1 s in 4 of 4 minutes") and "--only-ticks-over 500" in f for f in found)
+    assert any(f.startswith("Each autosave (every 45 s) takes about 400 ms") for f in found)  # 10 saves in 9000 ticks
+    assert "Thermos (Bukkit on Forge): its code and Bukkit's take 3.0% of the server thread" in found
+    assert not any("Java 8" in f for f in found)  # Thermos runs only on Java 8
+    assert not any("swap" in f for f in found)  # RAM is not full: Linux swaps idle pages anyway
+    assert "with Thermos (Bukkit on Forge)" in spark.header(p, "abc")[0]

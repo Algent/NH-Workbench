@@ -25,10 +25,11 @@ Then come the findings and the worst minutes. For the server thread, it lists th
 and total time, own time per mod, and the hot call paths, with `[Mod]` where a mod's code starts. Entities are
 listed by type, by world, and the busiest chunks with their block coordinates.
 
-Findings are rules of thumb for GTNH, `[warn]` for problems and `[info]` for notes: frozen ticks, low TPS
-(from the ticks the profile counted, too), long GC pauses, a small or nearly full heap, 32-bit Java, few CPU
-threads, swap in use (not on Windows, whose figures mislead), little disk space left, a mod taking a large
-share, and an entity pile-up in one chunk. They also show where the main thread's time goes (entities, tile
+Findings are rules of thumb for GTNH, `[warn]` for problems and `[info]` for notes: frozen ticks (and, when
+they recur, how to record only those), low TPS (from the ticks the profile counted, too), autosaves long
+enough to stutter, long GC pauses, a small or nearly full heap, 32-bit Java, few CPU threads, swap in use while
+RAM is full (not on Windows, whose figures mislead), little disk space left, a mod taking a large share, an
+entity pile-up in one chunk, and Thermos or another Bukkit on Forge server with its share. They also show where the main thread's time goes (entities, tile
 entities, world generation, chunk loading, lighting, saving, backups, network; on a client also rendering,
 client ticks and waiting for the GPU) and how long it waits, which is its headroom: between ticks on a server,
 for the next frame on a client (Angelica's frame pacer or the frame limit). Work set off inside other work
@@ -36,6 +37,8 @@ counts for the inner kind, so world generation set off by a packet counts as wor
 
 Profiles from recent spark versions list the mods: the header names the versions of GregTech, the NH Coremod,
 GTNH Lib, Hodgepodge, Angelica and lwjgl3ify, which tell which build of the pack it is.
+
+Sizes are in binary units, as Java and spark's viewer count them: `-Xmx20G` reads 20 GB.
 
 Heap summaries (`/spark heapsummary`) read the same way. `summary` lists the biggest classes in memory and the
 total per mod. `compare EARLIER LATER` shows what grew between two of them, which is how a leak shows. In the

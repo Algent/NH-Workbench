@@ -205,6 +205,7 @@ class Profile:
     comment: str = ""
     tps: tuple[float, float, float] = (0, 0, 0)
     mspt: dict[str, float] = field(default_factory=dict)  # last 1m: mean, median, p95, max
+    mspt_5m: dict[str, float] = field(default_factory=dict)  # the same over the last 5 minutes
     heap_used: int = 0
     heap_total: int = 0  # committed
     heap_max: int = 0
@@ -308,7 +309,7 @@ def parse(data: bytes) -> Profile:
     agg = meta.msg(5)
     stats = meta.msg(8)
     system = meta.msg(9)
-    mspt = stats.msg(5).msg(1)
+    mspt, mspt_5m = stats.msg(5).msg(1), stats.msg(5).msg(2)
     tps = stats.msg(4)
     world = stats.msg(8)
     cpu = system.msg(1)
@@ -330,6 +331,7 @@ def parse(data: bytes) -> Profile:
         comment=meta.str(6),
         tps=(tps.double(1), tps.double(2), tps.double(3)),
         mspt={k: mspt.double(n) for k, n in (("mean", 1), ("max", 2), ("median", 4), ("p95", 5))},
+        mspt_5m={k: mspt_5m.double(n) for k, n in (("mean", 1), ("max", 2), ("median", 4), ("p95", 5))},
         heap_used=stats.msg(1).msg(1).int(1),
         heap_total=stats.msg(1).msg(1).int(2),
         heap_max=stats.msg(1).msg(1).int(4),
@@ -675,12 +677,24 @@ _BUILTIN = (
     ("org.apache.", "apache"),
     ("scala.", "scala"),
     ("akka.", "akka"),
+    ("com.koloboke.", "koloboke"),
+    ("gnu.trove.", "trove"),
     ("com.gtnewhorizons.retrofuturabootstrap.", "launcher"),  # RFB: starts the game, does no work of its own
+    # Bukkit on Forge servers (Thermos, Crucible): part of the server, like Forge, not mods.
+    ("thermos.", "thermos"),
+    ("io.github.crucible.", "crucible"),
+    ("org.bukkit.", "bukkit"),
+    ("org.spigotmc.", "bukkit"),
+    ("net.md_5.", "bukkit"),
     ("native", "native code"),
 )
 # Libraries: code that only does what its caller asked, so its time counts for that caller in the per-mod totals.
-_CHARGED = {"java", "netty", "fastutil", "guava/gson", "lwjgl", "asm", "apache", "scala", "akka", "native code"}
-NOT_MODS = _CHARGED | {"forge", "minecraft", "launcher"}
+_CHARGED = {
+    "java", "netty", "fastutil", "guava/gson", "lwjgl", "asm", "apache", "scala", "akka", "koloboke", "trove",
+    "native code",
+}  # fmt: skip
+HYBRID = {"thermos", "crucible", "bukkit"}
+NOT_MODS = _CHARGED | HYBRID | {"forge", "minecraft", "launcher"}
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
 
 
@@ -863,12 +877,16 @@ def _pct(part: float, whole: float) -> str:
     return f"{100 * part / whole:5.1f}%" if whole else "    -"
 
 
+GIB = 2**30
+
+
 def bytes_text(n: float) -> str:
-    if abs(n) >= 1e9:
-        return f"{n / 1e9:.1f} GB"
-    if abs(n) >= 1e6:
-        return f"{n / 1e6:.0f} MB"
-    return f"{n / 1e3:.0f} KB" if abs(n) >= 1e3 else f"{n:.0f} B"
+    """Binary units, as Java (-Xmx20G is 20 GB) and spark's viewer count them."""
+    if abs(n) >= GIB:
+        return f"{n / GIB:.1f} GB"
+    if abs(n) >= 2**20:
+        return f"{n / 2**20:.0f} MB"
+    return f"{n / 2**10:.0f} KB" if abs(n) >= 2**10 else f"{n:.0f} B"
 
 
 def span_text(ms: float) -> str:
@@ -901,7 +919,9 @@ def short_name(key: str) -> str:
 def header(p: Profile, name: str) -> list[str]:
     when = datetime.fromtimestamp(p.start / 1000, UTC).strftime("%Y-%m-%d %H:%M UTC") if p.start else "?"
     mc = f", Minecraft {p.minecraft}" if p.minecraft else ""
-    lines = [f"# spark profile {name}: {p.platform} {p.platform_version}{mc}, spark v{p.spark_version}"]
+    hybrid = hybrid_server(p)
+    on = f" with {hybrid} (Bukkit on Forge)" if hybrid else ""
+    lines = [f"# spark profile {name}: {p.platform} {p.platform_version}{on}{mc}, spark v{p.spark_version}"]
     what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
     what += {"async": " with async-profiler", "java": " with spark's Java sampler"}.get(p.engine, "")
     names = {"mcp": "; method names from MCP", "raw": "; func_ names left as is (MCP mappings unavailable)"}
@@ -920,8 +940,12 @@ def header(p: Profile, name: str) -> list[str]:
         side = "Client" if p.client else "Server"
         server = (
             f"{side}: TPS {p.tps[0]:.1f} / {p.tps[1]:.1f} / {p.tps[2]:.1f} (1, 5, 15 min);"
-            f" tick ms median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.0f} (last min); players {p.players}"
+            f" tick ms median {m['median']:.1f}, p95 {m['p95']:.1f}, max {m['max']:.0f} (last min)"
         )
+        five = p.mspt_5m
+        if five.get("median"):
+            server += f", {five['median']:.1f} / {five['p95']:.1f} / {five['max']:.0f} (last 5 min)"
+        server += f"; players {p.players}"
         if p.entities:
             server += f"; entities {p.entities}"
         if p.uptime_ms:
@@ -979,6 +1003,15 @@ KEY_MODS = {
     "angelica": "Angelica",
     "lwjgl3ify": "lwjgl3ify",
 }
+
+
+_HYBRIDS = (("thermos.", "Thermos"), ("io.github.crucible.", "Crucible"), ("org.bukkit.craftbukkit.", "Bukkit"))
+
+
+def hybrid_server(p: Profile) -> str:
+    """Thermos, Crucible or another Bukkit on Forge server, told by its classes; "" for plain Forge."""
+    classes = {f.cls for t in p.threads for f in t.frames}
+    return next((name for prefix, name in _HYBRIDS if any(c.startswith(prefix) for c in classes)), "")
 
 
 def key_mods(p: Profile) -> list[str]:
@@ -1178,6 +1211,7 @@ def _is_worldgen(f: Frame) -> bool:
 
 # Where the main thread's time goes, by the kind of frame its time is under (MCP names, else the raw ones).
 # A frame inside another kind counts for the inner one: world generation set off by a packet is world generation.
+AUTOSAVE_TICKS = 900  # MinecraftServer saves every world this often (45 s at 20 TPS)
 IDLE = "waiting (headroom)"  # for the next tick, or on a client for the next frame (frame limit or vsync)
 _FRAME_WAITS = ("FramePacer.beforePresent", "Display.sync")  # Angelica's frame pacer, vanilla's frame limit
 GPU = "waiting for the GPU"
@@ -1270,6 +1304,11 @@ def _thread_findings(p: Profile, view: View, warn: list[str], info: list[str]) -
             warn.append(f"Backups take {share}")
         elif label == "world saving" and total >= whole * 0.05:
             warn.append(f"World saving takes {share}")
+        elif label == "world saving" and not p.ticked and p.ticks >= 2 * AUTOSAVE_TICKS:
+            each = total / (p.ticks / AUTOSAVE_TICKS)  # small in total, but all of it in one tick per autosave
+            if each >= 250:
+                by = f", mostly {mods}" if mods else ""
+                warn.append(f"Each autosave (every 45 s) takes about {_ms(each)} on the {thread}{by}: a stutter each")
         elif label == "chunk loading from disk" and total >= whole * 0.1:
             warn.append(f"Loading chunks from disk takes {share}: a slow disk, or players flying fast")
         elif label == "lighting" and total >= whole * 0.15:
@@ -1312,7 +1351,19 @@ def findings(p: Profile, view: View) -> list[Finding]:
 
     windows = [w for w in p.windows if w.ticks]
     slowest = max(windows, key=lambda w: w.mspt_max, default=None)
-    if slowest and slowest.mspt_max >= 1000:
+    frozen = [w for w in windows if w.mspt_max >= 1000]
+    if slowest and len(frozen) >= 3:  # not a one-off: say how to see what those ticks do
+        at = f" at {span_text(slowest.start - p.start)}" if slowest.start and p.start else ""
+        how = (
+            ""
+            if p.ticked
+            else "; to see what they do, record only the slow ones: /spark profiler start --only-ticks-over 500"
+        )
+        warn.append(
+            f"Ticks over 1 s in {len(frozen)} of {len(windows)} minutes (the worst {_ms(slowest.mspt_max)}{at}):"
+            f" they recur{how}"
+        )
+    elif slowest and slowest.mspt_max >= 1000:
         at = f" at {span_text(slowest.start - p.start)}" if slowest.start and p.start else ""
         warn.append(f"A tick took {_ms(slowest.mspt_max)}{at} (minute {slowest.id}): the {game} froze")
     elif p.mspt.get("max", 0) >= 1000:  # before the profile started, or in a minute not recorded on its own
@@ -1344,7 +1395,7 @@ def findings(p: Profile, view: View) -> list[Finding]:
                 f"GC {gc_name}: {g.collections} collections {'during the profile' if during else 'since start'},"
                 f" {_ms(g.avg_ms)} each on average; the {game} stops for each one"
             )
-    if p.heap_max and p.heap_max < 4e9:
+    if p.heap_max and p.heap_max < 4 * GIB:
         warn.append(f"Max heap {bytes_text(p.heap_max)}: GTNH usually needs 6 GB or more (-Xmx)")
     if p.heap_max and p.old_gen_live >= 0.8 * p.heap_max:
         warn.append(
@@ -1361,11 +1412,17 @@ def findings(p: Profile, view: View) -> list[Finding]:
             f" {100 * p.cpu_process[0]:.0f}%: something else is using it"
         )
     # Windows reports its page file in a way that reads as tens of GB in use on healthy machines: left out.
-    if p.swap_used >= 256e6 and not p.os.startswith("Windows"):
+    # Linux moves idle pages to swap even with RAM to spare: it only tells of a shortage when RAM is full too.
+    ram_full = p.ram_total and p.ram_used >= 0.9 * p.ram_total
+    if p.swap_used >= 256 * 2**20 and ram_full and not p.os.startswith("Windows"):
         warn.append(f"{bytes_text(p.swap_used)} of swap in use: the machine may be short on RAM")
     if p.disk_total and p.disk_total - p.disk_used < 10e9:
         warn.append(f"Only {bytes_text(p.disk_total - p.disk_used)} free on the disk: saves and backups may fail")
-    if any(word.startswith("1.8") for word in p.java.split()):
+    hybrid = hybrid_server(p)
+    if hybrid:
+        share = sum(v for mod, v in view.own_by_package().items() if mod in HYBRID) / view.whole
+        info.append(f"{hybrid} (Bukkit on Forge): its code and Bukkit's take {100 * share:.1f}% of the server thread")
+    elif any(word.startswith("1.8") for word in p.java.split()):  # a Bukkit on Forge server runs only on Java 8
         info.append("Java 8: GTNH runs better on Java 17 or newer")
 
     if not p.allocation:

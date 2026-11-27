@@ -865,7 +865,7 @@ class SparkWindow(QWidget):
             state, label = "", ""
             if p.old_gen_live and p.old_gen_live >= 0.8 * limit:
                 state, label = BAD, "nearly full"
-            elif p.heap_max and p.heap_max < 4e9:
+            elif p.heap_max and p.heap_max < 4 * spark.GIB:
                 state, label = WARN, "small"
             detail = f"used of {spark.bytes_text(limit)} max; {spark.bytes_text(p.heap_total)} allocated"
             if p.old_gen_live:
