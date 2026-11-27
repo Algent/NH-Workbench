@@ -23,6 +23,9 @@ _BASE = "https://raw.githubusercontent.com/GTNewHorizons/DreamAssemblerXXL/maste
 _GITHUB_URL = re.compile(r"github\.com/([^/]+)/([^/#?]+?)(?:\.git)?(?:/tree/([^?#]+?))?/?$", re.IGNORECASE)
 _STABLE = re.compile(r"^\d+(\.\d+)+$")
 _SLIM_KEYS = ("name", "license", "source", "external_url", "repo_url", "private")
+# Repos every build pulls in besides the mods, kept apart from them in the asset index: the configs (with the quests,
+# scripts and txloader files), pinned per build by the manifest's "config", and the translations, always the latest.
+COMPONENTS = ("config", "translations")
 _MAX_AGE = 3600
 
 
@@ -45,6 +48,7 @@ def _slim_assets(data: dict) -> dict:
     # The asset index is ~16 MB because of per-version changelogs; keep only what is used here.
     return {
         "mods": [_slim_mod(mod) for mod in data["mods"]],
+        **{kind: {k: data[kind].get(k) for k in ("name", "repo_url")} for kind in COMPONENTS if data.get(kind)},
         "latest_daily": data.get("latest_daily"),
         "latest_successful_daily": data.get("latest_successful_daily"),
     }
@@ -134,8 +138,27 @@ def _new_entry(name: str, kind: str, asset: dict, source: dict) -> PackEntry:
     )
 
 
-def build_entries(daily: dict, release: dict, assets: list[dict], sources: dict[str, dict]) -> list[PackEntry]:
-    """One entry per mod found in the daily build, the latest release, or both."""
+def _component_entry(kind: str, asset: dict, daily: dict, release: dict) -> PackEntry:
+    repo, _ = parse_github_url(asset.get("repo_url"))
+    if kind == "config":
+        version, release_version = daily.get("config", ""), release.get("config", "")
+    else:  # not pinned: each build takes the newest translation of every language
+        version, release_version = ("latest" if m else "" for m in (daily, release))
+    return PackEntry(
+        name=asset["name"],
+        kind=kind,
+        version=version,
+        release_version=release_version,
+        repo=repo or f"GTNewHorizons/{asset['name']}",
+        url=asset.get("repo_url"),
+    )
+
+
+def build_entries(
+    daily: dict, release: dict, assets: list[dict], sources: dict[str, dict], components: dict | None = None
+) -> list[PackEntry]:
+    """One entry per mod found in the daily build, the latest release, or both, plus the config and translations
+    repos (components: those entries of the asset index)."""
     by_name = {a["name"].lower(): a for a in assets}
     entries: dict[str, PackEntry] = {}
     for manifest, field_name in ((daily, "version"), (release, "release_version")):
@@ -152,6 +175,10 @@ def build_entries(daily: dict, release: dict, assets: list[dict], sources: dict[
         if jar:
             entry.jar_url = jar["download_url"]
             entry.jar_name = jar.get("filename") or jar["download_url"].rpartition("/")[2]
+    for kind in COMPONENTS:
+        asset = (components or {}).get(kind)
+        if asset and asset.get("name") and asset["name"].lower() not in entries:
+            entries[asset["name"].lower()] = _component_entry(kind, asset, daily, release)
     return sorted(entries.values(), key=lambda e: e.name.lower())
 
 
@@ -230,7 +257,7 @@ def link_local(entries: Iterable[PackEntry], states: Iterable[RepoState]) -> Non
 
 async def load(cfg: Config, force: bool = False) -> PackInfo:
     cache = cache_dir()
-    for pattern in ("assets-slim.json*", "assets.json*"):  # cache layouts of earlier versions
+    for pattern in ("assets-slim.json*", "assets.json*", "assets-v2.json*"):  # cache layouts of earlier versions
         for stale in cache.glob(pattern):
             stale.unlink(missing_ok=True)
 
@@ -239,7 +266,7 @@ async def load(cfg: Config, force: bool = False) -> PackInfo:
 
     daily, assets, modpack = await asyncio.gather(
         get("releases/manifests/daily.json", "daily.json"),
-        get("gtnh-assets.json", "assets-v2.json", _slim_assets),
+        get("gtnh-assets.json", "assets-v3.json", _slim_assets),
         get("gtnh-modpack.json", "modpack.json"),
     )
     name = latest_release(modpack.get("releases", []))
@@ -250,7 +277,7 @@ async def load(cfg: Config, force: bool = False) -> PackInfo:
         except PackError as e:
             log.warning("No manifest for release %s: %s", name, e)
     return PackInfo(
-        entries=build_entries(daily, release, assets["mods"], cfg.sources),
+        entries=build_entries(daily, release, assets["mods"], cfg.sources, assets),
         release=name or "",
         release_updated=_when(release.get("last_updated")),
         daily_config=daily.get("config", ""),

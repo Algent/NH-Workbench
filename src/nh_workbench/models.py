@@ -189,7 +189,7 @@ class RepoState:
 @dataclass
 class PackEntry:
     name: str
-    kind: str  # github | external
+    kind: str  # github | external | config | translations
     version: str  # in the current daily, empty when the daily no longer ships it
     release_version: str = ""  # in the latest stable release, empty when it was not part of it
     repo: str | None = None  # owner/name of the source repository, when known

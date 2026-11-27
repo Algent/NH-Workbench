@@ -431,6 +431,42 @@ def test_slim_assets_keeps_jar_locations_for_external_mods_only():
     assert "versions" not in org
 
 
+def test_config_and_translations_repos_are_pack_entries(tmp_path):
+    url = "https://github.com/GTNewHorizons/"
+    data = {
+        "mods": [],
+        "config": {"name": "GT-New-Horizons-Modpack", "repo_url": url + "GT-New-Horizons-Modpack", "versions": [1]},
+        "translations": {"name": "GTNH-Translations", "repo_url": url + "GTNH-Translations", "versions": [1]},
+    }
+    slim = pack._slim_assets(data)
+    assert slim["config"] == {"name": "GT-New-Horizons-Modpack", "repo_url": url + "GT-New-Horizons-Modpack"}
+    daily = {"config": "2.10.0-nightly", "github_mods": {"GT5-Unofficial": {"version": "5.09"}}}
+    release = {"config": "2.9.2", "github_mods": {"GT5-Unofficial": {"version": "5.08"}}}
+    entries = {e.name: e for e in pack.build_entries(daily, release, [], {}, slim)}
+
+    config, translations = entries["GT-New-Horizons-Modpack"], entries["GTNH-Translations"]
+    assert (config.kind, config.version, config.release_version) == ("config", "2.10.0-nightly", "2.9.2")
+    assert (translations.kind, translations.version, translations.release_version) == (
+        "translations",
+        "latest",
+        "latest",
+    )
+    no_release = {e.name: e for e in pack.build_entries(daily, {}, [], {}, slim)}
+    assert (no_release["GT-New-Horizons-Modpack"].release_version, no_release["GTNH-Translations"].release_version) == (
+        "",
+        "",
+    )
+    assert {e.repo for e in (config, translations)} == {
+        "GTNewHorizons/GT-New-Horizons-Modpack",
+        "GTNewHorizons/GTNH-Translations",
+    }
+    assert "gtnewhorizons/gt-new-horizons-modpack" in pack.pack_slugs(entries.values())
+    jobs = pack.missing_jobs(entries.values(), tmp_path, build="release")
+    assert {j.dest.name for j in jobs} == {"GT5-Unofficial", "GT-New-Horizons-Modpack", "GTNH-Translations"}
+    assert render.pack_row(config)[1].plain == "config"
+    assert pack.build_entries(daily, release, [], {})[0].name == "GT5-Unofficial"  # without the asset entries
+
+
 async def test_fetch_mine_asks_for_ci_and_sorts_newest_first(monkeypatch):
     queries = []
 

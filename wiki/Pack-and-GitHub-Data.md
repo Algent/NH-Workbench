@@ -11,6 +11,10 @@ The Daily and Release columns (`status --pack` on the command line) count commit
 - `1.8.18 +2` in Release: the `release/<major>.<minor>.x` branch has 2 commits since that version's tag.
 - `Δ17` in Release: main has 17 commits since that tag; the higher, the harder a backport.
 
+Besides the mods, the list has the two other repos every build pulls in: GT-New-Horizons-Modpack (kind
+`config`: configs, quests, scripts, txloader files), at the version each manifest pins, and GTNH-Translations
+(kind `translations`), shown as `latest` because builds take the newest translation of every language.
+
 Closed-source mods: `nh-workbench jars` (or the Tools tab) downloads their jars into `_GTNH_Closed_Source`
 under the root, where DreamAssemblerXXL expects them. Jars already there are left alone.
 

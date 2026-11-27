@@ -310,7 +310,11 @@ def pack_status_text(entry: PackEntry) -> Text:
 
 
 def version_text(version: str) -> Text:
-    return Text(clip(version, 24)) if version else Text("—", "dim")
+    # 28 fits the config repo's nightlies, like 2.10.0-nightly-2026-11-24-02
+    return Text(clip(version, 28)) if version else Text("—", "dim")
+
+
+KIND_STYLE = {"external": "cyan", "config": "magenta", "translations": "magenta"}
 
 
 def pack_row(entry: PackEntry, width: int = 56) -> list[Text]:
@@ -321,7 +325,7 @@ def pack_row(entry: PackEntry, width: int = 56) -> list[Text]:
         source += f" @ {entry.branch}"
     return [
         Text(clip(entry.name, max(36, width)), "bold"),
-        Text(entry.kind, "" if entry.kind == "github" else "cyan"),
+        Text(entry.kind, KIND_STYLE.get(entry.kind, "")),
         version_text(entry.version),
         release_text(entry.local) if entry.local else version_text(entry.release_version),
         pack_status_text(entry),
