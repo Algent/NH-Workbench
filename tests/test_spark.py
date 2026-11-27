@@ -356,11 +356,14 @@ def test_findings_on_ticks_machine_and_mods():
         os="Windows 11 10.0 amd64",
         swap_used=14_000_000_000, disk_used=95_000_000_000, disk_total=100_000_000_000, cpu_threads=8,
         mods={"gregtech": "5.09.55.36", "dreamcraft": "2.10.16", "Waystones": "1.0"},
+        gc_since_start={"G1 Old Generation": spark.Gc(1, 287.0, 0.0)},
         threads=[spark.Thread("Server thread", [spark.Frame("x.A", "run", 0, [1], [])], [0], [1])],
     )  # fmt: skip
     found = [f.text for f in spark.findings(p, spark.View(p, p.threads[0]))]
     assert "A tick took 18.7 s in the last minute: the server froze" in found  # in no minute of the profile
     assert "Only 26 ticks in 21.0s: about 1.2 TPS during the profile" in found
+    lone = [f for f in spark.findings(p, spark.View(p, p.threads[0])) if f.text.startswith("GC G1 Old")]
+    assert [f.level for f in lone] == ["info"] and "while the world loaded" in lone[0].text  # one, at load
     assert "Only 5.0 GB free on the disk: saves and backups may fail" in found
     assert not any("swap" in f for f in found)  # Windows' page file figures read as tens of GB in use
     text = "\n".join(spark.header(p, "abc"))

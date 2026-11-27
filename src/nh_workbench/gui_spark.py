@@ -839,6 +839,8 @@ class SparkWindow(QWidget):
             worst = max(pausing.values(), key=lambda g: g.avg_ms)
             state = BAD if worst.avg_ms >= 1000 else WARN if worst.avg_ms >= 200 else OK
             label = {BAD: "freezes", WARN: "long", OK: "short"}[state]
+            if state != OK and spark.lone_gc(worst, during):
+                state, label = "", "once, likely at world load"
             listed = ", ".join(f"{n} {g.collections}x {_ms(g.avg_ms)}" for n, g in gcs.items())
             detail = f"longest average; {'during the profile' if during else 'since start'}: {listed}"
             c["gc"].set(_ms(worst.avg_ms), detail, state, label)

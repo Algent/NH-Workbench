@@ -1183,6 +1183,12 @@ def top_mods_text(by_mod: dict[str, float], whole: float, n: int = 3) -> str:
     return ", ".join(f"{_mod_name(m)} {_pct(v, whole).strip()}" for m, v in top)
 
 
+def lone_gc(g: Gc, during: bool) -> bool:
+    """A single long collection since start, none in the profile: the full GC Minecraft asks for when a world loads
+    (System.gc), not a sign of trouble."""
+    return not during and g.collections == 1
+
+
 def pauses_game(name: str) -> bool:
     """A collector whose average time is a pause of the whole game, not a concurrent cycle."""
     return not any(word in name for word in ("Concurrent", "Cycles"))
@@ -1274,7 +1280,14 @@ def findings(p: Profile, view: View) -> list[Finding]:
 
     during = any(g.collections for g in p.gc.values())
     for gc_name, g in (p.gc if during else p.gc_since_start).items():
-        if g.collections and pauses_game(gc_name) and g.avg_ms >= 200:
+        if not (g.collections and pauses_game(gc_name) and g.avg_ms >= 200):
+            continue
+        if lone_gc(g, during):
+            info.append(
+                f"GC {gc_name}: one collection since start, {_ms(g.avg_ms)}; most likely while the world loaded"
+                " (Minecraft asks for one then), harmless once"
+            )
+        else:
             warn.append(
                 f"GC {gc_name}: {g.collections} collections {'during the profile' if during else 'since start'},"
                 f" {_ms(g.avg_ms)} each on average; the {game} stops for each one"
