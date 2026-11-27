@@ -40,6 +40,9 @@ GTNH Lib, Hodgepodge, Angelica and lwjgl3ify, which tell which build of the pack
 Heap summaries (`/spark heapsummary`) read the same way. `summary` lists the biggest classes in memory and the
 total per mod. `compare EARLIER LATER` shows what grew between two of them, which is how a leak shows. In the
 terminal UI, `m` on a heap summary compares it with another (earlier or later: the earlier one is the start).
+A comparison says when the game restarted between the two, as their differences are then two separate starts,
+not growth. Lambdas (`Foo$$Lambda/0x...`) sit at a new address every run: they are counted under one name, so
+the same lambda matches across runs.
 
 - Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
   uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.

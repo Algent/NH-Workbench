@@ -63,9 +63,9 @@ def world_stats() -> bytes:
     return num(1, 17) + counts(2, {"Cow": 12, "Item": 3, player: 2}) + blob(3, overworld) + blob(3, nether)
 
 
-def heap_bytes(entries: list[tuple[str, int, int]], taken: int = 0) -> bytes:
+def heap_bytes(entries: list[tuple[str, int, int]], taken: int = 0, up: int = 0) -> bytes:
     platform = num(1, 0) + blob(2, "Forge") + blob(3, "10.13.4.1614") + blob(4, "1.7.10") + num(7, 2)
-    stats = blob(1, blob(1, num(1, 2_000_000_000) + num(2, 4_000_000_000))) + num(7, 3)
+    stats = blob(1, blob(1, num(1, 2_000_000_000) + num(2, 4_000_000_000))) + num(7, 3) + (num(3, up) if up else b"")
     meta = blob(1, num(1, 1) + blob(2, "SomePlayer")) + blob(2, platform) + blob(3, stats)
     meta += num(5, taken) if taken else b""
     rows = b"".join(
@@ -443,6 +443,27 @@ def test_heap_compare_starts_from_the_earlier_one():
     assert earlier[0].generated == START
     assert spark.heap_in_order(later, earlier) == (earlier, later)  # whichever was loaded first
     text = spark.heap_compare(*earlier, *later)
-    assert "Taken 1h30m apart" in text and "+9 MB" in text
+    assert "Taken 1h30m apart" in text and "+9 MB" in text and "restarted" not in text
     growth = {cls: (size, count) for cls, size, count, _ in spark.heap_deltas(earlier[0], later[0])}
     assert growth["a.Machine"] == (8_999_000, 89_990) and growth["java.lang.String"] == (-20_000_000, -500)
+
+
+def test_lambdas_match_across_runs_and_restarts_are_told():
+    lam = "gregtech.Base$$Lambda/0x"
+    run1 = [(f"{lam}0000000090afa758", 10, 160), (f"{lam}0000000090afa2f8", 5, 80)]
+    run2 = [(f"{lam}00000000aa000001", 15, 240), (f"[L{lam}00000000aa000002;", 1, 16)]
+    a = spark.parse_heap(heap_bytes(run1, taken=START, up=600_000))
+    b = spark.parse_heap(heap_bytes(run2, taken=START + 120_000, up=60_000))  # up 1 minute, 2 minutes later
+    assert [(e.cls, e.instances, e.size) for e in a.entries] == [("gregtech.Base$$Lambda", 15, 240)]
+    assert {e.cls for e in b.entries} == {"gregtech.Base$$Lambda", "gregtech.Base$$Lambda[]"}
+    growth = {cls: size for cls, size, _, _ in spark.heap_deltas(a, b)}
+    assert growth["gregtech.Base$$Lambda"] == 0  # the same lambda, at another address
+    assert spark.heap_restarted(a, b)
+    assert "The game restarted in between (up 1m00s" in spark.heap_compare(a, "A", b, "B")
+    assert spark.hidden_class("java.lang.invoke.LambdaForm$MH/0x000000008e425400") == "java.lang.invoke.LambdaForm$MH"
+
+
+def test_libraries_are_not_mods():
+    libraries = {"org.objectweb.asm.ClassWriter": "asm", "scala.Option": "scala", "akka.actor.Actor": "akka"}
+    for cls, owner in libraries.items():
+        assert spark.package_of(cls) == owner and owner in spark.NOT_MODS

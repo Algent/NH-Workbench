@@ -185,6 +185,12 @@ class Table(QTableView):
         if wide >= 0 and not self.isColumnHidden(wide):
             self.setColumnWidth(wide, max(320, min(self.sizeHintForColumn(wide) + 16, self.width() // 2)))
 
+    def cap(self, column: int, width: int) -> None:
+        """Keep a column from growing past width (its text elided, the tooltip says it whole)."""
+        if self.sizeHintForColumn(column) > width:
+            self.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            self.setColumnWidth(column, width)
+
     def data_at(self, row: int | None = None) -> object:
         index = self.currentIndex() if row is None else self.proxy.index(row, 0)
         return self.proxy.index(index.row(), 0).data(Qt.ItemDataRole.UserRole) if index.isValid() else None
@@ -1010,18 +1016,20 @@ class SparkWindow(QWidget):
             self._show_growth(*pair)
             return
         self.heap_summary.setText(f"{spark.bytes_text(h.size)} in {len(h.entries):,} classes")
+        self.heap_summary.setStyleSheet("")
         total = h.size or 1
         top = max((e.size for e in h.entries), default=1) or 1
         rows = [
             [
                 _item(e.cls, data=e.cls),
-                _item(spark.heap_owner(e.cls).replace(" (package)", "?")),
+                _item(owner := spark.heap_owner(e.cls).replace(" (package)", "?"), tip=owner),
                 _item(f"{e.instances:,}", e.instances),
                 _item(spark.bytes_text(e.size), e.size, e.size / top, tip=f"{100 * e.size / total:.1f}% of the heap"),
             ]
             for e in h.entries
         ]
         self.heap_classes.fill(rows, 3, columns=["Class", "Mod", "Objects", "Size"])
+        self.heap_classes.cap(1, 180)  # long mod names would squeeze the class names
         owners = spark.heap_by_owner(h.entries)
         top = max((s for s, _ in owners.values()), default=1) or 1
         rows = [
@@ -1035,11 +1043,17 @@ class SparkWindow(QWidget):
         (ha, na), (hb, nb) = a, b
         change = hb.size - ha.size
         apart = f" over {spark.span_text(hb.generated - ha.generated)}" if ha.generated and hb.generated else ""
-        self.heap_summary.setText(
+        summary = (
             f"{na} → {nb}: {spark.bytes_text(ha.size)} → {spark.bytes_text(hb.size)}"
-            f" ({'+' if change >= 0 else '-'}{spark.bytes_text(abs(change))}){apart}. What keeps growing is what"
-            " leaks; one change alone can be noise."
+            f" ({'+' if change >= 0 else '-'}{spark.bytes_text(abs(change))}){apart}. "
         )
+        if spark.heap_restarted(ha, hb):
+            self.heap_summary.setText(summary + spark.RESTARTED.format(up=spark.span_text(hb.uptime_ms)))
+            self.heap_summary.setStyleSheet(f"color: {self.owner.warning_color()};")
+        else:
+            self.heap_summary.setText(summary + "What keeps growing is what leaks; one change alone can be noise.")
+            self.heap_summary.setStyleSheet("")
+        self.heap_summary.setWordWrap(True)
 
         def signed(n: int, text: str) -> str:
             return ("+" if n > 0 else "-" if n < 0 else "") + text
@@ -1050,13 +1064,14 @@ class SparkWindow(QWidget):
         for cls, size, count, now in deltas:
             rows.append([
                 _item(cls, data=cls),
-                _item(spark.heap_owner(cls).replace(" (package)", "?")),
+                _item(owner := spark.heap_owner(cls).replace(" (package)", "?"), tip=owner),
                 _item(f"{now.instances:,}" if now else "gone", now.instances if now else 0),
                 _item(signed(count, f"{abs(count):,}"), count),
                 _item(spark.bytes_text(now.size) if now else "gone", now.size if now else 0),
                 _item(signed(size, spark.bytes_text(abs(size))), size, max(0, size) / top),
             ])  # fmt: skip
         self.heap_classes.fill(rows, 5, columns=["Class", "Mod", "Objects", "Objects +", "Size", "Size +"])
+        self.heap_classes.cap(1, 180)  # long mod names would squeeze the class names
         owners = spark.heap_by_owner(hb.entries)
         growth = spark.heap_owner_deltas(ha, hb)
         top = max((size for size, _ in growth.values()), default=1) or 1

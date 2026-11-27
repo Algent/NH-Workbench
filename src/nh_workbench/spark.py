@@ -266,6 +266,7 @@ class Heap:
     gc: dict[str, Gc] = field(default_factory=dict)
     players: int = 0
     generated: int = 0  # epoch ms, when it was taken
+    uptime_ms: int = 0  # how long the game had been running then
     entries: list[HeapEntry] = field(default_factory=list)
 
     @property
@@ -367,7 +368,7 @@ def parse(data: bytes) -> Profile:
         class_sources=root.str_map(3),
     )
     for t in root.msgs(2):
-        frames = [Frame(f.str(3), f.str(4), f.int(6), f.doubles(8), f.ints(9)) for f in t.msgs(3)]
+        frames = [Frame(hidden_class(f.str(3)), f.str(4), f.int(6), f.doubles(8), f.ints(9)) for f in t.msgs(3)]
         p.threads.append(Thread(t.str(1), frames, t.ints(5), t.doubles(4)))
     stats_by_id = root.msg_map(7, int_keys=True)
     for wid in root.ints(6):
@@ -419,7 +420,8 @@ def parse_heap(data: bytes) -> Heap:
         gc=_gcs(stats, 2),
         players=stats.int(7),
         generated=meta.int(5),
-        entries=[HeapEntry(_class_name(e.str(4)), e.int(2), e.int(3)) for e in root.msgs(2)],
+        uptime_ms=stats.int(3),
+        entries=_merged_entries(root.msgs(2)),
     )
 
 
@@ -435,14 +437,36 @@ _PRIMITIVES = {
 }
 
 
+_HIDDEN = re.compile(r"/0x[0-9a-fA-F]+")  # a hidden class's address (Foo$$Lambda/0x...): different every run
+
+
+def hidden_class(name: str) -> str:
+    """Foo$$Lambda/0x0000000090afa758 -> Foo$$Lambda, so the same lambda matches across runs."""
+    return _HIDDEN.sub("", name)
+
+
 def _class_name(name: str) -> str:
     """Class names as spark sends them, with JVM descriptors ([B, [Lfoo.Bar;) made readable."""
+    name = hidden_class(name)
     dims = len(name) - len(name.lstrip("["))
     if not dims:
         return name
     base = name[dims:]
     base = base[1:-1] if base.startswith("L") and base.endswith(";") else _PRIMITIVES.get(base, base)
     return base.replace("/", ".") + "[]" * dims
+
+
+def _merged_entries(rows: list["_Msg"]) -> list[HeapEntry]:
+    """One entry per class name: hidden classes of one lambda, told apart only by address, add up."""
+    out: dict[str, HeapEntry] = {}
+    for e in rows:
+        cls = _class_name(e.str(4))
+        if cls in out:
+            out[cls].instances += e.int(2)
+            out[cls].size += e.int(3)
+        else:
+            out[cls] = HeapEntry(cls, e.int(2), e.int(3))
+    return list(out.values())
 
 
 def parse_upload(data: bytes) -> "Profile | Heap":
@@ -647,12 +671,16 @@ _BUILTIN = (
     ("com.google.", "guava/gson"),
     ("org.lwjgl.", "lwjgl"),
     ("org.lwjglx.", "lwjgl"),
+    ("org.objectweb.asm.", "asm"),
+    ("org.apache.", "apache"),
+    ("scala.", "scala"),
+    ("akka.", "akka"),
     ("com.gtnewhorizons.retrofuturabootstrap.", "launcher"),  # RFB: starts the game, does no work of its own
     ("native", "native code"),
 )
-NOT_MODS = {"java", "forge", "minecraft", "netty", "fastutil", "guava/gson", "lwjgl", "launcher", "native code"}
-# Code that only does what its caller asked: its time counts for that caller in the per-mod totals.
-_CHARGED = {"java", "netty", "fastutil", "guava/gson", "lwjgl", "native code"}
+# Libraries: code that only does what its caller asked, so its time counts for that caller in the per-mod totals.
+_CHARGED = {"java", "netty", "fastutil", "guava/gson", "lwjgl", "asm", "apache", "scala", "akka", "native code"}
+NOT_MODS = _CHARGED | {"forge", "minecraft", "launcher"}
 _TLDS = {"com", "net", "org", "io", "me", "de", "dev", "gg", "fr", "it", "ru", "cn", "xyz", "info", "club", "uk"}
 
 
@@ -1465,9 +1493,12 @@ def heap_compare(a: Heap, a_name: str, b: Heap, b_name: str, top_n: int = 25) ->
     lines = heap_header(b, f"{a_name} -> {b_name}", "heap growth")
     if a.generated and b.generated:
         lines.append(f"Taken {span_text(b.generated - a.generated)} apart")
+    if heap_restarted(a, b):
+        lines.append(RESTARTED.format(up=span_text(b.uptime_ms)))
+    hint = "" if heap_restarted(a, b) else " Growth between two summaries points at leaks; one moment can be noise."
     lines.append(
         f"Live objects: {bytes_text(a.size)} -> {bytes_text(b.size)} ({'+' if b.size >= a.size else '-'}"
-        f"{bytes_text(abs(b.size - a.size))}). Growth between two summaries points at leaks; one moment can be noise."
+        f"{bytes_text(abs(b.size - a.size))}).{hint}"
     )
     lines.append("\n## Grew the most")
     lines.append(f"{'+size':>9}  {'+objects':>11}  {'now':>8}  class  [mod]")
@@ -1506,6 +1537,17 @@ def heap_owner_deltas(a: Heap, b: Heap) -> dict[str, tuple[int, int]]:
         o: (new.get(o, [0, 0])[0] - old.get(o, [0, 0])[0], new.get(o, [0, 0])[1] - old.get(o, [0, 0])[1])
         for o in old.keys() | new.keys()
     }
+
+
+RESTARTED = (
+    "The game restarted in between (up {up} when the later one was taken): these are two separate starts, so the"
+    " differences are not growth. For a leak, compare two summaries of the same run."
+)
+
+
+def heap_restarted(a: Heap, b: Heap) -> bool:
+    """b (the later one) was taken by a game started after a was taken."""
+    return bool(a.generated and b.generated and b.uptime_ms and b.uptime_ms < b.generated - a.generated)
 
 
 def heap_in_order(a: tuple[Heap, str], b: tuple[Heap, str]) -> tuple[tuple[Heap, str], tuple[Heap, str]]:
