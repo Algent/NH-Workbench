@@ -454,6 +454,38 @@ def test_spark_lists_profiles_saved_since_it_was_opened(window, monkeypatch):
         sw.close()
 
 
+def test_spark_compares_heap_summaries(window, monkeypatch, tmp_path):
+    from test_spark import HEAP_A, HEAP_B, START, heap_bytes
+
+    from nh_workbench import spark
+
+    later = tmp_path / "After12345.sparkheap"
+    later.write_bytes(heap_bytes(HEAP_B, taken=START + 3_600_000))
+    earlier = spark.parse_heap(heap_bytes(HEAP_A, taken=START))
+    monkeypatch.setattr(spark, "load", lambda source, refresh=False: (earlier, "Before1234"))
+    window._open_tool("spark")
+    sw = window.spark_window
+    try:
+        sw.source.setEditText("Before1234")
+        sw.load()
+        wait_for(lambda: sw.heap is not None)
+        assert not sw.threads.isVisible() and not sw.stop_compare.isVisible()
+        after = spark.parse_heap(later.read_bytes())
+        monkeypatch.setattr(spark, "load", lambda source, refresh=False: (after, "After12345"))
+        sw.compare_source.setEditText(str(later))
+        sw.compare()
+        wait_for(lambda: sw.text.startswith("# spark heap growth Before1234 -> After12345"))
+        headers = [sw.heap_classes.model_.headerData(c, Qt.Orientation.Horizontal) for c in range(6)]
+        assert headers == ["Class", "Mod", "Objects", "Objects +", "Size", "Size +"]
+        assert sw.heap_classes.proxy.index(0, 0).data() == "byte[]"  # grew the most
+        assert "over 1h00m" in sw.heap_summary.text() and sw.stop_compare.isVisible()
+        sw.stop_compare.click()
+        wait_for(lambda: sw.text.startswith("# spark heap summary"))
+        assert sw.heap_classes.model_.columnCount() == 4
+    finally:
+        sw.close()
+
+
 def test_spark_deletes_a_saved_profile(window, monkeypatch, tmp_path):
     from test_spark import profile_bytes
 

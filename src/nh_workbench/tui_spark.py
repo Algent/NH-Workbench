@@ -40,7 +40,7 @@ class SparkScreen(Screen[None]):
         Binding("y", "copy", "Copy", id="spark_copy"),
         Binding("e", "save", "Save", id="spark_save"),
         Binding("r", "reload", "Download again", id="spark_reload"),
-        Binding("m", "compare", "Compare later", id="spark_compare"),
+        Binding("m", "compare", "Compare", id="spark_compare"),
         Binding("f2", "install_skill", "Install AI skill"),  # a letter would go into the text box
     ]
 
@@ -185,8 +185,9 @@ class SparkScreen(Screen[None]):
     async def _show_heap(self, row: int) -> bool:
         h = self.heap
         if self.other:
-            text = await asyncio.to_thread(spark.heap_compare, h, self.name_, self.other[0], self.other[1])
-            view = f"growth until {self.other[1]}"
+            (first, first_name), (then, then_name) = spark.heap_in_order((h, self.name_), self.other)
+            text = await asyncio.to_thread(spark.heap_compare, first, first_name, then, then_name)
+            view = f"compared with {self.other[1]}"
         else:
             text = await asyncio.to_thread(spark.heap_report, h, self.name_)
             view = "heap summary (m: compare with a later one)"
@@ -328,11 +329,11 @@ class SparkScreen(Screen[None]):
 
     @work(group="spark-dialog")
     async def action_compare(self) -> None:
-        """Compare this heap summary with a later one: what grew is what leaks."""
+        """Compare this heap summary with another, earlier or later: what grew is what leaks."""
         if self.heap is None:
             return
-        hint = "The later heap summary: link, code or file. Saved ones are listed when you press o."
-        source = await self.app.push_screen_wait(PromptScreen("Compare with a later heap summary", "", hint))
+        hint = "Link, code or file; the earlier one is the start. Saved ones are listed when you press o."
+        source = await self.app.push_screen_wait(PromptScreen("Compare with another heap summary", "", hint))
         if not source:
             return
         try:

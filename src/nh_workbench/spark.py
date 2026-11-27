@@ -261,6 +261,7 @@ class Heap:
     heap_max: int = 0
     gc: dict[str, Gc] = field(default_factory=dict)
     players: int = 0
+    generated: int = 0  # epoch ms, when it was taken
     entries: list[HeapEntry] = field(default_factory=list)
 
     @property
@@ -413,6 +414,7 @@ def parse_heap(data: bytes) -> Heap:
         heap_max=stats.msg(1).msg(1).int(4),
         gc=_gcs(stats, 2),
         players=stats.int(7),
+        generated=meta.int(5),
         entries=[HeapEntry(_class_name(e.str(4)), e.int(2), e.int(3)) for e in root.msgs(2)],
     )
 
@@ -1437,15 +1439,10 @@ def heap_report(h: Heap, name: str, top_n: int = 25) -> str:
 
 def heap_compare(a: Heap, a_name: str, b: Heap, b_name: str, top_n: int = 25) -> str:
     """What grew in memory from summary a to summary b (taken later)."""
-    before = {e.cls: e for e in a.entries}
-    after = {e.cls: e for e in b.entries}
-    deltas = []
-    for cls in before.keys() | after.keys():
-        old, new = before.get(cls), after.get(cls)
-        size = (new.size if new else 0) - (old.size if old else 0)
-        count = (new.instances if new else 0) - (old.instances if old else 0)
-        deltas.append((cls, size, count, new))
+    deltas = heap_deltas(a, b)
     lines = heap_header(b, f"{a_name} -> {b_name}", "heap growth")
+    if a.generated and b.generated:
+        lines.append(f"Taken {span_text(b.generated - a.generated)} apart")
     lines.append(
         f"Live objects: {bytes_text(a.size)} -> {bytes_text(b.size)} ({'+' if b.size >= a.size else '-'}"
         f"{bytes_text(abs(b.size - a.size))}). Growth between two summaries points at leaks; one moment can be noise."
@@ -1460,11 +1457,35 @@ def heap_compare(a: Heap, a_name: str, b: Heap, b_name: str, top_n: int = 25) ->
         now = bytes_text(new.size) if new else "gone"
         lines.append(f"{'+' + bytes_text(size):>9}  {count:>+11,}  {now:>8}  {cls}{tag}")
     lines.append("\n## By mod")
-    old_owner, new_owner = heap_by_owner(a.entries), heap_by_owner(b.entries)
-    changes = {
-        o: new_owner.get(o, [0, 0])[0] - old_owner.get(o, [0, 0])[0] for o in old_owner.keys() | new_owner.keys()
-    }
-    for owner, size in sorted(changes.items(), key=lambda kv: -abs(kv[1]))[:15]:
+    changes = heap_owner_deltas(a, b)
+    for owner, (size, _) in sorted(changes.items(), key=lambda kv: -abs(kv[1][0]))[:15]:
         if size:
             lines.append(f"{'+' if size > 0 else '-'}{bytes_text(abs(size)):>8}  {owner}")
     return "\n".join(lines)
+
+
+def heap_deltas(a: Heap, b: Heap) -> list[tuple[str, int, int, HeapEntry | None]]:
+    """Per class, from a to b: (class, size change, object count change, its entry in b or None when gone)."""
+    before = {e.cls: e for e in a.entries}
+    after = {e.cls: e for e in b.entries}
+    out = []
+    for cls in before.keys() | after.keys():
+        old, new = before.get(cls), after.get(cls)
+        size = (new.size if new else 0) - (old.size if old else 0)
+        count = (new.instances if new else 0) - (old.instances if old else 0)
+        out.append((cls, size, count, new))
+    return out
+
+
+def heap_owner_deltas(a: Heap, b: Heap) -> dict[str, tuple[int, int]]:
+    """Per mod, from a to b: (size change, object count change)."""
+    old, new = heap_by_owner(a.entries), heap_by_owner(b.entries)
+    return {
+        o: (new.get(o, [0, 0])[0] - old.get(o, [0, 0])[0], new.get(o, [0, 0])[1] - old.get(o, [0, 0])[1])
+        for o in old.keys() | new.keys()
+    }
+
+
+def heap_in_order(a: tuple[Heap, str], b: tuple[Heap, str]) -> tuple[tuple[Heap, str], tuple[Heap, str]]:
+    """The earlier summary first, by when each was taken (as given when one does not say)."""
+    return (b, a) if a[0].generated and b[0].generated and b[0].generated < a[0].generated else (a, b)

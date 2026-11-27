@@ -39,7 +39,7 @@ GTNH Lib, Hodgepodge, Angelica and lwjgl3ify, which tell which build of the pack
 
 Heap summaries (`/spark heapsummary`) read the same way. `summary` lists the biggest classes in memory and the
 total per mod. `compare EARLIER LATER` shows what grew between two of them, which is how a leak shows. In the
-terminal UI, `m` on a heap summary compares it with a later one.
+terminal UI, `m` on a heap summary compares it with another (earlier or later: the earlier one is the start).
 
 - Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
   uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.
@@ -63,7 +63,7 @@ work (they are the defaults; change them in Settings > Keys):
 | `y` / `e` | Copy the report (for an LLM) / save it as a file |
 | `o` | Open another profile |
 | `r` | Download the profile again |
-| `m` | On a heap summary: compare it with a later one |
+| `m` | On a heap summary: compare it with another one |
 | `Esc` | Step back to the previous view (on the summary: close) |
 | `q` | Close |
 
@@ -86,7 +86,9 @@ the top.
   methods.
 - **Entities:** by type, by world, and every chunk with entities. Right click or double click a chunk to copy
   a `/tp` command to it.
-- For a heap summary, **Memory by class** lists every class and the total per mod.
+- For a heap summary, **Memory by class** lists every class and the total per mod. **Compare with** another
+  one (a saved one, a link or a code) adds how much each class and mod grew, sorted by growth, and the text
+  report becomes the growth report. The earlier of the two is the start, whichever you loaded first.
 
 The thread picker at the top switches every tab to another thread.
 

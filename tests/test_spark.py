@@ -63,10 +63,11 @@ def world_stats() -> bytes:
     return num(1, 17) + counts(2, {"Cow": 12, "Item": 3, player: 2}) + blob(3, overworld) + blob(3, nether)
 
 
-def heap_bytes(entries: list[tuple[str, int, int]]) -> bytes:
+def heap_bytes(entries: list[tuple[str, int, int]], taken: int = 0) -> bytes:
     platform = num(1, 0) + blob(2, "Forge") + blob(3, "10.13.4.1614") + blob(4, "1.7.10") + num(7, 2)
     stats = blob(1, blob(1, num(1, 2_000_000_000) + num(2, 4_000_000_000))) + num(7, 3)
     meta = blob(1, num(1, 1) + blob(2, "SomePlayer")) + blob(2, platform) + blob(3, stats)
+    meta += num(5, taken) if taken else b""
     rows = b"".join(
         blob(2, num(1, order) + num(2, count) + num(3, size) + blob(4, cls))
         for order, (cls, count, size) in enumerate(entries)
@@ -417,3 +418,14 @@ def test_cli_heap_summary_and_compare(tmp_path):
     assert res.exit_code == 1 and "not a heap summary" in res.output
     res = runner.invoke(app, [*base, "tree", str(before), "Machine"])
     assert res.exit_code == 1 and "no call tree" in res.output
+
+
+def test_heap_compare_starts_from_the_earlier_one():
+    earlier = (spark.parse_heap(heap_bytes(HEAP_A, taken=START)), "Before")
+    later = (spark.parse_heap(heap_bytes(HEAP_B, taken=START + 5_400_000)), "After")
+    assert earlier[0].generated == START
+    assert spark.heap_in_order(later, earlier) == (earlier, later)  # whichever was loaded first
+    text = spark.heap_compare(*earlier, *later)
+    assert "Taken 1h30m apart" in text and "+9 MB" in text
+    growth = {cls: (size, count) for cls, size, count, _ in spark.heap_deltas(earlier[0], later[0])}
+    assert growth["a.Machine"] == (8_999_000, 89_990) and growth["java.lang.String"] == (-20_000_000, -500)

@@ -71,7 +71,8 @@ HINTS = {
     "methods": "Double click: what the method calls   right click: who calls it   type to filter",
     "mods": "Own time: time in the mod's own code, library calls it makes included. Double click: its methods",
     "entities": "Right click or double click a chunk to copy a /tp command to it",
-    "heap": "Arrays count for their element type in the per-mod totals",
+    "heap": "Compare with a later (or earlier) heap summary to see what grows   Arrays count for their element type"
+    " in the per-mod totals",
     "report": "Enter, double click or {calls} on a method: what it calls   {callers}: who calls it   Enter on a minute:"
     " only that minute   Esc or Backspace: back   {summary}: summary   {copy}: copy for an LLM",
 }
@@ -160,10 +161,17 @@ class Table(QTableView):
         self.horizontalHeader().setHighlightSections(False)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
-    def fill(self, rows: list[list[QStandardItem]], sort_column: int, stretch: int = 0, wide: int = -1) -> None:
-        """`stretch` takes the width left; `wide` starts wide but can be sized by hand (long method names)."""
+    def fill(
+        self, rows: list[list[QStandardItem]], sort_column: int, stretch: int = 0, wide: int = -1,
+        columns: list[str] | None = None,
+    ) -> None:  # fmt: skip
+        """`stretch` takes the width left; `wide` starts wide but can be sized by hand (long method names).
+        `columns` replaces the headers (and their number)."""
         self.setSortingEnabled(False)
         self.model_.removeRows(0, self.model_.rowCount())
+        if columns is not None:
+            self.model_.setColumnCount(len(columns))
+            self.model_.setHorizontalHeaderLabels(columns)
         for row in rows:
             self.model_.appendRow(row)
         self.setSortingEnabled(True)
@@ -257,6 +265,7 @@ class SparkWindow(QWidget):
         self.resize(1280, 900)
         self.profile: spark.Profile | None = None
         self.heap: spark.Heap | None = None  # a heap summary instead of a profile
+        self.other: tuple[spark.Heap, str] | None = None  # another heap summary it is compared with
         self.digest: Digest | None = None
         self.name_ = ""
         self.thread: str | None = None
@@ -309,7 +318,8 @@ class SparkWindow(QWidget):
         self.copy_button = QPushButton()
         self.copy_button.clicked.connect(self.copy)
         scope = QHBoxLayout()
-        scope.addWidget(QLabel("Thread"))
+        self.thread_label = QLabel("Thread")
+        scope.addWidget(self.thread_label)
         scope.addWidget(self.threads)
         scope.addSpacing(16)
         scope.addWidget(self.minute)
@@ -459,11 +469,32 @@ class SparkWindow(QWidget):
     def _build_heap(self) -> None:
         self.heap_classes = Table(["Class", "Mod", "Objects", "Size"], self.ink)
         self.heap_mods = Table(["Mod", "Objects", "Size"], self.ink)
+        self.compare_source = QComboBox()
+        self.compare_source.setEditable(True)
+        self.compare_source.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.compare_source.lineEdit().setPlaceholderText("Another heap summary: link, code, file, or a saved one")
+        self.compare_source.lineEdit().returnPressed.connect(self.compare)
+        compare = QPushButton("Compare")
+        compare.setToolTip("What grew between the two: the earlier one is taken as the start, whichever you load")
+        compare.clicked.connect(self.compare)
+        self.stop_compare = QPushButton("Stop comparing")
+        self.stop_compare.clicked.connect(lambda: self._compared(None))
+        self.heap_summary = QLabel()
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Compare with"))
+        row.addWidget(self.compare_source, 1)
+        row.addWidget(compare)
+        row.addWidget(self.stop_compare)
         split = QSplitter()
         split.addWidget(self.heap_classes)
         split.addWidget(self.heap_mods)
         split.setSizes([800, 400])
-        self._add_tab("heap", split, "Memory by class")
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.addLayout(row)
+        column.addWidget(self.heap_summary)
+        column.addWidget(split, 1)
+        self._add_tab("heap", page, "Memory by class")
 
     def _build_report(self) -> None:
         # What it calls / who calls it are Enter, t and c on a line: only the way back needs buttons.
@@ -502,7 +533,8 @@ class SparkWindow(QWidget):
         for i, key in enumerate(self.tab_keys):
             self.tabs.setTabVisible(i, shown[key])
         self._enable_report_buttons()
-        self.threads.setEnabled(profile)
+        self.threads.setVisible(profile)  # a heap summary has no threads
+        self.thread_label.setVisible(profile)
         self.copy_button.setEnabled(profile or heap)
         self.all_minutes.setVisible(bool(self.windows))
         self.minute.setVisible(profile)
@@ -619,6 +651,7 @@ class SparkWindow(QWidget):
 
     def showEvent(self, event) -> None:
         self._fill_saved()
+        self._fill_compare()
         self._show_keys()
         super().showEvent(event)
 
@@ -666,6 +699,8 @@ class SparkWindow(QWidget):
         self.up = False
         self.history = []
         self.focus = None
+        self.other = None
+        self._fill_compare()
         self._fill_threads()
         self._enable()
         self._put(text, 0)
@@ -959,10 +994,22 @@ class SparkWindow(QWidget):
             ])  # fmt: skip
         self.chunks.fill(rows, 0, stretch=4)
 
+    def _pair(self) -> tuple[tuple[spark.Heap, str], tuple[spark.Heap, str]] | None:
+        """The two summaries compared, earlier first; None when not comparing."""
+        if self.heap is None or self.other is None:
+            return None
+        return spark.heap_in_order((self.heap, self.name_), self.other)
+
     def _show_heap(self) -> None:
         h = self.heap
         if h is None:
             return
+        self.stop_compare.setVisible(self.other is not None)
+        pair = self._pair()
+        if pair is not None:
+            self._show_growth(*pair)
+            return
+        self.heap_summary.setText(f"{spark.bytes_text(h.size)} in {len(h.entries):,} classes")
         total = h.size or 1
         top = max((e.size for e in h.entries), default=1) or 1
         rows = [
@@ -974,14 +1021,90 @@ class SparkWindow(QWidget):
             ]
             for e in h.entries
         ]
-        self.heap_classes.fill(rows, 3)
+        self.heap_classes.fill(rows, 3, columns=["Class", "Mod", "Objects", "Size"])
         owners = spark.heap_by_owner(h.entries)
         top = max((s for s, _ in owners.values()), default=1) or 1
         rows = [
             [_item(o.replace(" (package)", "?")), _item(f"{n:,}", n), _item(spark.bytes_text(s), s, s / top)]
             for o, (s, n) in owners.items()
         ]
-        self.heap_mods.fill(rows, 2)
+        self.heap_mods.fill(rows, 2, columns=["Mod", "Objects", "Size"])
+
+    def _show_growth(self, a: tuple[spark.Heap, str], b: tuple[spark.Heap, str]) -> None:
+        """Both summaries side by side: what each class and mod holds now, and how much it grew."""
+        (ha, na), (hb, nb) = a, b
+        change = hb.size - ha.size
+        apart = f" over {spark.span_text(hb.generated - ha.generated)}" if ha.generated and hb.generated else ""
+        self.heap_summary.setText(
+            f"{na} → {nb}: {spark.bytes_text(ha.size)} → {spark.bytes_text(hb.size)}"
+            f" ({'+' if change >= 0 else '-'}{spark.bytes_text(abs(change))}){apart}. What keeps growing is what"
+            " leaks; one change alone can be noise."
+        )
+
+        def signed(n: int, text: str) -> str:
+            return ("+" if n > 0 else "-" if n < 0 else "") + text
+
+        deltas = spark.heap_deltas(ha, hb)
+        top = max((size for _, size, _, _ in deltas), default=1) or 1
+        rows = []
+        for cls, size, count, now in deltas:
+            rows.append([
+                _item(cls, data=cls),
+                _item(spark.heap_owner(cls).replace(" (package)", "?")),
+                _item(f"{now.instances:,}" if now else "gone", now.instances if now else 0),
+                _item(signed(count, f"{abs(count):,}"), count),
+                _item(spark.bytes_text(now.size) if now else "gone", now.size if now else 0),
+                _item(signed(size, spark.bytes_text(abs(size))), size, max(0, size) / top),
+            ])  # fmt: skip
+        self.heap_classes.fill(rows, 5, columns=["Class", "Mod", "Objects", "Objects +", "Size", "Size +"])
+        owners = spark.heap_by_owner(hb.entries)
+        growth = spark.heap_owner_deltas(ha, hb)
+        top = max((size for size, _ in growth.values()), default=1) or 1
+        rows = []
+        for owner, (size, count) in growth.items():
+            now = owners.get(owner, [0, 0])
+            rows.append([
+                _item(owner.replace(" (package)", "?")),
+                _item(spark.bytes_text(now[0]), now[0]),
+                _item(signed(count, f"{abs(count):,}"), count),
+                _item(signed(size, spark.bytes_text(abs(size))), size, max(0, size) / top),
+            ])  # fmt: skip
+        self.heap_mods.fill(rows, 3, columns=["Mod", "Size", "Objects +", "Size +"])
+
+    def _fill_compare(self) -> None:
+        """The other saved heap summaries, to compare with."""
+        text = self.compare_source.currentText()
+        self.compare_source.blockSignals(True)
+        self.compare_source.clear()
+        for path in saved_profiles():
+            if path.suffix != ".sparkheap" or path.stem == self.name_:
+                continue
+            info = spark.saved_info(path)
+            when = f"  recorded {when_text(info.recorded / 1000)}" if info.recorded else ""
+            self.compare_source.addItem(f"{path.stem}{when}", str(path))
+        self.compare_source.setCurrentIndex(-1)
+        self.compare_source.setEditText(text)
+        self.compare_source.blockSignals(False)
+
+    def compare(self) -> None:
+        text = self.compare_source.currentText().strip()
+        if self.heap is None or not text:
+            return
+        index = self.compare_source.findText(text)
+        source = self.compare_source.itemData(index) if index >= 0 else text
+        self._say("Loading the heap summary to compare with...")
+        self._call(lambda: spark.load_heap(source), self._compared)
+
+    def _compared(self, other: tuple[spark.Heap, str] | None) -> None:
+        """Start comparing with other, or stop (None); the report follows."""
+        if other is not None and other[1] == self.name_:
+            self._say("That is the heap summary already shown: pick another one", True)
+            return
+        self.other = other
+        self.history.clear()
+        self.method = None
+        self._show_heap()
+        self._call(self._view(), lambda text: self._put(text, 0))
 
     # --- the call tree tab
 
@@ -1095,6 +1218,10 @@ class SparkWindow(QWidget):
 
     def _view(self) -> Callable[[], str]:
         name, method, up, thread, windows = self.name_, self.method, self.up, self.thread, self.windows
+        pair = self._pair()
+        if pair is not None:
+            (a, a_name), (b, b_name) = pair
+            return lambda: spark.heap_compare(a, a_name, b, b_name)
         if self.heap is not None:
             heap = self.heap
             return lambda: spark.heap_report(heap, name)
@@ -1113,7 +1240,7 @@ class SparkWindow(QWidget):
         if self.windows:
             where.append(f"minute {', '.join(map(str, self.windows))}")
         if self.heap is not None:
-            view = "heap summary"
+            view = f"compared with {self.other[1]}" if self.other else "heap summary"
         elif self.method is None:
             view = "summary"
         else:
