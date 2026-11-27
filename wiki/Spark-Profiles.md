@@ -50,8 +50,9 @@ the same lambda matches across runs.
 - Method names: Minecraft's `func_` names are replaced with their MCP names (stable 12, what 1.7.10 development
   uses), from mappings downloaded once from Forge's Maven into the cache folder. Offline, the names stay as is.
   A method stable 12 left unnamed takes its name from the nearest later version (1.8.9, 1.10.2, then 1.12),
-  since a `func_` number stays with its method: `func_147456_g` reads `updateBlocks`. A mixin's suffix is kept,
-  as in `renderWorld$surround`.
+  since a `func_` number stays with its method. Such a name keeps its id, as in `updateBlocks/func_147456_g`:
+  the 1.7.10 code (and a development workspace) still calls it `func_147456_g`. A mixin's suffix is kept, as
+  in `renderWorld$surround`.
 - Own time per mod: time in native code, the JVM and libraries (netty, fastutil, guava) counts for the nearest
   mod up the call stack, else Minecraft or Forge. A backup's disk writes count for the backup mod, not for
   "native code".

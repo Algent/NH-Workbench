@@ -597,11 +597,13 @@ def mcp_names(minecraft: str) -> dict[str, str]:
 
 
 def _mcp_merged() -> dict[str, str]:
+    """A name from a later version keeps its func_ id (updateBlocks/func_147456_g): the 1.7.10 code a developer
+    reads has the func_ name, so the readable one alone could not be found there."""
     names = _mcp_methods(MCP_URL)
     if names:
         for url in MCP_LATER_URLS:
             for srg, name in _mcp_methods(url).items():
-                names.setdefault(srg, name)
+                names.setdefault(srg, f"{name}/{srg}")
     return names
 
 
@@ -924,7 +926,10 @@ def header(p: Profile, name: str) -> list[str]:
     lines = [f"# spark profile {name}: {p.platform} {p.platform_version}{on}{mc}, spark v{p.spark_version}"]
     what = "allocations" if p.allocation else f"every {p.interval_us / 1000:g} ms"
     what += {"async": " with async-profiler", "java": " with spark's Java sampler"}.get(p.engine, "")
-    names = {"mcp": "; method names from MCP", "raw": "; func_ names left as is (MCP mappings unavailable)"}
+    names = {
+        "mcp": "; method names from MCP (name/func_...: a name from a later MCP version, func_... in 1.7.10 code)",
+        "raw": "; func_ names left as is (MCP mappings unavailable)",
+    }
     lines.append(f"Recorded {when} for {span_text(p.duration_ms)}, sampling {what}{names.get(p.names, '')}")
     if p.ticked:
         lines.append(

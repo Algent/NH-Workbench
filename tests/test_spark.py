@@ -266,12 +266,16 @@ def test_unnamed_methods_take_later_names_and_keep_mixin_suffixes(monkeypatch):
     monkeypatch.setattr(spark, "_mcp_methods", lambda url: dict(mappings.get(url, {})))
     names = spark._mcp_merged()
     assert names["func_78471_a"] == "renderWorld"  # 1.7.10's own name wins
-    assert names["func_147456_g"] == "updateBlocks" and names["func_72375_a"] == "preparePlayer"  # nearest first
+    assert names["func_147456_g"] == "updateBlocks/func_147456_g"  # nearest first, its id kept for the 1.7.10 code
+    assert names["func_72375_a"] == "preparePlayer/func_72375_a"
     monkeypatch.setattr(spark, "mcp_names", lambda minecraft: names)
     p = spark.parse(profile_bytes())
     p.threads[0].frames[0].method = "func_78471_a$surround$1"  # Angelica wraps it
+    p.threads[0].frames[1].method = "func_147456_g"
     spark.readable(p)
-    assert p.threads[0].frames[0].method == "renderWorld$surround$1"
+    assert [f.method for f in p.threads[0].frames[:2]] == ["renderWorld$surround$1", "updateBlocks/func_147456_g"]
+    line = " 3.5%  1.1s  WorldServer.updateBlocks/func_147456_g  (own 3.5%)"
+    assert spark.method_on_line(line) == "WorldServer.updateBlocks/func_147456_g"  # Enter, t and c still work
 
 
 def test_call_paths_name_the_mods(monkeypatch):
