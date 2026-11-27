@@ -63,6 +63,21 @@ ACTIONS = [
     KeyAction("spark_leave", "spark: close (terminal UI)", "q", screen="spark"),
 ]
 BY_ID = {a.id: a for a in ACTIONS}
+GROUP_TITLES = {"": "Main window", "spark": "spark tool"}  # screen -> the title the Keys lists show it under
+
+
+def grouped() -> list[tuple[str, list[KeyAction]]]:
+    """The actions under their group's title, for the Keys lists of both UIs."""
+    return [(title, [a for a in ACTIONS if a.screen == screen]) for screen, title in GROUP_TITLES.items()]
+
+
+def short_label(action: KeyAction) -> str:
+    """The label under its group's title: "what the method calls" rather than "spark: what the method calls"."""
+    prefix = f"{action.screen}: "
+    label = action.label.removeprefix(prefix) if action.screen else action.label
+    return label[:1].upper() + label[1:]
+
+
 DEFAULT_LETTERS = {a.id: a.letter for a in ACTIONS}
 # Taken by keys that cannot be rebound: Tab and Esc in both UIs, Ctrl+Tab to change tabs in the desktop UI.
 FIXED_SHORTCUTS = {"Ctrl+Tab", "Ctrl+Shift+Tab", "Tab", "Shift+Tab", "Esc", "Ctrl+C"}

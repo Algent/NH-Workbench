@@ -122,7 +122,12 @@ nh-workbench tools install-skill    # for the agents found in your home folder; 
 ```
 
 It goes in `~/.claude/skills` (Claude Code), `~/.agents/skills` (Codex) or `~/.config/opencode/skills`
-(OpenCode). It runs through a small launcher that needs only uv, and uses, in this order:
+(OpenCode). An agent does not always pick a skill up by itself, so Claude Code and OpenCode also get a `/spark`
+command (`commands/spark.md` next to the skills folder) that loads it: `/spark https://spark.lucko.me/...`. A
+`spark.md` of your own, about something else, is left alone. In Codex, which has no such commands, ask for the
+`spark-profile` skill by name.
+
+The skill runs through a small launcher that needs only uv, and uses, in this order:
 
 1. the checkout it was installed from
 2. `nh-workbench` (or the old `gtnh-dev`) on PATH

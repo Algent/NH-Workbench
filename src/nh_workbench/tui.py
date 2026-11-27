@@ -244,13 +244,19 @@ class KeysScreen(ModalScreen[None]):
     def _prompt(self, action: keys.KeyAction) -> Text:
         letter = keys.letters(self.app.cfg)[action.id]
         default = Text(f"  (default {action.letter})", "dim") if letter != action.letter else ""
-        return Text.assemble((letter.ljust(3), "bold"), action.label, default)
+        return Text.assemble((letter.ljust(3), "bold"), keys.short_label(action), default)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield dialog_head(Text("Keys", "bold"))
             yield Static(Text("Shared with the desktop UI, where they work on the list.", "dim"), id="dialog-info")
-            yield OptionList(*(Option(self._prompt(a), id=a.id) for a in keys.ACTIONS), id="menu")
+            entries: list[Option | None] = []
+            for i, (title, actions) in enumerate(keys.grouped()):
+                if i:
+                    entries.append(None)  # a separator between the groups
+                entries.append(Option(Text(title, "bold underline"), id=f"group-{i}", disabled=True))
+                entries += [Option(self._prompt(a), id=a.id) for a in actions]
+            yield OptionList(*entries, id="menu")
             yield Static(Text("Enter to change one, q or Esc to close", "dim"), id="keys-status")
 
     def _status(self, text: str, style: str = "dim") -> None:

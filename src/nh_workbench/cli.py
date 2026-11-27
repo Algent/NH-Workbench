@@ -588,6 +588,8 @@ def install_skill(
             err.print(f"[bold red]Could not install the skill for {skill.AGENTS[name]}: {e}")
             raise typer.Exit(1) from e
         out.print(f"Installed the {skill.SKILL} skill for {skill.AGENTS[name]} in {folder}")
+        if not dest and skill.commands_dir(name) and (skill.commands_dir(name) / skill.COMMAND).is_file():
+            out.print("  and /spark, to call it on a link or file: /spark https://spark.lucko.me/...")
     if checkout:
         out.print(f"It runs this checkout: {checkout}")
     elif (folder / "checkout.txt").is_file():

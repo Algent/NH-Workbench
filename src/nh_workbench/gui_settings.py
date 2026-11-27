@@ -82,15 +82,26 @@ class KeysDialog(QDialog):
         self.owner = owner
         self.setWindowTitle("Keys - NH Workbench")
         letters, shortcuts = keytable.letters(owner.cfg), keytable.shortcuts(owner.cfg)
-        self.table = QTableWidget(len(keytable.ACTIONS), 3)
+        groups = keytable.grouped()
+        self.table = QTableWidget(len(keytable.ACTIONS) + len(groups), 3)
         self.table.setHorizontalHeaderLabels(["Action", "Key", "Shortcut"])
         self.table.verticalHeader().hide()
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.letters: dict[str, LetterEdit] = {}
         self.shortcuts: dict[str, QKeySequenceEdit] = {}
-        for row, action in enumerate(keytable.ACTIONS):
-            item = QTableWidgetItem(action.label)
+        rows: list[keytable.KeyAction | str] = [entry for title, actions in groups for entry in (title, *actions)]
+        for row, action in enumerate(rows):
+            if isinstance(action, str):  # a group's title, across the row
+                heading = QTableWidgetItem(action)
+                heading.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                font = heading.font()
+                font.setBold(True)
+                heading.setFont(font)
+                self.table.setItem(row, 0, heading)
+                self.table.setSpan(row, 0, 1, 3)
+                continue
+            item = QTableWidgetItem(keytable.short_label(action))
             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.table.setItem(row, 0, item)
             self.letters[action.id] = LetterEdit(letters[action.id], action.letter)
@@ -111,7 +122,7 @@ class KeysDialog(QDialog):
         note = QLabel(
             "Key: on the list, shared with the terminal UI. Shortcut: anywhere in this window.\n"
             "Actions never on the same tab may share a key, as Rescan and Search again do.\n"
-            "spark: keys of the spark tool's text report and call tree, apart from the main ones."
+            "The spark tool's keys are its own: they may be the same as the main window's."
         )
         note.setEnabled(False)
         defaults = QPushButton("Defaults")

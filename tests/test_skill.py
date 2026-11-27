@@ -70,6 +70,8 @@ def test_install_for_codex_and_claude(tmp_path, monkeypatch):
     assert not skill.installed("claude") and skill.installed("codex")
     res = runner.invoke(app, base)  # both are found
     assert res.exit_code == 0 and skill.installed("claude") and "for Codex" in res.output
+    assert (tmp_path / ".claude" / "commands" / "spark.md").is_file()  # /spark
+    assert not (tmp_path / ".agents" / "commands").exists()  # Codex has no commands folder of its own
     assert runner.invoke(app, [*base, "--for", "gemini"]).exit_code == 2
 
 
@@ -82,6 +84,9 @@ def test_install_for_opencode(tmp_path, monkeypatch):
     res = CliRunner().invoke(app, ["--root", str(tmp_path / "none"), "tools", "install-skill", "--for", "opencode"])
     assert res.exit_code == 0, res.output
     assert (tmp_path / ".config" / "opencode" / "skills" / "spark-profile" / "SKILL.md").is_file()
+    command = tmp_path / ".config" / "opencode" / "commands" / "spark.md"  # /spark: OpenCode may not pick the skill up
+    text = command.read_text(encoding="utf-8")
+    assert "spark-profile" in text and "$ARGUMENTS" in text
     monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "oc"))
     assert skill.skills_dir("opencode") == tmp_path / "oc" / "skills"
 
@@ -108,3 +113,13 @@ def test_refresh_updates_installed_skills_and_keeps_their_checkout(tmp_path, mon
     assert "NH Workbench" in (folder / "SKILL.md").read_text(encoding="utf-8") and (folder / "spark.py").is_file()
     assert (folder / "checkout.txt").read_text(encoding="utf-8") == "C:/elsewhere"
     assert not (tmp_path / ".agents").exists()  # not installed for Codex: left alone
+
+
+def test_a_spark_command_of_the_users_own_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setattr(skill, "_home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    mine = tmp_path / ".claude" / "commands" / "spark.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("Light the campfire", encoding="utf-8")  # another /spark, not about this skill
+    skill.install(agent="claude")
+    assert mine.read_text(encoding="utf-8") == "Light the campfire"
